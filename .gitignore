@@ -1,0 +1,23 @@
+# Binaries
+bin/
+*.exe
+config
+
+# Environment (contains API keys)
+*.env
+!*.env.example
+
+# Data directories
+data/
+logs/
+
+# macOS
+.DS_Store
+
+# IDE
+.claude/
+.idea/
+.vscode/
+
+# Go
+vendor/

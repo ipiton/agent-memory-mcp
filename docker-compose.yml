@@ -1,0 +1,43 @@
+services:
+  agent-memory-mcp:
+    build: .
+    ports:
+      - "18080:8080"
+    volumes:
+      - memory-data:/data
+      - ./docs:/project/docs:ro  # Mount your docs for RAG indexing
+    environment:
+      - MCP_ROOT=/project
+      - MCP_INDEX_DIRS=docs
+      - JINA_API_KEY=${JINA_API_KEY:-}
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Pulls bge-m3 model on first start, then exits
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["ollama", "pull", "bge-m3"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: "no"
+
+volumes:
+  memory-data:
+  ollama-models:

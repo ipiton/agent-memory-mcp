@@ -1,0 +1,17 @@
+bin/
+data/
+logs/
+*.env
+.git/
+.github/
+.claude/
+.DS_Store
+scripts/
+system/
+*.md
+!go.mod
+!go.sum
+LICENSE
+Makefile
+Dockerfile
+docker-compose.yml

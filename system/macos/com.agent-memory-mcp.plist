@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agent-memory-mcp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__INSTALL_DIR__/bin/agent-memory-mcp</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__INSTALL_DIR__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MCP_HTTP_MODE</key>
+        <string>http</string>
+        <key>MCP_HTTP_PORT</key>
+        <string>18080</string>
+        <key>MCP_RAG_ENABLED</key>
+        <string>false</string>
+        <key>MCP_MEMORY_ENABLED</key>
+        <string>true</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__INSTALL_DIR__/logs/agent-memory-mcp.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__INSTALL_DIR__/logs/agent-memory-mcp.err.log</string>
+</dict>
+</plist>
