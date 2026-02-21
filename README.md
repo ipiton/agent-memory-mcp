@@ -13,15 +13,38 @@ An MCP (Model Context Protocol) server that gives AI agents persistent memory wi
 
 ## Installation
 
-### Option 1: go install
+### Option 1: Homebrew (macOS/Linux)
+
+```bash
+brew tap ipiton/tap
+brew install --cask agent-memory-mcp
+```
+
+### Option 2: go install
 
 ```bash
 go install github.com/ipiton/agent-memory-mcp/cmd/agent-memory-mcp@latest
 ```
 
-The binary will be in `$GOPATH/bin/agent-memory-mcp`.
+### Option 3: Download binary
 
-### Option 2: Build from source
+Download a prebuilt archive from the [Releases](https://github.com/ipiton/agent-memory-mcp/releases) page.
+
+```bash
+# macOS (Apple Silicon)
+curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-darwin-arm64.tar.gz | tar xz
+mv agent-memory-mcp /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-darwin-amd64.tar.gz | tar xz
+mv agent-memory-mcp /usr/local/bin/
+
+# Linux (x86_64)
+curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-linux-amd64.tar.gz | tar xz
+sudo mv agent-memory-mcp /usr/local/bin/
+```
+
+### Option 4: Build from source
 
 ```bash
 git clone https://github.com/ipiton/agent-memory-mcp.git
@@ -29,25 +52,7 @@ cd agent-memory-mcp
 go build -o bin/agent-memory-mcp ./cmd/agent-memory-mcp
 ```
 
-### Option 3: Download binary
-
-Download a prebuilt binary from the [Releases](https://github.com/ipiton/agent-memory-mcp/releases) page.
-
-```bash
-# macOS (Apple Silicon)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-darwin-arm64 -o agent-memory-mcp
-chmod +x agent-memory-mcp
-
-# macOS (Intel)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-darwin-amd64 -o agent-memory-mcp
-chmod +x agent-memory-mcp
-
-# Linux (x86_64)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-linux-amd64 -o agent-memory-mcp
-chmod +x agent-memory-mcp
-```
-
-### Option 4: Docker
+### Option 5: Docker
 
 ```bash
 docker build -t agent-memory-mcp .
