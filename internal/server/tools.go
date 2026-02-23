@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -89,7 +90,7 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		},
 		{
 			Name:        "semantic_search",
-			Description: "Semantic search across indexed documents and archives",
+			Description: "Semantic search across indexed documents",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -104,60 +105,8 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 						"minimum":     1,
 						"maximum":     50,
 					},
-					"doc_type": map[string]any{
-						"type":        "string",
-						"enum":        []string{"docs", "tasks", "memory", "all"},
-						"description": "Document type to search",
-						"default":     "all",
-					},
-					"category": map[string]any{
-						"type":        "string",
-						"description": "Document category (api, architecture, deployment, etc.)",
-					},
 				},
 				"required": []string{"query"},
-			},
-		},
-		{
-			Name:        "find_similar_tasks",
-			Description: "Find similar tasks from archive",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"description": map[string]any{
-						"type":        "string",
-						"description": "Description of the current task",
-					},
-					"limit": map[string]any{
-						"type":        "integer",
-						"description": "Maximum number of results",
-						"default":     5,
-						"minimum":     1,
-						"maximum":     20,
-					},
-				},
-				"required": []string{"description"},
-			},
-		},
-		{
-			Name:        "get_relevant_docs",
-			Description: "Get relevant documentation by topic",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"topic": map[string]any{
-						"type":        "string",
-						"description": "Topic or keyword to search documentation for",
-					},
-					"limit": map[string]any{
-						"type":        "integer",
-						"description": "Maximum number of results",
-						"default":     10,
-						"minimum":     1,
-						"maximum":     30,
-					},
-				},
-				"required": []string{"topic"},
 			},
 		},
 		{
@@ -330,6 +279,24 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 	return map[string]any{"tools": tools}, nil
 }
 
+type toolHandler func(args map[string]any) (any, *rpcError)
+
+func (s *MCPServer) toolHandlers() map[string]toolHandler {
+	return map[string]toolHandler{
+		"repo_list":        s.callRepoList,
+		"repo_read":        s.callRepoRead,
+		"repo_search":      s.callRepoSearch,
+		"semantic_search":  s.callSemanticSearch,
+		"index_documents":  s.callIndexDocuments,
+		"store_memory":     s.callStoreMemory,
+		"recall_memory":    s.callRecallMemory,
+		"update_memory":    s.callUpdateMemory,
+		"delete_memory":    s.callDeleteMemory,
+		"list_memories":    s.callListMemories,
+		"memory_stats":     s.callMemoryStats,
+	}
+}
+
 func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	start := time.Now()
 	var req struct {
@@ -347,64 +314,16 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 		return nil, rErr
 	}
 
-	switch req.Name {
-	case "repo_list":
-		result, rErr := s.callRepoList(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "repo_read":
-		result, rErr := s.callRepoRead(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "repo_search":
-		result, rErr := s.callRepoSearch(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "semantic_search":
-		result, rErr := s.callSemanticSearch(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "find_similar_tasks":
-		result, rErr := s.callFindSimilarTasks(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "get_relevant_docs":
-		result, rErr := s.callGetRelevantDocs(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "index_documents":
-		result, rErr := s.callIndexDocuments(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "store_memory":
-		result, rErr := s.callStoreMemory(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "recall_memory":
-		result, rErr := s.callRecallMemory(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "update_memory":
-		result, rErr := s.callUpdateMemory(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "delete_memory":
-		result, rErr := s.callDeleteMemory(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "list_memories":
-		result, rErr := s.callListMemories(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	case "memory_stats":
-		result, rErr := s.callMemoryStats(req.Arguments)
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
-		return result, rErr
-	default:
+	handler, ok := s.toolHandlers()[req.Name]
+	if !ok {
 		rErr := &rpcError{Code: -32601, Message: fmt.Sprintf("unknown tool: %s", req.Name)}
 		s.logToolEvent(req.Name, req.Arguments, start, rErr)
 		return nil, rErr
 	}
+
+	result, rErr := handler(req.Arguments)
+	s.logToolEvent(req.Name, req.Arguments, start, rErr)
+	return result, rErr
 }
 
 func (s *MCPServer) logToolEvent(name string, args map[string]any, start time.Time, rErr *rpcError) {
@@ -527,87 +446,12 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 		limit = 50
 	}
 
-	docType, _ := getString(args, "doc_type")
-	category, _ := getString(args, "category")
-
-	results, err := s.ragEngine.Search(query, limit, docType, category)
+	results, err := s.ragEngine.Search(query, limit)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: fmt.Sprintf("search failed: %v", err)}
 	}
 
 	return toolResultText(s.formatSearchResults(results)), nil
-}
-
-func (s *MCPServer) callFindSimilarTasks(args map[string]any) (any, *rpcError) {
-	if s.ragEngine == nil {
-		if s.fileLogger != nil {
-			s.fileLogger.Warn("find_similar_tasks called but RAG engine is not available",
-				zap.Bool("rag_enabled_in_config", s.config.RAGEnabled),
-			)
-		} else {
-			fmt.Fprintf(os.Stderr, "WARN: find_similar_tasks called but RAG engine is nil\n")
-		}
-		return nil, &rpcError{Code: -32000, Message: "RAG engine not available"}
-	}
-
-	description, ok := getString(args, "description")
-	if !ok || description == "" {
-		return nil, &rpcError{Code: -32602, Message: "description parameter is required"}
-	}
-	if len(description) > 10000 {
-		return nil, &rpcError{Code: -32602, Message: "description too long (max 10000 characters)"}
-	}
-
-	limit := 5
-	if l, ok := getInt(args, "limit"); ok && l > 0 {
-		limit = l
-	}
-	if limit > 20 {
-		limit = 20
-	}
-
-	results, err := s.ragEngine.Search(description, limit, "tasks", "")
-	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "task search failed", Data: err.Error()}
-	}
-
-	return toolResultText(s.formatTaskResults(results)), nil
-}
-
-func (s *MCPServer) callGetRelevantDocs(args map[string]any) (any, *rpcError) {
-	if s.ragEngine == nil {
-		if s.fileLogger != nil {
-			s.fileLogger.Warn("get_relevant_docs called but RAG engine is not available",
-				zap.Bool("rag_enabled_in_config", s.config.RAGEnabled),
-			)
-		} else {
-			fmt.Fprintf(os.Stderr, "WARN: get_relevant_docs called but RAG engine is nil\n")
-		}
-		return nil, &rpcError{Code: -32000, Message: "RAG engine not available"}
-	}
-
-	topic, ok := getString(args, "topic")
-	if !ok || topic == "" {
-		return nil, &rpcError{Code: -32602, Message: "topic parameter is required"}
-	}
-	if len(topic) > 10000 {
-		return nil, &rpcError{Code: -32602, Message: "topic too long (max 10000 characters)"}
-	}
-
-	limit := 10
-	if l, ok := getInt(args, "limit"); ok && l > 0 {
-		limit = l
-	}
-	if limit > 30 {
-		limit = 30
-	}
-
-	results, err := s.ragEngine.Search(topic, limit, "docs", "")
-	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "documentation search failed", Data: err.Error()}
-	}
-
-	return toolResultText(s.formatDocResults(results)), nil
 }
 
 func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
@@ -639,54 +483,10 @@ func (s *MCPServer) formatSearchResults(results *rag.SearchResponse) string {
 	for i, result := range results.Results {
 		buf.WriteString(fmt.Sprintf("%d. **%s** (relevance: %.2f)\n", i+1, result.Title, result.Score))
 		buf.WriteString(fmt.Sprintf("   Path: %s\n", result.Path))
-		buf.WriteString(fmt.Sprintf("   Type: %s", result.Type))
-		if result.Category != "" {
-			buf.WriteString(fmt.Sprintf(" | Category: %s", result.Category))
-		}
-		buf.WriteString("\n")
-		buf.WriteString(fmt.Sprintf("   Snippet: %s\n\n", result.Snippet))
+		buf.WriteString(fmt.Sprintf("   %s\n\n", result.Snippet))
 	}
 
 	buf.WriteString(fmt.Sprintf("Search time: %d ms", results.SearchTime))
-	return buf.String()
-}
-
-func (s *MCPServer) formatTaskResults(results *rag.SearchResponse) string {
-	if len(results.Results) == 0 {
-		return "No similar tasks found."
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("Found %d similar tasks:\n\n", len(results.Results)))
-
-	for i, result := range results.Results {
-		buf.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, result.Title))
-		buf.WriteString(fmt.Sprintf("   Task: %s\n", result.TaskSlug))
-		buf.WriteString(fmt.Sprintf("   Phase: %s\n", result.TaskPhase))
-		buf.WriteString(fmt.Sprintf("   Relevance: %.2f\n", result.Score))
-		buf.WriteString(fmt.Sprintf("   Path: %s\n", result.Path))
-		buf.WriteString(fmt.Sprintf("   Description: %s\n\n", result.Snippet))
-	}
-
-	return buf.String()
-}
-
-func (s *MCPServer) formatDocResults(results *rag.SearchResponse) string {
-	if len(results.Results) == 0 {
-		return "No relevant documentation found."
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("Found relevant documentation (%d results):\n\n", len(results.Results)))
-
-	for i, result := range results.Results {
-		buf.WriteString(fmt.Sprintf("%d. **%s**\n", i+1, result.Title))
-		buf.WriteString(fmt.Sprintf("   Category: %s\n", result.Category))
-		buf.WriteString(fmt.Sprintf("   Relevance: %.2f\n", result.Score))
-		buf.WriteString(fmt.Sprintf("   Path: %s\n", result.Path))
-		buf.WriteString(fmt.Sprintf("   Content: %s\n\n", result.Snippet))
-	}
-
 	return buf.String()
 }
 
@@ -981,22 +781,13 @@ func getMemoryTitle(m *memory.Memory) string {
 		return m.Title
 	}
 	firstLine := m.Content
-	if idx := findNewline(firstLine); idx > 0 {
+	if idx := strings.IndexByte(firstLine, '\n'); idx > 0 {
 		firstLine = firstLine[:idx]
 	}
 	if len(firstLine) > 50 {
 		firstLine = firstLine[:50] + "..."
 	}
 	return firstLine
-}
-
-func findNewline(s string) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			return i
-		}
-	}
-	return -1
 }
 
 func formatMemoryType(t memory.Type) string {

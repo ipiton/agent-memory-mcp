@@ -207,10 +207,32 @@ func RunStdio(server *MCPServer) error {
 func RunHTTP(ctx context.Context, server *MCPServer) error {
 	mux := http.NewServeMux()
 
+	authToken := server.config.HTTPAuthToken
+
+	if authToken == "" && server.fileLogger != nil {
+		server.fileLogger.Warn("HTTP server starting without authentication — set MCP_HTTP_AUTH_TOKEN for security")
+	}
+
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		// CORS: deny cross-origin by default
+		w.Header().Set("Access-Control-Allow-Origin", "")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+
+		// Auth check
+		if authToken != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+authToken {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 
 		ct := r.Header.Get("Content-Type")
@@ -424,6 +446,9 @@ func readMessage(r *bufio.Reader) ([]byte, string, error) {
 	}
 	if contentLength <= 0 {
 		return nil, "content-length", fmt.Errorf("missing content-length header")
+	}
+	if int64(contentLength) > maxRequestBodyBytes {
+		return nil, "content-length", fmt.Errorf("request too large: %d bytes (max %d)", contentLength, maxRequestBodyBytes)
 	}
 	payload := make([]byte, contentLength)
 	_, err = io.ReadFull(r, payload)

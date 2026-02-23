@@ -25,9 +25,16 @@ type Guard struct {
 }
 
 // NewGuard creates a Guard from the configured root and allowed paths.
+// If no allowed paths are configured, the root path is used as the default allowlist.
 func NewGuard(cfg config.Config) (*Guard, error) {
-	allowed := make([]AllowedPath, 0, len(cfg.AllowedPaths))
-	for _, rel := range cfg.AllowedPaths {
+	paths := cfg.AllowedPaths
+	if len(paths) == 0 {
+		// Default: allow only the project root, not the entire filesystem
+		paths = []string{"."}
+	}
+
+	allowed := make([]AllowedPath, 0, len(paths))
+	for _, rel := range paths {
 		abs := filepath.Join(cfg.RootPath, rel)
 		abs = filepath.Clean(abs)
 		if realPath, err := filepath.EvalSymlinks(abs); err == nil {

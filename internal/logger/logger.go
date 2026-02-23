@@ -4,16 +4,15 @@ package logger
 import (
 	"os"
 	"path/filepath"
-	"sync"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// FileLogger provides thread-safe file-based logging for MCP diagnostics.
+// FileLogger provides file-based logging for MCP diagnostics.
+// Thread-safety is provided by the underlying zap.Logger.
 type FileLogger struct {
 	Logger *zap.Logger
-	mu     sync.Mutex
 }
 
 // New creates a new FileLogger that writes JSON-formatted logs to the given path.
@@ -53,8 +52,6 @@ func (fl *FileLogger) Info(msg string, fields ...zap.Field) {
 	if fl == nil || fl.Logger == nil {
 		return
 	}
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
 	fl.Logger.Info(msg, fields...)
 }
 
@@ -63,8 +60,6 @@ func (fl *FileLogger) Warn(msg string, fields ...zap.Field) {
 	if fl == nil || fl.Logger == nil {
 		return
 	}
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
 	fl.Logger.Warn(msg, fields...)
 }
 
@@ -73,8 +68,6 @@ func (fl *FileLogger) Error(msg string, fields ...zap.Field) {
 	if fl == nil || fl.Logger == nil {
 		return
 	}
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
 	fl.Logger.Error(msg, fields...)
 }
 
@@ -83,8 +76,6 @@ func (fl *FileLogger) Debug(msg string, fields ...zap.Field) {
 	if fl == nil || fl.Logger == nil {
 		return
 	}
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
 	fl.Logger.Debug(msg, fields...)
 }
 
@@ -93,7 +84,5 @@ func (fl *FileLogger) Sync() error {
 	if fl == nil || fl.Logger == nil {
 		return nil
 	}
-	fl.mu.Lock()
-	defer fl.mu.Unlock()
 	return fl.Logger.Sync()
 }

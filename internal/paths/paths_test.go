@@ -8,6 +8,39 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 )
 
+func TestDefaultAllowlistUsesRoot(t *testing.T) {
+	root := t.TempDir()
+	// Create a file inside root
+	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// No AllowedPaths configured — should default to root path
+	cfg := config.Config{
+		RootPath:     root,
+		AllowedPaths: nil,
+	}
+	guard, err := NewGuard(cfg)
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+
+	// File inside root should be allowed
+	if _, err := guard.Resolve("inside.txt"); err != nil {
+		t.Fatalf("resolve inside root should work: %v", err)
+	}
+
+	// Path traversal should be blocked
+	if _, err := guard.Resolve("../outside.txt"); err == nil {
+		t.Fatal("expected traversal to be blocked")
+	}
+
+	// Absolute path should be blocked
+	if _, err := guard.Resolve("/etc/passwd"); err == nil {
+		t.Fatal("expected absolute path to be blocked")
+	}
+}
+
 func TestGuardResolve(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {

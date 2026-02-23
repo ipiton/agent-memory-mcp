@@ -231,7 +231,7 @@ Then configure your MCP client to connect via HTTP. For example, with Claude Des
 | `recall` | Semantic search in memories (positional query, `-type`, `-tags`, `-limit`, `-json`) |
 | `list` | List memories (`-type`, `-context`, `-limit`, `-json`) |
 | `delete` | Delete a memory by ID (positional) |
-| `search` | RAG semantic search (positional query, `-doc-type`, `-category`, `-limit`, `-json`) |
+| `search` | RAG semantic search (positional query, `-limit`, `-json`) |
 | `index` | Re-index documents for RAG |
 | `stats` | Show memory statistics (`-json`) |
 | `export` | Export all memories to JSON (`-o` file, default stdout) |
@@ -255,8 +255,6 @@ Then configure your MCP client to connect via HTTP. For example, with Claude Des
 | Tool | Description |
 |------|-------------|
 | `semantic_search` | Semantic search across indexed documents |
-| `find_similar_tasks` | Find similar tasks from archive |
-| `get_relevant_docs` | Get relevant documentation by topic |
 | `index_documents` | Re-index documents for RAG search |
 
 ### File tools

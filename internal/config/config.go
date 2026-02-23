@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -42,9 +43,8 @@ type Config struct {
 	MemoryEnabled bool
 
 	// Document indexing configuration
-	IndexDirs     []string // Directories to index (relative to RootPath)
-	ChangelogPath string   // Path to changelog file (relative to RootPath)
-	ChunkSize     int      // Characters per chunk (default: 2000)
+	IndexDirs    []string // Directories and files to index for RAG (relative to RootPath or absolute)
+	ChunkSize    int      // Characters per chunk (default: 2000)
 	ChunkOverlap  int      // Overlap between chunks (default: 200)
 
 	// Embeddings configuration
@@ -55,9 +55,16 @@ type Config struct {
 	OllamaBaseURL      string // Ollama base URL (default: http://localhost:11434)
 	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
 
+	// RAG indexing behavior
+	AutoIndex        bool          // Auto-index on startup (default: true)
+	FileWatcher      bool          // Watch for file changes (default: true)
+	WatchInterval    time.Duration // File watcher poll interval (default: 5m)
+	DebounceDuration time.Duration // Debounce before reindexing (default: 30s)
+
 	// HTTP server configuration
-	HTTPMode string // "stdio" or "http" (default: "stdio")
-	HTTPPort int    // HTTP server port (default: 18080)
+	HTTPMode      string // "stdio" or "http" (default: "stdio")
+	HTTPPort      int    // HTTP server port (default: 18080)
+	HTTPAuthToken string // Optional Bearer token for HTTP auth
 }
 
 // envValues holds raw values read from environment variables before path resolution.
@@ -79,7 +86,6 @@ type envValues struct {
 	memoryDBPath       string
 	logPath            string
 	indexDirs          string
-	changelogPath      string
 	chunkSize          int
 	chunkOverlap       int
 	jinaAPIKey         string
@@ -88,8 +94,13 @@ type envValues struct {
 	openaiModel        string
 	ollamaBaseURL      string
 	embeddingDimension int
-	httpMode           string
-	httpPort           int
+	autoIndex        bool
+	fileWatcher      bool
+	watchInterval    string
+	debounceDuration string
+	httpMode         string
+	httpPort         int
+	httpAuthToken    string
 }
 
 // loadEnv reads all configuration from environment variables.
@@ -112,7 +123,6 @@ func loadEnv() envValues {
 		memoryDBPath:       EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
 		logPath:            EnvOrDefault("MCP_LOG_PATH", ""),
 		indexDirs:          EnvOrDefault("MCP_INDEX_DIRS", "docs"),
-		changelogPath:      EnvOrDefault("MCP_CHANGELOG_PATH", "CHANGELOG.md"),
 		chunkSize:          EnvInt("MCP_CHUNK_SIZE", 2000),
 		chunkOverlap:       EnvInt("MCP_CHUNK_OVERLAP", 200),
 		jinaAPIKey:         EnvOrDefault("JINA_API_KEY", ""),
@@ -121,8 +131,13 @@ func loadEnv() envValues {
 		openaiModel:        EnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
 		ollamaBaseURL:      EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
 		embeddingDimension: EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
-		httpMode:           EnvOrDefault("MCP_HTTP_MODE", "stdio"),
-		httpPort:           EnvInt("MCP_HTTP_PORT", 18080),
+		autoIndex:        EnvBool("MCP_RAG_AUTO_INDEX", true),
+		fileWatcher:      EnvBool("MCP_RAG_FILE_WATCHER", true),
+		watchInterval:    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
+		debounceDuration: EnvOrDefault("MCP_RAG_DEBOUNCE", "30s"),
+		httpMode:         EnvOrDefault("MCP_HTTP_MODE", "stdio"),
+		httpPort:         EnvInt("MCP_HTTP_PORT", 18080),
+		httpAuthToken:    EnvOrDefault("MCP_HTTP_AUTH_TOKEN", ""),
 	}
 }
 
@@ -200,9 +215,8 @@ func resolvePaths(ev envValues) (Config, error) {
 		RAGMaxResults: ev.ragMaxResults,
 		MemoryEnabled: ev.memoryEnabled,
 
-		IndexDirs:     indexDirsList,
-		ChangelogPath: ev.changelogPath,
-		ChunkSize:     ev.chunkSize,
+		IndexDirs:    indexDirsList,
+		ChunkSize:    ev.chunkSize,
 		ChunkOverlap:  ev.chunkOverlap,
 
 		JinaAPIKey:         ev.jinaAPIKey,
@@ -212,8 +226,14 @@ func resolvePaths(ev envValues) (Config, error) {
 		OllamaBaseURL:      ev.ollamaBaseURL,
 		EmbeddingDimension: ev.embeddingDimension,
 
-		HTTPMode: ev.httpMode,
-		HTTPPort: ev.httpPort,
+		AutoIndex:        ev.autoIndex,
+		FileWatcher:      ev.fileWatcher,
+		WatchInterval:    parseDurationOrDefault(ev.watchInterval, 5*time.Minute),
+		DebounceDuration: parseDurationOrDefault(ev.debounceDuration, 30*time.Second),
+
+		HTTPMode:      ev.httpMode,
+		HTTPPort:      ev.httpPort,
+		HTTPAuthToken: ev.httpAuthToken,
 	}, nil
 }
 
@@ -332,6 +352,17 @@ func EnvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return parsed
+}
+
+func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
+	if s == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 // BoolToString converts a bool to "true" or "false" string for logging.

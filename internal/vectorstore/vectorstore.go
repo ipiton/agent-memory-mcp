@@ -19,9 +19,17 @@ import (
 type Store interface {
 	Upsert(chunks []Chunk) error
 	DeleteByDocPath(docPath string) error
-	Search(queryEmbedding []float32, filters map[string]string, limit int) ([]SearchResult, error)
+	Search(queryEmbedding []float32, limit int) ([]SearchResult, error)
 	Count() int
 	Close() error
+	// Metadata
+	GetMetadata(key string) (string, error)
+	SetMetadata(key, value string) error
+	// Indexed files tracking
+	GetAllIndexedFiles() (map[string]*IndexedFileInfo, error)
+	GetIndexedFile(filePath string) (*IndexedFileInfo, error)
+	SetIndexedFile(info *IndexedFileInfo) error
+	DeleteIndexedFile(filePath string) error
 }
 
 // Chunk represents a document chunk with its embedding vector and metadata.
@@ -30,11 +38,6 @@ type Chunk struct {
 	DocPath      string    `json:"doc_path"`
 	Content      string    `json:"content"`
 	Title        string    `json:"title"`
-	Path         string    `json:"path"`
-	Type         string    `json:"type"`
-	Category     string    `json:"category"`
-	TaskSlug     string    `json:"task_slug"`
-	TaskPhase    string    `json:"task_phase"`
 	LastModified time.Time `json:"last_modified"`
 	Embedding    []float32 `json:"embedding"`
 }
@@ -75,17 +78,10 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		doc_path TEXT NOT NULL,
 		content TEXT NOT NULL,
 		title TEXT,
-		path TEXT,
-		type TEXT,
-		category TEXT,
-		task_slug TEXT,
-		task_phase TEXT,
 		last_modified DATETIME,
 		embedding BLOB NOT NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_chunks_doc_path ON chunks(doc_path);
-	CREATE INDEX IF NOT EXISTS idx_chunks_type ON chunks(type);
-	CREATE INDEX IF NOT EXISTS idx_chunks_category ON chunks(category);
 
 	CREATE TABLE IF NOT EXISTS index_metadata (
 		key TEXT PRIMARY KEY,
@@ -155,8 +151,7 @@ func (s *SQLiteStore) validateDimension(dimension int) error {
 
 func (s *SQLiteStore) loadChunksToMemory() error {
 	rows, err := s.db.Query(`
-		SELECT id, doc_path, content, title, path, type, category,
-		       task_slug, task_phase, last_modified, embedding
+		SELECT id, doc_path, content, title, last_modified, embedding
 		FROM chunks
 	`)
 	if err != nil {
@@ -176,8 +171,7 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 
 		err := rows.Scan(
 			&chunk.ID, &chunk.DocPath, &chunk.Content, &chunk.Title,
-			&chunk.Path, &chunk.Type, &chunk.Category,
-			&chunk.TaskSlug, &chunk.TaskPhase, &lastModified, &embeddingBlob,
+			&lastModified, &embeddingBlob,
 		)
 		if err != nil {
 			s.logger.Warn("Failed to scan chunk", zap.Error(err))
@@ -213,8 +207,8 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO chunks
-		(id, doc_path, content, title, path, type, category, task_slug, task_phase, last_modified, embedding)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, doc_path, content, title, last_modified, embedding)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -233,8 +227,7 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 
 		_, err = stmt.Exec(
 			chunk.ID, chunk.DocPath, chunk.Content, chunk.Title,
-			chunk.Path, chunk.Type, chunk.Category,
-			chunk.TaskSlug, chunk.TaskPhase, chunk.LastModified, embeddingBlob,
+			chunk.LastModified, embeddingBlob,
 		)
 		if err != nil {
 			s.logger.Warn("Failed to upsert chunk", zap.String("id", chunk.ID), zap.Error(err))
@@ -286,8 +279,8 @@ func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
 	return nil
 }
 
-// Search finds the most similar chunks to the query embedding, filtered and ranked by cosine similarity.
-func (s *SQLiteStore) Search(queryEmbedding []float32, filters map[string]string, limit int) ([]SearchResult, error) {
+// Search finds the most similar chunks to the query embedding, ranked by cosine similarity.
+func (s *SQLiteStore) Search(queryEmbedding []float32, limit int) ([]SearchResult, error) {
 	s.mu.RLock()
 	chunksEmpty := len(s.chunks) == 0
 	s.mu.RUnlock()
@@ -305,13 +298,14 @@ func (s *SQLiteStore) Search(queryEmbedding []float32, filters map[string]string
 		return []SearchResult{}, nil
 	}
 
+	const minScore = 0.1
+
 	var results []SearchResult
 	for _, chunk := range s.chunks {
-		if !matchFilters(chunk, filters) {
+		score := CosineSimilarity(queryEmbedding, chunk.Embedding)
+		if score < minScore {
 			continue
 		}
-
-		score := CosineSimilarity(queryEmbedding, chunk.Embedding)
 
 		results = append(results, SearchResult{
 			Chunk: *chunk,
@@ -420,40 +414,6 @@ func (s *SQLiteStore) GetAllIndexedFiles() (map[string]*IndexedFileInfo, error) 
 		result[info.FilePath] = &info
 	}
 	return result, rows.Err()
-}
-
-func matchFilters(chunk *Chunk, filters map[string]string) bool {
-	if len(filters) == 0 {
-		return true
-	}
-
-	for key, value := range filters {
-		if value == "" {
-			continue
-		}
-
-		var chunkValue string
-		switch key {
-		case "type":
-			chunkValue = chunk.Type
-		case "category":
-			chunkValue = chunk.Category
-		case "task_slug":
-			chunkValue = chunk.TaskSlug
-		case "task_phase":
-			chunkValue = chunk.TaskPhase
-		case "doc_type":
-			chunkValue = chunk.Type
-		default:
-			continue
-		}
-
-		if chunkValue != value {
-			return false
-		}
-	}
-
-	return true
 }
 
 // CosineSimilarity calculates the cosine similarity between two vectors.

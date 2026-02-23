@@ -47,9 +47,8 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 
 // initRAGEngine creates a RAG engine for CLI use (no auto-indexing or file watcher).
 func initRAGEngine(cfg config.Config) (*rag.Engine, error) {
-	// Disable background goroutines for CLI commands
-	os.Setenv("MCP_RAG_AUTO_INDEX", "false")
-	os.Setenv("MCP_RAG_FILE_WATCHER", "false")
+	cfg.AutoIndex = false
+	cfg.FileWatcher = false
 
 	engine := rag.NewEngine(cfg, nil)
 	if engine == nil {
@@ -65,7 +64,9 @@ func printJSON(v any) error {
 	return enc.Encode(v)
 }
 
-// readStdin reads all data from stdin.
+const maxStdinBytes = 100 * 1024 * 1024 // 100 MB
+
+// readStdin reads data from stdin up to maxStdinBytes.
 func readStdin() ([]byte, error) {
-	return io.ReadAll(os.Stdin)
+	return io.ReadAll(io.LimitReader(os.Stdin, maxStdinBytes))
 }

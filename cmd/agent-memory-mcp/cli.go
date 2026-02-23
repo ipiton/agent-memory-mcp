@@ -209,8 +209,6 @@ func runDelete(args []string) {
 func runSearch(args []string) {
 	fs := flag.NewFlagSet("search", flag.ExitOnError)
 	limit := fs.Int("limit", 10, "Max results")
-	docType := fs.String("doc-type", "", "Filter by document type")
-	category := fs.String("category", "", "Filter by category")
 	jsonOut := fs.Bool("json", false, "Output as JSON")
 	fs.Parse(args)
 
@@ -234,7 +232,7 @@ func runSearch(args []string) {
 	}
 	defer engine.Stop()
 
-	resp, err := engine.Search(query, *limit, *docType, *category)
+	resp, err := engine.Search(query, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -248,11 +246,7 @@ func runSearch(args []string) {
 	fmt.Printf("Query: %s (%d results, %dms)\n\n", resp.Query, resp.TotalFound, resp.SearchTime)
 	for i, r := range resp.Results {
 		fmt.Printf("%d. [%.2f] %s\n", i+1, r.Score, r.Title)
-		fmt.Printf("   Path: %s  Type: %s", r.Path, r.Type)
-		if r.Category != "" {
-			fmt.Printf("  Category: %s", r.Category)
-		}
-		fmt.Println()
+		fmt.Printf("   Path: %s\n", r.Path)
 		if r.Snippet != "" {
 			fmt.Printf("   %s\n", r.Snippet)
 		}

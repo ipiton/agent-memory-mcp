@@ -280,49 +280,46 @@ func (ms *Store) Recall(query string, filters Filters, limit int) ([]*SearchResu
 		}
 	}
 
+	const minScore = 0.05
+
 	var results []*SearchResult
 
 	for _, m := range ms.memories {
-		// Apply filters
 		if !ms.matchFilters(m, filters) {
 			continue
 		}
 
 		var score float64
 		if len(queryEmbedding) > 0 && len(m.Embedding) > 0 {
-			// Vector similarity search
 			score = vectorstore.CosineSimilarity(queryEmbedding, m.Embedding)
 		} else {
-			// Fallback to text matching score
 			score = ms.textMatchScore(query, m)
 		}
 
-		// Apply importance weight
 		weightedScore := score * (0.5 + m.Importance*0.5)
+		if weightedScore < minScore {
+			continue
+		}
 
 		results = append(results, &SearchResult{
-			Memory: m,
+			Memory: copyMemory(m),
 			Score:  weightedScore,
 		})
 	}
 
-	// Sort by score descending
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Score > results[j].Score
 	})
 
-	// Limit results
 	if limit > 0 && len(results) > limit {
 		results = results[:limit]
 	}
 
-	// Collect IDs for access stats update (safe copy, not pointers to map values)
 	ids := make([]string, len(results))
 	for i, r := range results {
 		ids[i] = r.Memory.ID
 	}
 
-	// Update access stats for top results (async with IDs, not memory pointers)
 	go ms.updateAccessStats(ids)
 
 	return results, nil
@@ -568,7 +565,7 @@ func (ms *Store) Delete(id string) error {
 	return nil
 }
 
-// Get retrieves a memory by ID from the in-memory cache.
+// Get retrieves a memory by ID from the in-memory cache (returns a copy).
 func (ms *Store) Get(id string) (*Memory, error) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -578,7 +575,7 @@ func (ms *Store) Get(id string) (*Memory, error) {
 		return nil, fmt.Errorf("memory not found: %s", id)
 	}
 
-	return m, nil
+	return copyMemory(m), nil
 }
 
 // List returns memories matching the given filters, sorted by update time descending.
@@ -590,11 +587,10 @@ func (ms *Store) List(filters Filters, limit int) ([]*Memory, error) {
 
 	for _, m := range ms.memories {
 		if ms.matchFilters(m, filters) {
-			results = append(results, m)
+			results = append(results, copyMemory(m))
 		}
 	}
 
-	// Sort by updated_at descending
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].UpdatedAt.After(results[j].UpdatedAt)
 	})
@@ -613,7 +609,7 @@ func (ms *Store) ExportAll() ([]*Memory, error) {
 
 	result := make([]*Memory, 0, len(ms.memories))
 	for _, m := range ms.memories {
-		result = append(result, m)
+		result = append(result, copyMemory(m))
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -645,4 +641,24 @@ func (ms *Store) CountByType() map[Type]int {
 // Close closes the underlying database connection.
 func (ms *Store) Close() error {
 	return ms.db.Close()
+}
+
+// copyMemory creates a deep copy of a Memory, including slices and maps.
+func copyMemory(m *Memory) *Memory {
+	c := *m
+	if len(m.Tags) > 0 {
+		c.Tags = make([]string, len(m.Tags))
+		copy(c.Tags, m.Tags)
+	}
+	if len(m.Metadata) > 0 {
+		c.Metadata = make(map[string]string, len(m.Metadata))
+		for k, v := range m.Metadata {
+			c.Metadata[k] = v
+		}
+	}
+	if len(m.Embedding) > 0 {
+		c.Embedding = make([]float32, len(m.Embedding))
+		copy(c.Embedding, m.Embedding)
+	}
+	return &c
 }

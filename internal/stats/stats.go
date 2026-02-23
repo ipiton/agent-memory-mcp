@@ -34,10 +34,10 @@ type Event struct {
 // Logger writes sampled usage events to a JSONL file.
 type Logger struct {
 	enabled    bool
-	path       string
 	sampleRate float64
 	mu         sync.Mutex
 	rng        *rand.Rand
+	file       *os.File
 }
 
 // NewLogger creates a stats Logger from the given config, or returns nil if disabled.
@@ -55,11 +55,15 @@ func NewLogger(cfg config.Config) *Logger {
 	if dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
 	}
+	file, err := os.OpenFile(cfg.StatsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil
+	}
 	return &Logger{
 		enabled:    true,
-		path:       cfg.StatsPath,
 		sampleRate: cfg.StatsSampleRate,
 		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		file:       file,
 	}
 }
 
@@ -83,12 +87,17 @@ func (s *Logger) Log(event Event) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
+	_, _ = s.file.Write(append(data, '\n'))
+}
+
+// Close closes the underlying stats file.
+func (s *Logger) Close() error {
+	if s == nil || s.file == nil {
+		return nil
 	}
-	_, _ = file.Write(append(data, '\n'))
-	_ = file.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.file.Close()
 }
 
 func trimError(value string) string {

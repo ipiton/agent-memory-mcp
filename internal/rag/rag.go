@@ -2,7 +2,7 @@
 package rag
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
@@ -24,10 +24,6 @@ type SearchResult struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
 	Path         string    `json:"path"`
-	Type         string    `json:"type"`
-	Category     string    `json:"category"`
-	TaskSlug     string    `json:"task_slug,omitempty"`
-	TaskPhase    string    `json:"task_phase,omitempty"`
 	Score        float64   `json:"score"`
 	Snippet      string    `json:"snippet"`
 	LastModified time.Time `json:"last_modified"`
@@ -73,18 +69,13 @@ type document struct {
 	Content      string
 	Title        string
 	Path         string
-	Type         string
-	Category     string
-	TaskSlug     string
-	TaskPhase    string
 	LastModified time.Time
 	FileHash     string
 }
 
 type searchQuery struct {
-	Query   string
-	Limit   int
-	Filters map[string]interface{}
+	Query string
+	Limit int
 }
 
 type indexResult struct {
@@ -99,10 +90,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	if fileLogger != nil {
 		zapLogger = fileLogger.Logger
 	} else {
-		zapConfig := zap.NewProductionConfig()
-		zapConfig.Level = zap.NewAtomicLevelAt(zap.FatalLevel)
-		zapConfig.OutputPaths = []string{"/dev/null"}
-		zapLogger, _ = zapConfig.Build()
+		zapLogger = zap.NewNop()
 	}
 
 	repoRoot := cfg.RootPath
@@ -110,11 +98,6 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	indexDirs := cfg.IndexDirs
 	if len(indexDirs) == 0 {
 		indexDirs = []string{"docs"}
-	}
-	if cfg.ChangelogPath != "" {
-		indexDirs = append(indexDirs, cfg.ChangelogPath)
-	} else {
-		indexDirs = append(indexDirs, "CHANGELOG.md")
 	}
 
 	dsCfg := docServiceConfig{
@@ -178,15 +161,13 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		stopWatcher: make(chan struct{}),
 	}
 
-	autoIndex := config.EnvOrDefault("MCP_RAG_AUTO_INDEX", "true")
-	if autoIndex == "true" {
+	if cfg.AutoIndex {
 		if fileLogger != nil {
 			fileLogger.Info("Starting auto-indexing check")
 		}
 		go engine.autoIndexIfNeeded()
 
-		watcherEnabled := config.EnvOrDefault("MCP_RAG_FILE_WATCHER", "true")
-		if watcherEnabled == "true" {
+		if cfg.FileWatcher {
 			if fileLogger != nil {
 				fileLogger.Info("Starting file watcher for auto-reindexing")
 			}
@@ -205,8 +186,8 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	return engine
 }
 
-// Search performs a semantic search query with optional document type and category filters.
-func (re *Engine) Search(query string, limit int, docType, category string) (*SearchResponse, error) {
+// Search performs a semantic search query across indexed documents.
+func (re *Engine) Search(query string, limit int) (*SearchResponse, error) {
 	if re == nil || re.vecService == nil {
 		return nil, fmt.Errorf("RAG engine not available")
 	}
@@ -218,18 +199,9 @@ func (re *Engine) Search(query string, limit int, docType, category string) (*Se
 		limit = re.config.RAGMaxResults
 	}
 
-	filters := make(map[string]interface{})
-	if docType != "" && docType != "all" {
-		filters["type"] = docType
-	}
-	if category != "" {
-		filters["category"] = category
-	}
-
 	result, err := re.vecService.search(searchQuery{
-		Query:   query,
-		Limit:   limit,
-		Filters: filters,
+		Query: query,
+		Limit: limit,
 	})
 	if err != nil {
 		re.logger.Error("Vector search failed",
@@ -259,7 +231,7 @@ func (re *Engine) IndexDocuments() error {
 	const embeddingModel = "jina-v3-bge-m3-1024d"
 	const chunkerVersion = "char-v1"
 
-	store := re.vecService.store.(*vectorstore.SQLiteStore)
+	store := re.vecService.store
 	oldModel, _ := store.GetMetadata("embedding_model")
 	oldChunker, _ := store.GetMetadata("chunker_version")
 
@@ -400,49 +372,40 @@ func (re *Engine) IndexDocuments() error {
 }
 
 func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) (toAdd []document, toRemove []string) {
-	currentByPath := make(map[string]document)
+	// Group docs by path for O(1) lookup
+	docsByPath := make(map[string][]document)
 	for _, doc := range currentDocs {
-		if _, exists := currentByPath[doc.Path]; !exists {
-			currentByPath[doc.Path] = doc
-		}
+		docsByPath[doc.Path] = append(docsByPath[doc.Path], doc)
 	}
 
 	for filePath := range indexedFiles {
-		if _, exists := currentByPath[filePath]; !exists {
+		if _, exists := docsByPath[filePath]; !exists {
 			toRemove = append(toRemove, filePath)
 		}
 	}
 
 	addedFiles := make(map[string]bool)
 
-	for _, doc := range currentDocs {
-		if addedFiles[doc.Path] {
+	for path, docs := range docsByPath {
+		if addedFiles[path] {
 			continue
 		}
 
-		indexed, exists := indexedFiles[doc.Path]
+		indexed, exists := indexedFiles[path]
 		if forceRebuild || !exists {
-			for _, d := range currentDocs {
-				if d.Path == doc.Path {
-					toAdd = append(toAdd, d)
-				}
-			}
-			addedFiles[doc.Path] = true
+			toAdd = append(toAdd, docs...)
+			addedFiles[path] = true
 			continue
 		}
 
-		fileHash := doc.FileHash
+		fileHash := docs[0].FileHash
 		if fileHash == "" {
-			fileHash = calculateFileHash(doc.Content)
+			fileHash = calculateFileHash(docs[0].Content)
 		}
 
-		if indexed.Hash != fileHash || indexed.ModTime.Before(doc.LastModified) {
-			for _, d := range currentDocs {
-				if d.Path == doc.Path {
-					toAdd = append(toAdd, d)
-				}
-			}
-			addedFiles[doc.Path] = true
+		if indexed.Hash != fileHash || indexed.ModTime.Before(docs[0].LastModified) {
+			toAdd = append(toAdd, docs...)
+			addedFiles[path] = true
 		}
 	}
 
@@ -461,15 +424,13 @@ func (re *Engine) autoIndexIfNeeded() {
 }
 
 func (re *Engine) startFileWatcher() {
-	intervalStr := config.EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m")
-	interval, err := time.ParseDuration(intervalStr)
-	if err != nil {
+	interval := re.config.WatchInterval
+	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
 
-	debounceStr := config.EnvOrDefault("MCP_RAG_DEBOUNCE", "30s")
-	debounceDuration, err := time.ParseDuration(debounceStr)
-	if err != nil {
+	debounceDuration := re.config.DebounceDuration
+	if debounceDuration <= 0 {
 		debounceDuration = 30 * time.Second
 	}
 
@@ -550,7 +511,7 @@ func (re *Engine) Stop() {
 }
 
 func (re *Engine) needsIndexing() bool {
-	store := re.vecService.store.(*vectorstore.SQLiteStore)
+	store := re.vecService.store
 
 	indexedFiles, err := store.GetAllIndexedFiles()
 	if err != nil {
@@ -598,9 +559,8 @@ func (re *Engine) needsIndexing() bool {
 }
 
 func calculateFileHash(content string) string {
-	hasher := md5.New()
-	hasher.Write([]byte(content))
-	return hex.EncodeToString(hasher.Sum(nil))
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
 }
 
 // === Document Service ===
@@ -663,31 +623,12 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 	return allDocs, nil
 }
 
-func (ds *documentService) getDocType(path string) string {
-	relPath := strings.TrimPrefix(path, ds.config.RepoRoot)
-	relPath = strings.TrimPrefix(relPath, "/")
-
-	switch {
-	case strings.HasPrefix(relPath, "tasks/"):
-		return "tasks"
-	case strings.HasPrefix(relPath, "memory-bank/"):
-		return "memory"
-	case strings.HasPrefix(relPath, "docs/"):
-		return "docs"
-	case strings.Contains(relPath, "CHANGELOG"):
-		return "changelog"
-	default:
-		return "docs"
-	}
-}
-
 func (ds *documentService) processFile(path string) ([]document, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	docType := ds.getDocType(path)
 	relPath := strings.TrimPrefix(path, ds.config.RepoRoot)
 	relPath = strings.TrimPrefix(relPath, "/")
 
@@ -696,11 +637,6 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 
 	fileHash := calculateFileHash(cleanContent)
 	modTime := ds.getFileModTime(path)
-
-	var taskSlug, taskPhase string
-	if docType == "tasks" {
-		taskSlug, taskPhase = ds.extractTaskInfo(relPath)
-	}
 
 	chunks := ds.splitIntoChunks(cleanContent)
 
@@ -711,10 +647,6 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 			Content:      chunk,
 			Title:        title,
 			Path:         relPath,
-			Type:         docType,
-			Category:     ds.extractCategory(relPath),
-			TaskSlug:     taskSlug,
-			TaskPhase:    taskPhase,
 			LastModified: modTime,
 			FileHash:     fileHash,
 		})
@@ -788,40 +720,6 @@ func (ds *documentService) splitIntoChunks(content string) []string {
 	return chunks
 }
 
-func (ds *documentService) extractCategory(path string) string {
-	parts := strings.Split(path, string(filepath.Separator))
-	if len(parts) > 0 {
-		category := strings.TrimSuffix(parts[0], filepath.Ext(parts[0]))
-		return strings.ToLower(category)
-	}
-	return "general"
-}
-
-func (ds *documentService) extractTaskInfo(path string) (string, string) {
-	parts := strings.Split(path, string(filepath.Separator))
-
-	var taskSlug string
-	for _, part := range parts {
-		if strings.Contains(part, "_") && !strings.Contains(part, ".") {
-			taskSlug = strings.Split(part, "_")[0]
-			break
-		}
-	}
-
-	filename := filepath.Base(path)
-	var phase string
-	switch {
-	case strings.Contains(filename, "requirements"):
-		phase = "requirements"
-	case strings.Contains(filename, "design"):
-		phase = "design"
-	case strings.Contains(filename, "tasks"):
-		phase = "tasks"
-	}
-
-	return taskSlug, phase
-}
-
 func (ds *documentService) getFileModTime(path string) time.Time {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -866,17 +764,7 @@ func (vs *vectorService) search(query searchQuery) (*SearchResponse, error) {
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	var filters map[string]string
-	if query.Filters != nil {
-		filters = make(map[string]string)
-		for k, v := range query.Filters {
-			if str, ok := v.(string); ok && str != "" {
-				filters[k] = str
-			}
-		}
-	}
-
-	results, err := vs.store.Search(queryEmbedding, filters, query.Limit)
+	results, err := vs.store.Search(queryEmbedding, query.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
@@ -891,11 +779,7 @@ func (vs *vectorService) search(query searchQuery) (*SearchResponse, error) {
 		searchResults = append(searchResults, SearchResult{
 			ID:           result.ID,
 			Title:        result.Title,
-			Path:         result.Path,
-			Type:         result.Type,
-			Category:     result.Category,
-			TaskSlug:     result.TaskSlug,
-			TaskPhase:    result.TaskPhase,
+			Path:         result.DocPath,
 			Score:        result.Score,
 			Snippet:      snippet,
 			LastModified: result.LastModified,
@@ -949,11 +833,6 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 			DocPath:      doc.Path,
 			Content:      doc.Content,
 			Title:        doc.Title,
-			Path:         doc.Path,
-			Type:         doc.Type,
-			Category:     doc.Category,
-			TaskSlug:     doc.TaskSlug,
-			TaskPhase:    doc.TaskPhase,
 			LastModified: doc.LastModified,
 			Embedding:    embeddings[i],
 		})
@@ -975,6 +854,3 @@ func (vs *vectorService) removeDocument(path string) error {
 	return vs.store.DeleteByDocPath(path)
 }
 
-func (vs *vectorService) count() int {
-	return vs.store.Count()
-}
