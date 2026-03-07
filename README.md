@@ -46,6 +46,7 @@ This makes it a better fit when the agent needs to answer questions like:
 
 ## What Improved For Users
 
+- **Lower memory usage**: memory store now reads from SQLite directly instead of loading everything into RAM — large memory banks no longer risk OOM
 - **Opinionated solo-local setup**: one recommended layout, one data directory, one quick smoke path
 - **Auto-loaded `.env`**: run from your project root without manually sourcing environment variables
 - **Local-only embedding mode**: keep hosted providers disabled and send text only to your local Ollama endpoint
@@ -59,15 +60,17 @@ This makes it a better fit when the agent needs to answer questions like:
 - **Trust-aware retrieval**: memory and document results now expose `source_type`, `confidence`, `freshness`, `owner`, and `last_verified_at`, and ranking uses trust/freshness instead of similarity alone
 - **Explainable retrieval**: opt-in debug output shows filters, score components, and applied boosts for every result
 - **DevOps-first tools**: store decisions, incidents, runbooks, and postmortems with domain-specific MCP tools instead of generic memory calls
+- **Memory lifecycle**: memories move through statuses — active, outdated, superseded, canonical — so stale knowledge gets downranked automatically instead of polluting recall
 - **Manual consolidation workflow**: merge duplicates, mark outdated notes, promote canonical entries, and inspect conflict groups without deleting history
 - **Explicit canonical knowledge layer**: list and recall confirmed knowledge separately from raw memory, and surface canonical context first in project summaries
+- **Project bank views**: see maintained knowledge organized by category — decisions, runbooks, incidents, caveats, migrations, review queue — instead of a flat memory list
+- **Session close pipeline**: when a session ends, memory is analyzed, classified, and consolidated with existing knowledge instead of blindly appended
+- **Explainable consolidation**: session close reports show what will be added, merged, outdated, or promoted, with a decision trace and risk level for each action
+- **DevOps session modes**: close-session adapts behavior based on session type — incident and migration sessions get stricter review-first policy, coding sessions auto-apply low-risk updates
 - **Shared service packaging**: a working Docker Compose recipe, shared env template, nginx reverse proxy example, and a dedicated shared deployment guide
 - **Built-in retrieval console**: inspect hybrid ranking, trust, and normal-vs-debug retrieval in a lightweight HTTP UI at `/console`
 - **Safer HTTP defaults**: HTTP mode binds to `127.0.0.1` by default; non-loopback binds require auth unless you explicitly opt into unsafe unauthenticated access
-- **Lower recall contention**: memory recall now snapshots cached state before query embedding and scoring, so concurrent writes are not blocked by slow embedding calls
-- **Safer index tracking**: document indexing now uses a dirty/ready integrity marker and an atomic tracking-state commit, so interrupted runs are detected and recovered on the next rebuild
 - **Consistent CLI and MCP behavior**: memory type validation, tag normalization, query/content limits, and trust summaries now follow the same policy across both interfaces
-- **More scalable document search**: hybrid retrieval now merges semantic and keyword candidate sets and reranks only those candidates instead of rescoring the full corpus on every query
 
 ## Start Local In 3 Minutes
 
@@ -399,7 +402,16 @@ agent-memory-mcp config claude-desktop \
 
 ## Recommended Workflow Snippets
 
-These snippets are intended for Claude, Cursor, Codex, or any other MCP-capable coding agent.
+Without these snippets, the agent will only use basic `store_memory` and `recall_memory`. To unlock session close, engineering memory types, project bank, and consolidation, add relevant snippets to your agent's instructions.
+
+Where to put them:
+
+- **Claude Code** — paste into `CLAUDE.md` at the project root
+- **Cursor** — paste into `.cursorrules` at the project root
+- **Codex** — paste into the system prompt or `AGENTS.md`
+- **Claude Desktop** — paste into the system prompt field in the project settings
+
+Pick the snippets that match your workflow. Start with "Start-of-session recall" and "Coding close" — they cover the most common case.
 
 ### Start-of-session recall
 
