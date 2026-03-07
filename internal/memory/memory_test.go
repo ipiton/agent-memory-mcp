@@ -1000,6 +1000,137 @@ func TestReembedAllUpdatesEmbeddingModel(t *testing.T) {
 	}
 }
 
+func TestBackgroundReembedOnModelMismatch(t *testing.T) {
+	// Phase 1: Create store with memories embedded by "old-model"
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store1, err := NewStore(dbPath, nil, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore (phase 1): %v", err)
+	}
+	// Insert memories with a legacy embedding model directly
+	for i := 0; i < 3; i++ {
+		m := &Memory{
+			Content:        "memory for reembed test",
+			Type:           TypeSemantic,
+			Importance:     0.5,
+			Embedding:      []float32{1, 0, 0, 0},
+			EmbeddingModel: "legacy:old-model:4",
+		}
+		if err := store1.Store(context.Background(), m); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close (phase 1): %v", err)
+	}
+
+	// Phase 2: Reopen with a new embedder — should detect mismatch and auto-reembed
+	server := newEmbeddingTestServer(t, []float64{0.5, 0.5, 0.5, 0.5})
+	defer server.Close()
+
+	emb, err := embedder.New(embedder.Config{
+		OpenAIToken:   "test-token",
+		OpenAIBaseURL: server.URL,
+		OpenAIModel:   "new-model",
+		Dimension:     4,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New embedder: %v", err)
+	}
+
+	store2, err := NewStore(dbPath, emb, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore (phase 2): %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	// Close waits for background goroutine (via accessWG), so after Close all reembed is done.
+	// But we can also poll for completion.
+	deadline := time.After(10 * time.Second)
+	for {
+		allCurrent := true
+		store2.mu.RLock()
+		for _, m := range store2.memories {
+			if m.EmbeddingModel == "legacy:old-model:4" {
+				allCurrent = false
+				break
+			}
+		}
+		store2.mu.RUnlock()
+		if allCurrent {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for background reembed to complete")
+		default:
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	// Verify all memories now have the new model
+	store2.mu.RLock()
+	for id, m := range store2.memories {
+		if m.EmbeddingModel == "legacy:old-model:4" {
+			t.Errorf("memory %s still has legacy model after reembed", id)
+		}
+		if strings.Contains(m.EmbeddingModel, "new-model") == false {
+			t.Errorf("memory %s has unexpected model %q", id, m.EmbeddingModel)
+		}
+	}
+	store2.mu.RUnlock()
+}
+
+func TestNoBackgroundReembedWhenModelsMatch(t *testing.T) {
+	server := newEmbeddingTestServer(t, []float64{0.5, 0.5, 0.5, 0.5})
+	defer server.Close()
+
+	emb, err := embedder.New(embedder.Config{
+		OpenAIToken:   "test-token",
+		OpenAIBaseURL: server.URL,
+		OpenAIModel:   "current-model",
+		Dimension:     4,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New embedder: %v", err)
+	}
+
+	// Phase 1: Store memories with current embedder (model will match)
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store1, err := NewStore(dbPath, emb, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore (phase 1): %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := store1.Store(context.Background(), &Memory{
+			Content:    "memory content",
+			Type:       TypeSemantic,
+			Importance: 0.5,
+		}); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close (phase 1): %v", err)
+	}
+
+	// Phase 2: Reopen with same embedder — no reembed should happen
+	store2, err := NewStore(dbPath, emb, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore (phase 2): %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	// All models should already be current — just verify nothing broke
+	store2.mu.RLock()
+	for id, m := range store2.memories {
+		if !strings.Contains(m.EmbeddingModel, "current-model") {
+			t.Errorf("memory %s has unexpected model %q", id, m.EmbeddingModel)
+		}
+	}
+	store2.mu.RUnlock()
+}
+
 func TestNewStoreMigratesEmbeddingModelColumn(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "legacy.db")
 	store, err := NewStore(dbPath, nil, zap.NewNop())

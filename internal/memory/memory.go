@@ -2,6 +2,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -125,6 +126,8 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 
 	store.accessWG.Add(1)
 	go store.accessStatsWorker()
+
+	store.maybeStartBackgroundReembed()
 
 	return store, nil
 }
@@ -338,6 +341,75 @@ func ensureMemorySchema(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// maybeStartBackgroundReembed probes the current embedding model and compares it
+// with models stored in cached memories. If a mismatch is detected, starts a
+// background goroutine to re-embed all memories with the current model.
+func (ms *Store) maybeStartBackgroundReembed() {
+	if ms.embedder == nil {
+		return
+	}
+
+	ms.mu.RLock()
+	total := len(ms.memories)
+	if total == 0 {
+		ms.mu.RUnlock()
+		return
+	}
+
+	// Collect model distribution from cache
+	modelCounts := make(map[string]int)
+	for _, m := range ms.memories {
+		model := m.EmbeddingModel
+		if model == "" {
+			model = "(none)"
+		}
+		modelCounts[model]++
+	}
+	ms.mu.RUnlock()
+
+	// Probe embedder for current model ID
+	probeResult, err := ms.embedder.EmbedDetailed(context.Background(), "model probe")
+	if err != nil {
+		ms.logger.Warn("Failed to probe embedding model at startup, skipping auto-reembed check", zap.Error(err))
+		return
+	}
+	currentModel := probeResult.ModelID
+
+	// Check how many memories need re-embedding
+	mismatchCount := 0
+	for model, count := range modelCounts {
+		if model != currentModel {
+			mismatchCount += count
+		}
+	}
+	if mismatchCount == 0 {
+		ms.logger.Info("All memories use current embedding model", zap.String("model", currentModel), zap.Int("total", total))
+		return
+	}
+
+	ms.logger.Info("Embedding model mismatch detected, starting background re-embed",
+		zap.String("current_model", currentModel),
+		zap.Int("mismatched", mismatchCount),
+		zap.Int("total", total),
+	)
+
+	ms.accessWG.Add(1)
+	go func() {
+		defer ms.accessWG.Done()
+		result, err := ms.ReembedAll(context.Background())
+		if err != nil {
+			ms.logger.Error("Background re-embed failed", zap.Error(err))
+			return
+		}
+		ms.logger.Info("Background re-embed completed",
+			zap.Int("reembedded", result.Reembedded),
+			zap.Int("already_current", result.AlreadyCurrent),
+			zap.Int("failed", result.Failed),
+			zap.String("model", result.CurrentModel),
+		)
+	}()
 }
 
 func memoryColumnExists(db *sql.DB, column string) (bool, error) {
