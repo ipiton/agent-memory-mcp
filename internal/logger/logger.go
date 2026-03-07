@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // FileLogger provides file-based logging for MCP diagnostics.
@@ -16,14 +17,18 @@ type FileLogger struct {
 }
 
 // New creates a new FileLogger that writes JSON-formatted logs to the given path.
+// Logs are automatically rotated: max 50 MB per file, 3 backups, 30 days retention.
 func New(logPath string) (*FileLogger, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return nil, err
 	}
 
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, err
+	writer := &lumberjack.Logger{
+		Filename:   logPath,
+		MaxSize:    50, // MB
+		MaxBackups: 3,
+		MaxAge:     30, // days
+		Compress:   true,
 	}
 
 	encoderConfig := zap.NewProductionEncoderConfig()
@@ -36,7 +41,7 @@ func New(logPath string) (*FileLogger, error) {
 
 	core := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderConfig),
-		zapcore.AddSync(file),
+		zapcore.AddSync(writer),
 		zapcore.InfoLevel,
 	)
 
