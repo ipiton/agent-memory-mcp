@@ -1,22 +1,24 @@
 package vectorstore
 
 import (
+	"errors"
 	"math"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-func newTestStore(t *testing.T) *SQLiteStore {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test-vec.db")
+func newTestStore(tb testing.TB) *SQLiteStore {
+	tb.Helper()
+	dbPath := filepath.Join(tb.TempDir(), "test-vec.db")
 	store, err := NewSQLiteStore(dbPath, 3, zap.NewNop())
 	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
+		tb.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	tb.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -82,6 +84,38 @@ func TestDeleteByDocPath(t *testing.T) {
 
 	if got := store.Count(); got != 1 {
 		t.Fatalf("expected 1, got %d", got)
+	}
+}
+
+func TestAllChunksReturnsSnapshotCopy(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.Upsert([]Chunk{
+		{ID: "c1", DocPath: "doc1.md", Content: "hello", Embedding: []float32{1, 0, 0}},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	chunks, err := store.AllChunks()
+	if err != nil {
+		t.Fatalf("AllChunks: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("len(chunks) = %d, want 1", len(chunks))
+	}
+
+	chunks[0].Content = "mutated"
+	chunks[0].Embedding[0] = 99
+
+	snapshot, err := store.AllChunks()
+	if err != nil {
+		t.Fatalf("AllChunks second call: %v", err)
+	}
+	if snapshot[0].Content != "hello" {
+		t.Fatalf("store content was mutated through snapshot: %q", snapshot[0].Content)
+	}
+	if snapshot[0].Embedding[0] != 1 {
+		t.Fatalf("store embedding was mutated through snapshot: %v", snapshot[0].Embedding)
 	}
 }
 
@@ -161,6 +195,106 @@ func TestSearchLimit(t *testing.T) {
 	}
 	if len(results) > 5 {
 		t.Fatalf("expected at most 5, got %d", len(results))
+	}
+}
+
+func TestKeywordSearchRanksKeywordMatch(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.Upsert([]Chunk{
+		{
+			ID:        "runbook",
+			DocPath:   "runbooks/ingress-rollback.md",
+			Title:     "Ingress rollback",
+			Content:   "Rollback steps for ingress controller recovery",
+			Embedding: []float32{0, 1, 0},
+		},
+		{
+			ID:        "generic",
+			DocPath:   "docs/networking.md",
+			Title:     "Networking notes",
+			Content:   "General networking background",
+			Embedding: []float32{1, 0, 0},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	results, err := store.KeywordSearch("rollback ingress", 10)
+	if err != nil {
+		t.Fatalf("KeywordSearch: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected keyword results")
+	}
+	if results[0].ID != "runbook" {
+		t.Fatalf("results[0].ID = %q, want runbook", results[0].ID)
+	}
+}
+
+func TestKeywordSearchReflectsDeleteByDocPath(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.Upsert([]Chunk{
+		{
+			ID:        "runbook",
+			DocPath:   "runbooks/ingress-rollback.md",
+			Title:     "Ingress rollback",
+			Content:   "Rollback steps for ingress controller recovery",
+			Embedding: []float32{0, 1, 0},
+		},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	if err := store.DeleteByDocPath("runbooks/ingress-rollback.md"); err != nil {
+		t.Fatalf("DeleteByDocPath: %v", err)
+	}
+
+	results, err := store.KeywordSearch("rollback ingress", 10)
+	if err != nil {
+		t.Fatalf("KeywordSearch: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 keyword results after delete, got %d", len(results))
+	}
+}
+
+func BenchmarkKeywordSearch(b *testing.B) {
+	store := newTestStore(b)
+
+	chunks := make([]Chunk, 0, 3000)
+	for i := 0; i < 3000; i++ {
+		content := "General platform notes for release pipelines and deployments"
+		title := "Platform note"
+		path := "docs/note-" + strconv.Itoa(i) + ".md"
+		if i%120 == 0 {
+			content = "Rollback steps for ingress controller recovery and troubleshooting"
+			title = "Ingress rollback"
+			path = "runbooks/ingress-rollback-" + strconv.Itoa(i) + ".md"
+		}
+		chunks = append(chunks, Chunk{
+			ID:        "chunk-" + strconv.Itoa(i),
+			DocPath:   path,
+			Title:     title,
+			Content:   content,
+			Embedding: []float32{1, 0, 0},
+		})
+	}
+
+	if err := store.Upsert(chunks); err != nil {
+		b.Fatalf("Upsert: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, err := store.KeywordSearch("rollback ingress", 20)
+		if err != nil {
+			b.Fatalf("KeywordSearch: %v", err)
+		}
+		if len(results) == 0 {
+			b.Fatal("expected results")
+		}
 	}
 }
 
@@ -261,8 +395,8 @@ func TestMetadata(t *testing.T) {
 
 	// Missing key
 	val, err = store.GetMetadata("nonexistent")
-	if err != nil {
-		t.Fatalf("GetMetadata missing key should not error: %v", err)
+	if !errors.Is(err, ErrMetadataNotFound) {
+		t.Fatalf("GetMetadata missing key: expected ErrMetadataNotFound, got %v", err)
 	}
 	if val != "" {
 		t.Fatalf("expected empty for missing key, got %q", val)
@@ -315,6 +449,91 @@ func TestIndexedFiles(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatal("expected nil after delete")
+	}
+}
+
+func TestCommitIndexState(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if err := store.CommitIndexState(IndexStateUpdate{
+		Metadata: map[string]string{
+			"index_state":  "ready",
+			"last_indexed": now.Format(time.RFC3339),
+		},
+		UpsertFiles: []*IndexedFileInfo{
+			{
+				FilePath:   "docs/runbook.md",
+				Hash:       "hash-1",
+				ModTime:    now,
+				Size:       512,
+				ChunkCount: 2,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CommitIndexState: %v", err)
+	}
+
+	state, err := store.GetMetadata("index_state")
+	if err != nil {
+		t.Fatalf("GetMetadata(index_state): %v", err)
+	}
+	if state != "ready" {
+		t.Fatalf("index_state = %q, want ready", state)
+	}
+
+	info, err := store.GetIndexedFile("docs/runbook.md")
+	if err != nil {
+		t.Fatalf("GetIndexedFile: %v", err)
+	}
+	if info == nil || info.Hash != "hash-1" || info.ChunkCount != 2 {
+		t.Fatalf("unexpected indexed file info: %+v", info)
+	}
+}
+
+func TestCommitIndexStateRollsBackOnError(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.SetMetadata("index_state", "ready"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+	if err := store.SetIndexedFile(&IndexedFileInfo{
+		FilePath:   "docs/original.md",
+		Hash:       "stable-hash",
+		ModTime:    time.Now().UTC().Truncate(time.Second),
+		Size:       128,
+		ChunkCount: 1,
+	}); err != nil {
+		t.Fatalf("SetIndexedFile: %v", err)
+	}
+
+	err := store.CommitIndexState(IndexStateUpdate{
+		Metadata: map[string]string{
+			"index_state": "dirty",
+		},
+		UpsertFiles: []*IndexedFileInfo{nil},
+		DeleteFilePaths: []string{
+			"docs/original.md",
+		},
+	})
+	if err == nil {
+		t.Fatal("CommitIndexState error = nil, want rollback")
+	}
+
+	state, err := store.GetMetadata("index_state")
+	if err != nil {
+		t.Fatalf("GetMetadata(index_state): %v", err)
+	}
+	if state != "ready" {
+		t.Fatalf("index_state after rollback = %q, want ready", state)
+	}
+
+	info, err := store.GetIndexedFile("docs/original.md")
+	if err != nil {
+		t.Fatalf("GetIndexedFile after rollback: %v", err)
+	}
+	if info == nil || info.Hash != "stable-hash" {
+		t.Fatalf("indexed file after rollback = %+v, want original entry", info)
 	}
 }
 

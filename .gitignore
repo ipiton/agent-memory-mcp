@@ -11,6 +11,7 @@ dist/
 # Data directories
 data/
 logs/
+.agent-memory/
 
 # macOS
 .DS_Store

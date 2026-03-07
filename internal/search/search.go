@@ -34,6 +34,7 @@ var skipDirs = map[string]struct{}{
 	"test-results":      {},
 	"artifacts":         {},
 	"logs":              {},
+	".agent-memory":     {},
 	"playwright-report": {},
 }
 
@@ -65,7 +66,7 @@ func Repo(guard *paths.Guard, query, relPath string, maxResults int, maxBytes in
 		}
 	}
 
-	matches := make([]Match, 0, minInt(maxResults, 256))
+	matches := make([]Match, 0, min(maxResults, 256))
 	for _, root := range roots {
 		if len(matches) >= maxResults {
 			break
@@ -126,7 +127,7 @@ func ScanFile(path string, guard *paths.Guard, query string, maxBytes int64, max
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	sample := make([]byte, 512)
 	n, err := file.Read(sample)
@@ -185,11 +186,4 @@ func FormatMatches(matches []Match) string {
 		lines = append(lines, fmt.Sprintf("%s:%d %s", match.Path, match.Line, match.Text))
 	}
 	return strings.Join(lines, "\n")
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

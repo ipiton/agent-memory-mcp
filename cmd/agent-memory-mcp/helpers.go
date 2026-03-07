@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
@@ -22,17 +21,9 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 		return nil, nil, fmt.Errorf("failed to create memory directory: %w", err)
 	}
 
-	emb, err := embedder.New(embedder.Config{
-		JinaToken:     cfg.JinaAPIKey,
-		OpenAIToken:   cfg.OpenAIAPIKey,
-		OpenAIBaseURL: cfg.OpenAIBaseURL,
-		OpenAIModel:   cfg.OpenAIModel,
-		OllamaBaseURL: cfg.OllamaBaseURL,
-		Dimension:     cfg.EmbeddingDimension,
-		MaxRetries:    1,
-		Timeout:       5 * time.Second,
-	}, zap.NewNop())
+	emb, err := embedder.New(cfg.EmbedderConfig(), zap.NewNop())
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: embedder unavailable, semantic search disabled: %v\n", err)
 		emb = nil
 	}
 
@@ -41,7 +32,7 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
 
-	cleanup := func() { store.Close() }
+	cleanup := func() { _ = store.Close() }
 	return store, cleanup, nil
 }
 

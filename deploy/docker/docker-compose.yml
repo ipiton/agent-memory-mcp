@@ -1,19 +1,41 @@
 services:
   agent-memory-mcp:
-    build: .
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
     ports:
       - "18080:18080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:18080/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes:
       - memory-data:/data
-      - ./docs:/project/docs:ro  # Mount your docs for RAG indexing
+      - ${MCP_PROJECT_ROOT:-../..}:/project:ro
     environment:
+      - MCP_HTTP_MODE=http
+      - MCP_HTTP_HOST=${MCP_HTTP_HOST:-0.0.0.0}
+      - MCP_HTTP_PORT=18080
+      - MCP_HTTP_AUTH_TOKEN=${MCP_HTTP_AUTH_TOKEN:-replace-with-long-random-token}
+      - MCP_ALLOW_DIRS=/project
       - MCP_ROOT=/project
-      - MCP_INDEX_DIRS=docs
+      - MCP_INDEX_DIRS=${MCP_INDEX_DIRS:-docs,README.md,CHANGELOG.md}
+      - MCP_INDEX_EXCLUDE_DIRS=${MCP_INDEX_EXCLUDE_DIRS:-.git,.agent-memory,node_modules,logs}
+      - MCP_REDACT_SECRETS=${MCP_REDACT_SECRETS:-true}
+      - MCP_RAG_AUTO_INDEX=${MCP_RAG_AUTO_INDEX:-true}
+      - MCP_RAG_FILE_WATCHER=${MCP_RAG_FILE_WATCHER:-true}
+      - MCP_EMBEDDING_MODE=${MCP_EMBEDDING_MODE:-local-only}
       - JINA_API_KEY=${JINA_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_EMBEDDING_MODEL=${OPENAI_EMBEDDING_MODEL:-}
       - OLLAMA_BASE_URL=http://ollama:11434
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   ollama:

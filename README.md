@@ -1,32 +1,222 @@
 # agent-memory-mcp
 
-An MCP (Model Context Protocol) server that gives AI agents persistent memory with semantic search. Agents can store, recall, and search memories using vector embeddings, plus optionally index project documents for RAG-powered retrieval.
+A memory, docs, and repo context layer for engineering agents.
+
+`agent-memory-mcp` helps agents work with live engineering context, not just isolated notes. It combines typed memory, document retrieval, and repository-aware tools so Claude, Cursor, Codex, and other MCP clients can recall decisions, search runbooks, inspect project docs, and reuse operational knowledge across sessions.
+
+It is designed for engineering workflows such as:
+
+- DevOps and platform operations
+- infrastructure changes and rollback planning
+- runbooks, changelogs, RFCs, and postmortems
+- project-level memory that stays attached to the repo
+
+## Who This Is For
+
+- teams using AI agents on real codebases, docs, and operational workflows
+- DevOps, platform, and infra engineers who need more than chat history
+- projects that want local-first memory today and a shared service path later
+
+## Why Not Just A Memory Tool
+
+Most memory MCP servers focus on "store a note, recall a note."
+
+`agent-memory-mcp` is aimed at a wider engineering context layer:
+
+- typed memory for decisions, facts, patterns, and working context
+- RAG indexing for project docs, changelogs, and knowledge files
+- repo/file tools for reading and searching allowed project paths
+- local SQLite storage with stdio today and HTTP/JSON-RPC when you need to share it
+
+This makes it a better fit when the agent needs to answer questions like:
+
+- "Why did we disable HPA on this service?"
+- "What changed recently that could explain this regression?"
+- "Which runbook or RFC matches this incident?"
 
 ## Features
 
-- **Persistent memory** with 4 types: episodic (events), semantic (facts), procedural (patterns), working (context)
-- **Semantic search** via vector embeddings (Jina AI, OpenAI, or Ollama)
-- **RAG document indexing** for project docs, changelogs, and archives
-- **Dual transport**: stdio (for MCP clients) and HTTP (for APIs)
-- **Auto-indexing** with file watcher for document changes
+- **Typed persistent memory** with 4 types: episodic, semantic, procedural, working
+- **Hybrid retrieval** that combines embeddings with keyword/BM25-like ranking
+- **RAG indexing** for project docs, changelogs, and knowledge archives
+- **Repo-aware file tools** for listing, reading, and searching allowlisted paths
+- **Dual transport**: stdio for MCP clients, HTTP/JSON-RPC for APIs and shared setups
 - **SQLite storage** for both memory and vector index -- no external databases needed
+- **Auto-indexing** with file watcher for long-running local or service mode
 
-## Installation
+## What Improved For Users
 
-### Option 1: Homebrew (macOS/Linux)
+- **Opinionated solo-local setup**: one recommended layout, one data directory, one quick smoke path
+- **Auto-loaded `.env`**: run from your project root without manually sourcing environment variables
+- **Local-only embedding mode**: keep hosted providers disabled and send text only to your local Ollama endpoint
+- **Safer semantic recall**: memories from a different embedding model no longer produce misleading matches
+- **Explicit migration flow**: use `agent-memory-mcp reembed` for memory migration and `agent-memory-mcp index` for RAG rebuilds after switching models
+- **Better visibility**: `stats` and `memory_stats` now show how many memories belong to each embedding model
+- **Ready MCP client configs**: generate copy-paste snippets for Claude Desktop, Cursor, and Codex
+- **Safer indexing defaults**: built-in directory excludes, optional per-path exclude globs, and secret redaction before documents are indexed
+- **Source-aware retrieval**: docs, ADRs, RFCs, changelogs, runbooks, postmortems, CI configs, Helm, Terraform, and K8s files are classified and surfaced with source metadata
+- **Hybrid ranking for search**: semantic similarity is now combined with keyword matches, recency, and source-aware weighting instead of cosine similarity alone
+- **Trust-aware retrieval**: memory and document results now expose `source_type`, `confidence`, `freshness`, `owner`, and `last_verified_at`, and ranking uses trust/freshness instead of similarity alone
+- **Explainable retrieval**: opt-in debug output shows filters, score components, and applied boosts for every result
+- **DevOps-first tools**: store decisions, incidents, runbooks, and postmortems with domain-specific MCP tools instead of generic memory calls
+- **Manual consolidation workflow**: merge duplicates, mark outdated notes, promote canonical entries, and inspect conflict groups without deleting history
+- **Explicit canonical knowledge layer**: list and recall confirmed knowledge separately from raw memory, and surface canonical context first in project summaries
+- **Shared service packaging**: a working Docker Compose recipe, shared env template, nginx reverse proxy example, and a dedicated shared deployment guide
+- **Built-in retrieval console**: inspect hybrid ranking, trust, and normal-vs-debug retrieval in a lightweight HTTP UI at `/console`
+- **Safer HTTP defaults**: HTTP mode binds to `127.0.0.1` by default; non-loopback binds require auth unless you explicitly opt into unsafe unauthenticated access
+- **Lower recall contention**: memory recall now snapshots cached state before query embedding and scoring, so concurrent writes are not blocked by slow embedding calls
+- **Safer index tracking**: document indexing now uses a dirty/ready integrity marker and an atomic tracking-state commit, so interrupted runs are detected and recovered on the next rebuild
+- **Consistent CLI and MCP behavior**: memory type validation, tag normalization, query/content limits, and trust summaries now follow the same policy across both interfaces
+- **More scalable document search**: hybrid retrieval now merges semantic and keyword candidate sets and reranks only those candidates instead of rescoring the full corpus on every query
+
+## Start Local In 3 Minutes
+
+The recommended path is: run locally first, prove value on one repo, then expand.
+
+Run these commands from your project root.
+
+### Prerequisites
+
+Install the binary with one of these options:
 
 ```bash
+# Homebrew (macOS/Linux)
 brew tap ipiton/tap
 brew install --cask agent-memory-mcp
 ```
 
-### Option 2: go install
-
 ```bash
+# go install
 go install github.com/ipiton/agent-memory-mcp/cmd/agent-memory-mcp@latest
 ```
 
-### Option 3: Download binary
+Then configure one embedding provider:
+
+- [Jina AI API key](https://jina.ai/) for the quickest hosted setup
+- [OpenAI API key](https://platform.openai.com/) or another OpenAI-compatible endpoint
+- [Ollama](https://ollama.ai/) with `bge-m3` for a local setup
+
+### 1. Configure local mode
+
+```bash
+cp .env.example .env
+# Edit .env:
+# - keep the solo-local defaults unless you need to change them
+# - enable at least one embedding provider
+#   JINA_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL
+```
+
+The binary auto-loads `.env` from the current directory, so you do not need `source .env`.
+
+The recommended solo-local preset keeps all runtime state inside one directory:
+
+```text
+.agent-memory/
+  rag-index/
+  memory-store/
+  logs/
+```
+
+## Local-Only Mode
+
+Use local-only mode when you want embeddings without sending text to hosted APIs.
+
+```bash
+cp .env.example .env
+# Then set:
+# MCP_EMBEDDING_MODE=local-only
+# JINA_API_KEY=
+# OPENAI_API_KEY=
+```
+
+In `local-only` mode:
+
+- `agent-memory-mcp` never calls Jina AI
+- `agent-memory-mcp` never calls OpenAI-compatible embedding APIs
+- embeddings are generated only through your local Ollama endpoint
+
+What still uses the network:
+
+- the local Ollama HTTP endpoint, typically `http://localhost:11434`
+
+If Ollama is not running or no supported local model is available, embedding requests fail with a local-only specific error telling you to start Ollama or disable `MCP_EMBEDDING_MODE=local-only`.
+
+### 2. Start the local server
+
+For MCP clients such as Claude Desktop, Cursor, or Codex:
+
+```bash
+agent-memory-mcp
+```
+
+For direct CLI use, the same binary already works without an MCP client:
+
+```bash
+agent-memory-mcp store -content "Ingress rollback uses previous Helm revision" -type procedural -tags "helm,rollback"
+agent-memory-mcp recall "helm rollback"
+agent-memory-mcp stats
+```
+
+### 3. Run a smoke check
+
+```bash
+agent-memory-mcp store -content "Solo local smoke check" -type working -tags "smoke,local"
+agent-memory-mcp recall "solo local smoke"
+agent-memory-mcp index
+agent-memory-mcp search "agent memory"
+```
+
+If you are working from the source checkout, you can run the same flow with:
+
+```bash
+make local-smoke
+```
+
+## Index Your Repo In 2 Commands
+
+Once local mode is running against a project, index docs and search them:
+
+```bash
+agent-memory-mcp index
+agent-memory-mcp search "recent ingress change"
+```
+
+Typical high-value sources include:
+
+- `docs/`
+- `README.md`
+- `CHANGELOG.md`
+- RFC / ADR folders
+- runbooks and incident notes
+
+## Turn It Into A Team Service Later
+
+When local mode proves useful, move in three steps:
+
+1. solo local
+2. team laptop with auto-indexing and file watching
+3. shared service with HTTP mode, auth token, and reverse proxy
+
+Fastest shared-service path:
+
+```bash
+cd deploy/docker
+cp .env.shared.example .env.shared
+# edit MCP_HTTP_AUTH_TOKEN and MCP_PROJECT_ROOT
+docker compose --env-file .env.shared up -d --build
+```
+
+This keeps the same retrieval stack, but packages it for team use.
+
+Reference docs:
+
+- [Shared Service Guide](docs/SHARED_SERVICE.md)
+- [Security Policy](docs/SECURITY.md)
+- [Backup And Restore](docs/BACKUP_RESTORE.md)
+
+## Installation Options
+
+### Download a binary
 
 Download a prebuilt archive from the [Releases](https://github.com/ipiton/agent-memory-mcp/releases) page.
 
@@ -44,7 +234,7 @@ curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agen
 sudo mv agent-memory-mcp /usr/local/bin/
 ```
 
-### Option 4: Build from source
+### Build from source
 
 ```bash
 git clone https://github.com/ipiton/agent-memory-mcp.git
@@ -52,65 +242,33 @@ cd agent-memory-mcp
 go build -o bin/agent-memory-mcp ./cmd/agent-memory-mcp
 ```
 
-### Option 5: Docker
+### Docker
 
 ```bash
-docker build -t agent-memory-mcp .
-docker run -p 18080:8080 \
+docker build -f deploy/docker/Dockerfile -t agent-memory-mcp .
+docker run -p 18080:18080 \
   -v memory-data:/data \
-  -e JINA_API_KEY=your-key \
+  -e MCP_HTTP_MODE=http \
+  -e MCP_HTTP_HOST=0.0.0.0 \
+  -e MCP_HTTP_AUTH_TOKEN=replace-with-long-random-token \
   agent-memory-mcp
 ```
 
 Or with docker compose:
 
 ```bash
-# Set your API key
-export JINA_API_KEY=your-key
-
-# Start
-docker compose up -d
+cd deploy/docker
+cp .env.shared.example .env.shared
+docker compose --env-file .env.shared up -d --build
 ```
 
-The service will be available at `http://localhost:18080`.
+The MCP HTTP endpoint will be available at `http://localhost:18080/mcp`.
 
-## Quick start
+By default, bare-metal HTTP mode now binds to `127.0.0.1`. For shared/container deployments, set `MCP_HTTP_HOST=0.0.0.0` and a bearer token.
 
-### Prerequisites
+## CLI Mode
 
-- Go 1.26+ (for building from source)
-- One of:
-  - [Jina AI API key](https://jina.ai/) (recommended, multilingual)
-  - [OpenAI API key](https://platform.openai.com/) or any OpenAI-compatible API (Together AI, Mistral, etc.)
-  - [Ollama](https://ollama.ai/) running locally with `bge-m3` model (free, local)
-
-### Configure
-
-```bash
-cp .env.example .env
-# Edit .env -- set at least one embedding provider:
-#   JINA_API_KEY, OPENAI_API_KEY, or OLLAMA_BASE_URL
-```
-
-### Run
-
-**Stdio mode** (for MCP clients like Claude Desktop, Cursor):
-
-```bash
-agent-memory-mcp
-```
-
-**HTTP mode** (for API access):
-
-```bash
-MCP_HTTP_MODE=http MCP_HTTP_PORT=18080 agent-memory-mcp
-```
-
-> The server listens on plain HTTP. For TLS, use a reverse proxy (nginx, Caddy, Traefik) or cloud load balancer in front of it.
-
-### CLI mode
-
-The binary also works as a standalone CLI -- no MCP client needed:
+The binary also works as a standalone CLI:
 
 ```bash
 # Memory operations
@@ -121,10 +279,21 @@ agent-memory-mcp delete <memory-id>
 
 # RAG search
 agent-memory-mcp search "authentication flow"
+agent-memory-mcp search -source-type runbook "ingress rollback"
+agent-memory-mcp search -source-type runbook -debug "ingress rollback"
 agent-memory-mcp index
+
+# Project bank and session close
+agent-memory-mcp project-bank canonical_overview
+agent-memory-mcp close-session -summary "Updated payments rollback runbook after fixing ingress timeout" -context payments-api -service payments-api
+agent-memory-mcp review-session -mode incident -stdin < notes/session.txt
+agent-memory-mcp accept-session -summary "Added migration caveat for billing schema rename" -mode migration -context billing -service billing-api
+agent-memory-mcp accept-session -raw-only -summary "Exploratory notes that are too noisy for consolidation"
 
 # Utilities
 agent-memory-mcp stats
+agent-memory-mcp config claude-desktop
+agent-memory-mcp reembed
 agent-memory-mcp export > backup.json
 agent-memory-mcp import backup.json
 
@@ -135,25 +304,45 @@ agent-memory-mcp stats -json
 
 Run `agent-memory-mcp <command> -help` for details on any command.
 
+CLI memory commands and MCP memory tools now share the same validation and normalization rules:
+
+- invalid memory types are rejected consistently
+- comma-separated tags are trimmed and deduplicated the same way
+- zero `verified` timestamps are hidden from trust summaries in both CLI and MCP output
+
 When no command is given (or flags start with `-`), the binary starts the MCP server as before -- full backward compatibility.
 
 ## MCP client configuration
 
+Use the built-in generator to produce a project-local config that starts the server from your repo root.
+
+This is the recommended path because it:
+
+- keeps `.env` loading working without duplicating settings into every MCP client
+- keeps `.agent-memory/` relative to the project root
+- gives you one copy-paste snippet per client
+
+You can override the detected project root or binary path with `-root` and `-command`.
+
 ### Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Paste into `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```bash
+agent-memory-mcp config claude-desktop
+```
+
+Example generated output:
 
 ```json
 {
   "mcpServers": {
     "memory": {
-      "command": "/path/to/agent-memory-mcp",
-      "env": {
-        "MCP_ROOT": "/path/to/your/project",
-        "MCP_MEMORY_ENABLED": "true",
-        "MCP_RAG_ENABLED": "true",
-        "JINA_API_KEY": "your-key-here"
-      }
+      "command": "/bin/sh",
+      "args": [
+        "-lc",
+        "cd '/path/to/your/project' && exec '/absolute/path/to/agent-memory-mcp'"
+      ]
     }
   }
 }
@@ -161,40 +350,112 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ### Cursor
 
-Add to `~/.cursor/mcp.json`:
+Paste into `~/.cursor/mcp.json`:
+
+```bash
+agent-memory-mcp config cursor
+```
+
+Example generated output:
 
 ```json
 {
   "mcpServers": {
     "memory": {
-      "command": "/path/to/agent-memory-mcp",
-      "env": {
-        "MCP_ROOT": "/path/to/your/project",
-        "MCP_MEMORY_ENABLED": "true",
-        "JINA_API_KEY": "your-key-here"
-      }
+      "command": "/bin/sh",
+      "args": [
+        "-lc",
+        "cd '/path/to/your/project' && exec '/absolute/path/to/agent-memory-mcp'"
+      ]
     }
   }
 }
 ```
 
-### Claude Code
+### Codex
 
-Add to `.claude/settings.json`:
+Paste into `~/.codex/config.toml`:
 
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "/path/to/agent-memory-mcp",
-      "env": {
-        "MCP_ROOT": "/path/to/your/project",
-        "MCP_MEMORY_ENABLED": "true",
-        "JINA_API_KEY": "your-key-here"
-      }
-    }
-  }
-}
+```bash
+agent-memory-mcp config codex
+```
+
+Example generated output:
+
+```toml
+[mcp_servers.memory]
+command = "/bin/sh"
+args = ["-lc", "cd '/path/to/your/project' && exec '/absolute/path/to/agent-memory-mcp'"]
+```
+
+### Rename the server or override paths
+
+```bash
+agent-memory-mcp config claude-desktop \
+  -name engineering-memory \
+  -root /path/to/your/project \
+  -command /absolute/path/to/agent-memory-mcp
+```
+
+## Recommended Workflow Snippets
+
+These snippets are intended for Claude, Cursor, Codex, or any other MCP-capable coding agent.
+
+### Start-of-session recall
+
+```text
+Before you start, recall the project context for this task.
+Then recall recent changes related to the service or component I am touching.
+Search for relevant runbooks, RFCs, changelog notes, or incident notes.
+Prefer `summarize_project_context` or `project_bank_view view=canonical_overview` for the first pass and then drill into `search_runbooks` or `recall_similar_incidents`.
+Summarize the constraints, caveats, and likely risks before making changes.
+```
+
+### Coding close
+
+```text
+When the coding session ends, call `close_session` with a concise summary, service, and context.
+Review the proposed `new`, `update`, `merge`, and `raw_only` actions plus the decision trace.
+If the plan looks low risk, use `accept_session_changes`.
+If the report is noisy or mostly exploratory, keep `save_raw_only` as the fallback.
+Prefer `project_bank_view` at the next session start to confirm what became maintained knowledge.
+```
+
+### Incident close
+
+```text
+When incident work stabilizes, call `close_session` or `review_session_changes` with `mode=incident`.
+Expect stricter review-first behavior for updates, merges, and anything touching canonical operational knowledge.
+Capture impact, mitigation, rollback, and unresolved follow-ups in the summary.
+Apply only the low-risk actions automatically and leave ambiguous runbook or incident changes in review.
+Follow up with `recall_similar_incidents` and `project_bank_view view=incidents` if you need to compare against existing knowledge.
+```
+
+### Migration close
+
+```text
+When a migration session ends, call `close_session` with `mode=migration`, affected service, and the migration summary.
+Prefer explicit notes about prerequisites, sequencing, rollback, and post-deploy verification.
+Treat runbook replacements, caveat changes, and supersede proposals as review-first even when the textual match looks strong.
+Use `accept_session_changes` only after checking the report for stale or superseded knowledge.
+Finish by checking `project_bank_view view=migrations` to see the maintained migration notes.
+```
+
+### Raw-only fallback
+
+```text
+If the session was exploratory, ambiguous, or too noisy, skip consolidation and save only the raw summary.
+Use `close_session` / `review_session_changes` to inspect the plan first, then pick `save_raw_only`.
+In CLI mode, `agent-memory-mcp accept-session -raw-only ...` is the explicit override.
+This keeps the raw trace without forcing weak knowledge updates into the project bank.
+```
+
+### Before-changing-infra check
+
+```text
+Before making infra or platform changes, recall similar fixes, migrations, incidents, and known caveats.
+Search for runbooks, postmortems, changelog notes, and recent project context related to this component.
+Summarize blast radius, rollback options, and operational risks before editing files.
 ```
 
 ### HTTP mode (Docker, remote server, shared instance)
@@ -203,24 +464,48 @@ Start the server in HTTP mode:
 
 ```bash
 # Standalone
-MCP_HTTP_MODE=http MCP_HTTP_PORT=18080 agent-memory-mcp
+MCP_HTTP_MODE=http \
+MCP_HTTP_HOST=127.0.0.1 \
+MCP_HTTP_PORT=18080 \
+MCP_HTTP_AUTH_TOKEN=replace-with-long-random-token \
+agent-memory-mcp
 
 # Or with Docker
-docker compose up -d
+cd deploy/docker
+docker compose --env-file .env.shared up -d --build
 ```
 
-Then configure your MCP client to connect via HTTP. For example, with Claude Desktop using [mcp-remote](https://github.com/geelen/mcp-remote):
+Then point your HTTP-capable MCP client or proxy at:
 
-```json
-{
-  "mcpServers": {
-    "memory": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:18080/rpc"]
-    }
-  }
-}
+```text
+http://localhost:18080/mcp
 ```
+
+For retrieval inspection in a browser, open:
+
+```text
+http://localhost:18080/console
+```
+
+The console is a lightweight UI for:
+
+- running document, raw-memory, and canonical-knowledge queries
+- comparing normal vs debug mode for document retrieval
+- inspecting source types, trust/freshness, and score breakdowns
+
+In shared mode, the page itself is static, but live queries from the console still require the same bearer token as `/mcp`.
+
+For shared HTTP mode:
+
+- default bare-metal bind is `MCP_HTTP_HOST=127.0.0.1`; this is the safe local default
+- for shared/container deployments set `MCP_HTTP_HOST=0.0.0.0`
+- set `MCP_HTTP_AUTH_TOKEN` to require `Authorization: Bearer <token>` on `/mcp`
+- startup now fails on non-loopback binds without `MCP_HTTP_AUTH_TOKEN`, unless you explicitly set `MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED=true`
+- keep `/health` for load balancer or container health checks
+- terminate TLS at a reverse proxy or load balancer
+- do not expose the service directly on the public internet without auth and TLS
+- use [deploy/nginx/agent-memory-mcp.conf](deploy/nginx/agent-memory-mcp.conf) as the starting reverse proxy recipe
+- use [docs/SHARED_SERVICE.md](docs/SHARED_SERVICE.md) for the full `local -> team laptop -> shared service` path
 
 ## CLI commands
 
@@ -228,12 +513,19 @@ Then configure your MCP client to connect via HTTP. For example, with Claude Des
 |---------|-------------|
 | `serve` | Start MCP server (stdio/http) -- default when no command given |
 | `store` | Store a memory (`-content`, `-title`, `-type`, `-tags`, `-context`, `-importance`, `-stdin`) |
-| `recall` | Semantic search in memories (positional query, `-type`, `-tags`, `-limit`, `-json`) |
+| `recall` | Memory recall with trust-aware ranking (positional query, `-type`, `-tags`, `-limit`, `-json`) |
 | `list` | List memories (`-type`, `-context`, `-limit`, `-json`) |
 | `delete` | Delete a memory by ID (positional) |
-| `search` | RAG semantic search (positional query, `-limit`, `-json`) |
+| `search` | RAG hybrid search with trust metadata (positional query, `-limit`, `-source-type`, `-debug`, `-json`) |
 | `index` | Re-index documents for RAG |
+| `close-session` | Analyze an end-of-session summary and produce a close-session report (`-summary`, `-stdin`, `-mode`, `-context`, `-service`, `-tags`, `-metadata`, `-started-at`, `-ended-at`, `-raw-only`, `-json`) |
+| `review-session` | Review-oriented alias for `close-session` with the same inputs and report surface |
+| `accept-session` | Save the raw summary and auto-apply low-risk session changes (`-summary`, `-stdin`, `-mode`, `-context`, `-service`, `-tags`, `-metadata`, `-started-at`, `-ended-at`, `-raw-only`, `-json`) |
 | `stats` | Show memory statistics (`-json`) |
+| `config` | Generate ready MCP client config snippets |
+| `project-bank` | Show structured project bank views (`canonical_overview`, `decisions`, `runbooks`, `incidents`, `caveats`, `migrations`, `review_queue`) |
+| `resolve-review-item` | Resolve a pending review queue item (`<id>`, `-resolution`, `-note`, `-owner`, `-json`) |
+| `reembed` | Re-generate memory embeddings with the active model (`-json`) |
 | `export` | Export all memories to JSON (`-o` file, default stdout) |
 | `import` | Import memories from JSON (positional file or stdin) |
 
@@ -244,17 +536,23 @@ Then configure your MCP client to connect via HTTP. For example, with Claude Des
 | Tool | Description |
 |------|-------------|
 | `store_memory` | Store a memory with content, type, tags, and importance |
-| `recall_memory` | Recall memories by semantic query with optional filters |
+| `recall_memory` | Recall memories by semantic/text query with optional filters and trust-aware ranking |
 | `update_memory` | Update an existing memory by ID |
 | `delete_memory` | Delete a memory by ID |
 | `list_memories` | List all memories with optional type/context filtering |
 | `memory_stats` | Get memory statistics (counts by type) |
+| `merge_duplicates` | Merge duplicate memories into a primary entry and archive the rest |
+| `mark_outdated` | Mark a memory as outdated or superseded so trust-aware recall downranks it |
+| `promote_to_canonical` | Promote a memory to canonical knowledge and boost its trust ranking |
+| `conflicts_report` | Report duplicate candidates, conflicting statuses, and multiple canonical entries |
+| `list_canonical_knowledge` | List canonical knowledge entries projected from confirmed memories |
+| `recall_canonical_knowledge` | Recall canonical knowledge only, excluding raw memories from results |
 
 ### RAG tools
 
 | Tool | Description |
 |------|-------------|
-| `semantic_search` | Semantic search across indexed documents |
+| `semantic_search` | Hybrid search across indexed documents with optional `source_type`, trust metadata, and `debug` explain mode |
 | `index_documents` | Re-index documents for RAG search |
 
 ### File tools
@@ -265,9 +563,29 @@ Then configure your MCP client to connect via HTTP. For example, with Claude Des
 | `repo_read` | Read a file from allowlisted paths |
 | `repo_search` | Text search across allowlisted paths |
 
+### Engineering workflow tools
+
+| Tool | Description |
+|------|-------------|
+| `store_decision` | Store an engineering decision with rationale, status, and consequences |
+| `store_incident` | Store an incident with impact, root cause, resolution, service, and severity |
+| `store_runbook` | Store a runbook with procedure, trigger, verification, and rollback notes |
+| `store_postmortem` | Store a postmortem with root cause and action items |
+| `close_session` | Analyze a finished session into raw summary metadata, candidate knowledge items, and review-safe consolidation actions |
+| `analyze_session` | Compatibility alias for `close_session` with the same planning and reporting behavior |
+| `review_session_changes` | Render the explainable review report for a finished session without forcing writes |
+| `accept_session_changes` | Persist the raw summary and auto-apply only low-risk consolidation actions |
+| `resolve_review_item` | Resolve a pending review queue item so it disappears from the active inbox while keeping an audit trail |
+| `search_runbooks` | Search runbook memories plus indexed runbook docs |
+| `recall_similar_incidents` | Recall similar incidents from memory and indexed postmortems |
+| `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
+| `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue |
+
 ## Configuration
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full list.
+
+For solo local mode, the recommended preset is the checked-in `.env.example` copied to `.env`.
 
 ### Key variables
 
@@ -277,14 +595,25 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `MCP_MEMORY_ENABLED` | `true` | Enable memory tools |
 | `MCP_RAG_ENABLED` | `true` | Enable RAG/search tools |
 | `MCP_HTTP_MODE` | `stdio` | Transport: `stdio` or `http` |
+| `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind host; set `0.0.0.0` for shared/container deployments |
 | `MCP_HTTP_PORT` | `18080` | HTTP port (when in HTTP mode) |
+| `MCP_HTTP_AUTH_TOKEN` | - | Bearer token required for non-loopback/shared HTTP mode |
+| `MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED` | `false` | Explicit unsafe override for non-loopback HTTP without auth |
 | `JINA_API_KEY` | - | Jina AI API key for embeddings |
 | `OPENAI_API_KEY` | - | OpenAI API key (or compatible: Together, Mistral) |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
+| `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
 | `MCP_EMBEDDING_DIMENSION` | `1024` | Vector dimension (change requires re-indexing) |
 | `MCP_INDEX_DIRS` | `docs` | Directories to index for RAG |
+| `MCP_INDEX_EXCLUDE_DIRS` | built-in defaults | Extra directory names or repo-relative paths to exclude from RAG indexing |
+| `MCP_INDEX_EXCLUDE_GLOBS` | - | Extra glob patterns matched against repo-relative paths, for example `docs/internal/*.md` |
+| `MCP_REDACT_SECRETS` | `true` | Redact common secret-like content before documents are indexed |
+| `MCP_SESSION_TRACKING_ENABLED` | `true` | Enable background session tracking, auto raw summaries, and low-risk close-session orchestration |
+| `MCP_SESSION_IDLE_TIMEOUT` | `10m` | Idle timeout before the active background session auto-closes |
+| `MCP_SESSION_CHECKPOINT_INTERVAL` | `30m` | Interval for periodic raw checkpoint snapshots during active sessions |
+| `MCP_SESSION_MIN_EVENTS` | `2` | Minimum tracked MCP tool calls before background auto-close runs |
 | `MCP_DATA_PATH` | `data` | Base path for data storage |
 
 ### Data paths
@@ -293,6 +622,243 @@ The server creates these directories under `MCP_DATA_PATH`:
 
 - `rag-index/` -- SQLite vector index for document search
 - `memory-store/` -- SQLite database for agent memories
+
+The recommended solo-local preset stores them under `.agent-memory/`.
+
+### Indexing safety controls
+
+RAG indexing scans supported docs and engineering text files, but you can further reduce risk with explicit controls:
+
+- built-in excluded directories such as `.git`, `.agent-memory`, `node_modules`, `logs`, and `.terraform`
+- `MCP_INDEX_EXCLUDE_DIRS` for repo-relative path excludes such as `docs/private,runbooks/internal`
+- `MCP_INDEX_EXCLUDE_GLOBS` for glob-style excludes such as `docs/internal/*.md`
+- `MCP_REDACT_SECRETS=true` to redact common secret-like lines and private key blocks before indexing
+
+This is especially important if you use hosted embedding providers or shared HTTP mode.
+
+### Automatic session tracking
+
+When the MCP server is running with the default session-tracking policy, it keeps a lightweight background session buffer.
+
+Current behavior:
+
+- successful MCP tool calls are grouped into an active session automatically
+- idle timeout or server shutdown triggers a background `close_session` run
+- clients can explicitly flush or checkpoint the active session with `notifications/session_event` and `event=task_done|final_summary|checkpoint|reset`
+- raw session summaries are persisted automatically
+- low-risk updates can auto-apply under the existing `safe_auto_apply` policy
+- risky or ambiguous changes are stored as review inbox items instead of silently rewriting maintained knowledge
+- periodic raw checkpoints provide crash-recovery breadcrumbs during long sessions
+
+To inspect the inbox, use `project_bank_view view=review_queue` or `agent-memory-mcp project-bank -view review_queue`.
+To close an item after manual review, use `resolve_review_item` or `agent-memory-mcp resolve-review-item <id>`.
+
+Example notification payload:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/session_event",
+  "params": {
+    "event": "task_done",
+    "summary": "Incident stabilized, workaround verified, follow-up is to replace the temporary fix.",
+    "context": "payments",
+    "service": "api",
+    "mode": "incident",
+    "tags": ["done", "verification"]
+  }
+}
+```
+
+If you want to tune or disable this behavior, use `MCP_SESSION_TRACKING_ENABLED`, `MCP_SESSION_IDLE_TIMEOUT`, `MCP_SESSION_CHECKPOINT_INTERVAL`, and `MCP_SESSION_MIN_EVENTS`.
+
+### Index integrity and recovery
+
+Document indexing now treats chunk updates and tracking metadata as one logical state.
+
+- each run marks the index state as `dirty` before changing chunks
+- a successful final commit flips the state back to `ready` together with `indexed_files`, `embedding_model`, and `last_indexed`
+- if a run is interrupted or the final tracking-state commit fails, the next `index_documents` / `agent-memory-mcp index` run detects the dirty state and forces a rebuild
+
+This makes incremental indexing more predictable after crashes, provider interruptions, or storage errors.
+
+### Source-aware ingestion
+
+The indexer now classifies engineering sources and carries that metadata into retrieval.
+
+Supported source types:
+
+- `docs` for `README.md` and general Markdown docs
+- `adr` and `rfc` for architecture decision and RFC-style documents
+- `changelog` for `CHANGELOG.md` and release-note style docs
+- `runbook` and `postmortem` for operational knowledge
+- `ci_config` for GitHub Actions, GitLab CI, and Jenkins pipeline files
+- `helm`, `terraform`, and `k8s` for source-aware infra files
+
+Use `source_type` when you want to narrow retrieval to a specific class of knowledge:
+
+```bash
+agent-memory-mcp search -source-type runbook "ingress rollback"
+agent-memory-mcp search -source-type adr "cache invalidation decision"
+```
+
+The MCP `semantic_search` tool also accepts `source_type` and `debug`.
+
+### Hybrid retrieval
+
+Search now uses multiple ranking signals instead of cosine similarity alone.
+
+Current ranking signals:
+
+- semantic similarity from the active embedding model
+- keyword/BM25-like scoring across chunk title, path, and content
+- `source_type` filtering when you want a narrower retrieval set
+- recency boost for recently updated operational context
+- source-aware weighting so runbooks, changelogs, ADRs, and other source classes can rank higher for matching query intent
+
+The retrieval pipeline now works in two stages:
+
+- semantic top-K candidate generation from the vector index
+- keyword top-K candidate generation from a precomputed in-memory keyword index
+
+Only the merged candidate set is reranked. This keeps shared-service retrieval more predictable as the indexed corpus grows.
+
+This means a strong keyword hit in a runbook or changelog can outrank a semantically similar but less task-relevant document.
+
+### Trust-aware retrieval
+
+Retrieval now carries explicit trust metadata for both stored memories and indexed docs.
+
+Each result can expose:
+
+- `source_type`
+- `confidence`
+- `last_verified_at`
+- `owner`
+- `freshness_score`
+
+What this means in practice:
+
+- accepted decisions and verified runbooks rank above draft or low-confidence notes when the textual match is similar
+- ADRs, runbooks, postmortems, and changelogs can carry different trust weights even before you add a full canonical layer
+- CLI `search` / `recall` and MCP `semantic_search` / `recall_memory` now show trust summaries in human-readable output
+
+Engineering workflow tools also stamp stored entries with `last_verified_at` so fresh operational knowledge is easier to trust and rank.
+
+### Explainable retrieval
+
+Use debug mode when you want retrieval to explain why a document was returned.
+
+CLI:
+
+```bash
+agent-memory-mcp search -source-type runbook -debug "ingress rollback"
+```
+
+MCP:
+
+- call `semantic_search` with `debug: true`
+- keep `debug` unset or `false` for the normal compact response
+
+Debug mode adds:
+
+- applied filters such as `source_type=runbook`
+- ranking signals used for the response
+- candidate counts: indexed, filtered out, discarded as noise, returned
+- per-result trust summary: `source`, `confidence`, `freshness`, `owner`, `verified`
+- per-result score breakdown: `semantic`, `keyword_raw`, `keyword_normalized`, `recency_boost`, `source_boost`, `confidence_boost`, `final_score`
+- per-result applied boosts, for example `keyword_match` or `source_type:runbook`
+
+### Retrieval console
+
+If you want a faster inspection workflow than raw CLI or JSON-RPC calls, use the built-in console in HTTP mode:
+
+```text
+/console
+```
+
+What it is good for:
+
+- compare normal vs debug retrieval side by side
+- inspect document search, raw memory recall, and canonical knowledge recall in one place
+- see source type, trust layer, confidence, freshness, owner, and verification time
+- open raw JSON for the same structured response the UI is rendering
+
+The console is intentionally lightweight and does not replace MCP tools or CLI workflows.
+
+### Engineering workflow tools
+
+These MCP tools map domain-specific workflows onto the existing memory and retrieval backends.
+
+Recommended starting points:
+
+- `store_decision` for architectural or operational choices such as disabling HPA or pinning an ingress version
+- `store_incident` for short-lived operational facts you want to recall during active debugging
+- `store_runbook` for procedural steps, rollback instructions, and verification notes
+- `store_postmortem` for durable incident learnings and action items
+- `close_session` when you want an explicit end-of-session plan with rationale, traces, and review-safe actions
+- `accept_session_changes` when the close-session report is low risk and you want to persist the raw summary plus apply safe updates
+- `resolve_review_item` when the background inbox already contains a reviewed item and you want to clear it without deleting the audit trail
+- `search_runbooks` when you need a fix path and want both memory-stored runbooks and indexed runbook docs
+- `recall_similar_incidents` when you are triaging an outage or regression
+- `summarize_project_context` at session start to get a compact operational briefing
+- `project_bank_view` when you want maintained knowledge by view instead of raw recall results, including `review_queue` for pending background decisions
+
+These workflow tools also add verification metadata so that retrieval can treat newly stored operational knowledge as fresher and more trustworthy than anonymous raw notes.
+
+### Memory consolidation
+
+The memory layer now supports a manual consolidation workflow without deleting historical notes.
+
+Use these MCP tools when the same project knowledge starts to drift:
+
+- `merge_duplicates` to consolidate repeated notes into one primary memory and archive the rest as merged duplicates
+- `mark_outdated` to demote stale runbooks, superseded decisions, or obsolete incident notes without losing them
+- `promote_to_canonical` to mark the current best memory as canonical knowledge
+- `conflicts_report` to surface `duplicate_candidates`, `status_conflict`, and `multiple_canonical` groups
+
+Current behavior:
+
+- merged or archived memories stay accessible, but trust-aware recall pushes them down
+- canonical memories get a trust boost and higher minimum importance
+- outdated or superseded memories are automatically archived and downranked
+- conflict reporting is manual and safe: nothing is deleted unless you explicitly choose to delete it
+
+### Canonical knowledge layer
+
+The project now exposes two distinct layers:
+
+- `raw memory`: captured notes, incidents, decisions, and procedural memories as they were stored
+- `canonical knowledge`: confirmed entries projected from memories promoted with `promote_to_canonical`
+
+What this changes:
+
+- `list_canonical_knowledge` gives you the current confirmed knowledge set without raw noise
+- `recall_canonical_knowledge` searches only canonical entries
+- `summarize_project_context` surfaces canonical knowledge before raw memory sections when canonical entries exist
+- trust summaries now show `layer=raw`, `layer=canonical`, or `layer=document`
+
+Migration story:
+
+- existing memories do not need a schema migration
+- promote any high-value existing memory with `promote_to_canonical`
+- legacy workflow memories that only have tags like `decision` or `service:api` are still recognized by the canonical layer
+
+## Security And Operations
+
+Core deployment guidance:
+
+- solo local: keep `MCP_HTTP_MODE=stdio`, prefer `MCP_EMBEDDING_MODE=local-only` if you need no-send semantics
+- shared HTTP mode: set `MCP_HTTP_HOST=0.0.0.0`, set `MCP_HTTP_AUTH_TOKEN`, keep TLS at the reverse proxy, and scope `MCP_ALLOW_DIRS` narrowly
+- indexing: exclude private runbooks or credentials docs with `MCP_INDEX_EXCLUDE_DIRS` / `MCP_INDEX_EXCLUDE_GLOBS`
+- backup: either copy `.agent-memory/` or use `agent-memory-mcp export` for memory-only backups
+
+Reference docs:
+
+- [Security Policy](docs/SECURITY.md)
+- [Threat Model](docs/THREAT_MODEL.md)
+- [Backup And Restore](docs/BACKUP_RESTORE.md)
+- [Shared Service Guide](docs/SHARED_SERVICE.md)
 
 ## Architecture
 
@@ -315,15 +881,46 @@ The server creates these directories under `MCP_DATA_PATH`:
 
 ### Embedding providers
 
-The server supports three embedding providers with automatic fallback:
+The server supports three embedding providers in `auto` mode:
 
 1. **Jina AI** (primary) -- `jina-embeddings-v3`, 1024 dimensions, multilingual
 2. **OpenAI** (fallback) -- `text-embedding-3-small`, 1024 dimensions, or any OpenAI-compatible API
 3. **Ollama** (local fallback) -- `bge-m3`, 1024 dimensions, runs locally for free
 
-By default, all providers produce 1024-dimensional vectors and are interchangeable. You can increase the dimension via `MCP_EMBEDDING_DIMENSION` for higher accuracy (e.g. `3072` with `text-embedding-3-large`). The server validates dimension consistency on startup -- if you change it, you'll need to re-index with `index_documents`.
+All three can produce 1024-dimensional vectors, but they are not interchangeable: each model has its own embedding space. Matching dimensions do not make cosine similarity safe across different models.
 
-If a provider fails or is not configured, the server automatically falls back to the next one.
+What `auto` mode means in practice:
+
+- new memories or new RAG chunks use the first provider that is currently available
+- existing memories keep the `embedding_model` they were created with
+- semantic recall skips memories whose `embedding_model` does not match the current query model and falls back to text matching for those records
+- RAG search refuses to query an index built with a different model and asks you to rebuild it
+
+This avoids the dangerous case where provider fallback returns confident but incorrect semantic matches.
+
+If you change provider or model intentionally, treat it as a migration:
+
+```bash
+# rebuild document index for the new embedding model
+agent-memory-mcp index
+
+# re-embed stored memories for the new embedding model
+agent-memory-mcp reembed
+
+# inspect how many memories still belong to older models
+agent-memory-mcp stats -json
+```
+
+You can increase the dimension via `MCP_EMBEDDING_DIMENSION` for higher accuracy (for example `3072` with `text-embedding-3-large`), but any dimension or model change requires re-indexing and re-embedding.
+
+If you set `MCP_EMBEDDING_MODE=local-only`, hosted providers are skipped entirely and only Ollama is used for embeddings.
+
+### Why this is better for users
+
+- you can keep using `auto` mode without silent corruption of semantic recall
+- you can intentionally migrate to another embedding model without losing stored knowledge
+- you can audit model usage with `agent-memory-mcp stats`
+- you can prefer local-only operation without worrying about fallback to hosted providers
 
 ## macOS service installation
 

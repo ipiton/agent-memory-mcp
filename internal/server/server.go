@@ -52,13 +52,15 @@ type rpcError struct {
 
 // MCPServer implements the MCP protocol server with RAG and memory capabilities.
 type MCPServer struct {
-	config      config.Config
-	pathGuard   *paths.Guard
-	outputMode  string
-	stats       *stats.Logger
-	ragEngine   *rag.Engine
-	memoryStore *memory.Store
-	fileLogger  *logger.FileLogger
+	config         config.Config
+	pathGuard      *paths.Guard
+	outputMode     string
+	stats          *stats.Logger
+	ragEngine      *rag.Engine
+	memoryStore    *memory.Store
+	fileLogger     *logger.FileLogger
+	sessionTracker *sessionTracker
+	toolHandlers   map[string]toolHandler
 }
 
 // New creates a new MCPServer with the given configuration and path guard.
@@ -111,19 +113,12 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		}
 
 		var emb *embedder.Embedder
-		// Create a minimal embedder for memory store
 		var err error
-		emb, err = embedder.New(embedder.Config{
-			JinaToken:     cfg.JinaAPIKey,
-			OpenAIToken:   cfg.OpenAIAPIKey,
-			OpenAIBaseURL: cfg.OpenAIBaseURL,
-			OpenAIModel:   cfg.OpenAIModel,
-			OllamaBaseURL: cfg.OllamaBaseURL,
-			Dimension:     cfg.EmbeddingDimension,
-			MaxRetries:    1,
-			Timeout:       5 * time.Second,
-		}, zap.NewNop())
+		emb, err = embedder.New(cfg.EmbedderConfig(), zap.NewNop())
 		if err != nil {
+			if fileLogger != nil {
+				fileLogger.Warn("Embedder initialization failed, memory will use text-only matching", zap.Error(err))
+			}
 			emb = nil
 		}
 
@@ -152,15 +147,18 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		)
 	}
 
-	return &MCPServer{
-		config:      cfg,
-		pathGuard:   guard,
-		outputMode:  cfg.OutputMode,
-		stats:       stats.NewLogger(cfg),
-		ragEngine:   ragEngine,
-		memoryStore: memoryStore,
-		fileLogger:  fileLogger,
+	srv := &MCPServer{
+		config:         cfg,
+		pathGuard:      guard,
+		outputMode:     cfg.OutputMode,
+		stats:          stats.NewLogger(cfg),
+		ragEngine:      ragEngine,
+		memoryStore:    memoryStore,
+		fileLogger:     fileLogger,
+		sessionTracker: newSessionTracker(cfg, memoryStore, fileLogger),
 	}
+	srv.toolHandlers = srv.buildToolHandlers()
+	return srv
 }
 
 // RunStdio runs the server in stdio mode, reading JSON-RPC requests from stdin.
@@ -205,72 +203,14 @@ func RunStdio(server *MCPServer) error {
 // RunHTTP runs the server in HTTP mode, blocking until ctx is cancelled
 // and then gracefully shutting down.
 func RunHTTP(ctx context.Context, server *MCPServer) error {
-	mux := http.NewServeMux()
-
-	authToken := server.config.HTTPAuthToken
-
-	if authToken == "" && server.fileLogger != nil {
-		server.fileLogger.Warn("HTTP server starting without authentication — set MCP_HTTP_AUTH_TOKEN for security")
+	if err := validateHTTPExposure(server.config); err != nil {
+		return err
 	}
 
-	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		// CORS: deny cross-origin by default
-		w.Header().Set("Access-Control-Allow-Origin", "")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
+	mux := buildHTTPMux(server)
+	addr := httpListenAddr(server.config)
+	logHTTPExposurePolicy(server)
 
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Auth check
-		if authToken != "" {
-			auth := r.Header.Get("Authorization")
-			if auth != "Bearer "+authToken {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-
-		ct := r.Header.Get("Content-Type")
-		if ct != "" && !strings.HasPrefix(ct, "application/json") {
-			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-
-		var req rpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			resp := errorResponse(nil, -32600, "Parse error", err.Error())
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
-			return
-		}
-
-		resp := server.handle(req)
-		if resp == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":           "ok",
-			"rag_available":    server.ragEngine != nil,
-			"memory_available": server.memoryStore != nil,
-		})
-	})
-
-	addr := fmt.Sprintf(":%d", server.config.HTTPPort)
 	if server.fileLogger != nil {
 		server.fileLogger.Info("Starting HTTP server",
 			zap.String("address", addr),
@@ -330,11 +270,9 @@ func (s *MCPServer) handle(req rpcRequest) *rpcResponse {
 }
 
 func (s *MCPServer) handleNotification(req rpcRequest) {
-	switch req.Method {
-	case "initialized":
-		return
-	default:
-		return
+	// Notifications (e.g. "initialized") require no response.
+	if s.sessionTracker != nil {
+		s.sessionTracker.HandleNotification(req.Method, req.Params)
 	}
 }
 
@@ -375,14 +313,21 @@ func (s *MCPServer) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 
 // Shutdown gracefully shuts down the server, closing all resources.
 func (s *MCPServer) Shutdown() {
+	if s.sessionTracker != nil {
+		s.sessionTracker.Close()
+	}
 	if s.ragEngine != nil {
 		s.ragEngine.Stop()
 	}
 	if s.memoryStore != nil {
-		s.memoryStore.Close()
+		if err := s.memoryStore.Close(); err != nil && s.fileLogger != nil {
+			s.fileLogger.Warn("Failed to close memory store", zap.Error(err))
+		}
 	}
 	if s.fileLogger != nil {
-		s.fileLogger.Sync()
+		if err := s.fileLogger.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to sync file logger: %v\n", err)
+		}
 	}
 }
 

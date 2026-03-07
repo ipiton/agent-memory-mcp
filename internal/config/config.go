@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 )
 
 const (
@@ -43,9 +45,12 @@ type Config struct {
 	MemoryEnabled bool
 
 	// Document indexing configuration
-	IndexDirs    []string // Directories and files to index for RAG (relative to RootPath or absolute)
-	ChunkSize    int      // Characters per chunk (default: 2000)
-	ChunkOverlap  int      // Overlap between chunks (default: 200)
+	IndexDirs         []string // Directories and files to index for RAG (relative to RootPath or absolute)
+	IndexExcludeDirs  []string // Directory names or repo-relative paths to exclude from RAG indexing
+	IndexExcludeGlobs []string // Glob patterns matched against slash-separated repo-relative paths
+	RedactSecrets     bool     // Redact common secret-like content before indexing
+	ChunkSize         int      // Characters per chunk (default: 2000)
+	ChunkOverlap      int      // Overlap between chunks (default: 200)
 
 	// Embeddings configuration
 	JinaAPIKey         string // Jina AI API key
@@ -54,6 +59,7 @@ type Config struct {
 	OpenAIModel        string // OpenAI embedding model (default: text-embedding-3-small)
 	OllamaBaseURL      string // Ollama base URL (default: http://localhost:11434)
 	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
+	EmbeddingMode      string // Embedding mode: auto or local-only
 
 	// RAG indexing behavior
 	AutoIndex        bool          // Auto-index on startup (default: true)
@@ -62,83 +68,115 @@ type Config struct {
 	DebounceDuration time.Duration // Debounce before reindexing (default: 30s)
 
 	// HTTP server configuration
-	HTTPMode      string // "stdio" or "http" (default: "stdio")
-	HTTPPort      int    // HTTP server port (default: 18080)
-	HTTPAuthToken string // Optional Bearer token for HTTP auth
+	HTTPMode                         string // "stdio" or "http" (default: "stdio")
+	HTTPHost                         string // HTTP bind host (default: 127.0.0.1)
+	HTTPPort                         int    // HTTP server port (default: 18080)
+	HTTPAuthToken                    string // Optional Bearer token for HTTP auth
+	HTTPInsecureAllowUnauthenticated bool   // Allow unauthenticated HTTP on non-loopback hosts
+
+	// Background session tracking
+	SessionTrackingEnabled    bool          // Enable automatic session tracking and background close-session orchestration
+	SessionIdleTimeout        time.Duration // Idle timeout before auto-close
+	SessionCheckpointInterval time.Duration // Periodic raw checkpoint interval during active sessions
+	SessionMinEvents          int           // Minimum observed tool events before auto-close
 }
 
 // envValues holds raw values read from environment variables before path resolution.
 type envValues struct {
-	root               string
-	allow              string
-	outputMode         string
-	statsEnabled       bool
-	statsPath          string
-	statsSample        float64
-	maxFileBytes       int64
-	maxSearch          int
-	maxDepth           int
-	ragEnabled         bool
-	ragMaxResults      int
-	memoryEnabled      bool
-	dataPath           string
-	ragIndexPath       string
-	memoryDBPath       string
-	logPath            string
-	indexDirs          string
-	chunkSize          int
-	chunkOverlap       int
-	jinaAPIKey         string
-	openaiAPIKey       string
-	openaiBaseURL      string
-	openaiModel        string
-	ollamaBaseURL      string
-	embeddingDimension int
-	autoIndex        bool
-	fileWatcher      bool
-	watchInterval    string
-	debounceDuration string
-	httpMode         string
-	httpPort         int
-	httpAuthToken    string
+	root                             string
+	allow                            string
+	outputMode                       string
+	statsEnabled                     bool
+	statsPath                        string
+	statsSample                      float64
+	maxFileBytes                     int64
+	maxSearch                        int
+	maxDepth                         int
+	ragEnabled                       bool
+	ragMaxResults                    int
+	memoryEnabled                    bool
+	dataPath                         string
+	ragIndexPath                     string
+	memoryDBPath                     string
+	logPath                          string
+	indexDirs                        string
+	indexExcludeDirs                 string
+	indexExcludeGlobs                string
+	redactSecrets                    bool
+	chunkSize                        int
+	chunkOverlap                     int
+	jinaAPIKey                       string
+	openaiAPIKey                     string
+	openaiBaseURL                    string
+	openaiModel                      string
+	ollamaBaseURL                    string
+	embeddingDimension               int
+	embeddingMode                    string
+	autoIndex                        bool
+	fileWatcher                      bool
+	watchInterval                    string
+	debounceDuration                 string
+	httpMode                         string
+	httpHost                         string
+	httpPort                         int
+	httpAuthToken                    string
+	httpInsecureAllowUnauthenticated bool
+	sessionTrackingEnabled           bool
+	sessionIdleTimeout               string
+	sessionCheckpointInterval        string
+	sessionMinEvents                 int
 }
 
 // loadEnv reads all configuration from environment variables.
-func loadEnv() envValues {
-	return envValues{
-		root:               EnvOrDefault("MCP_ROOT", ""),
-		allow:              EnvOrDefault("MCP_ALLOW_DIRS", ""),
-		outputMode:         normalizeOutputMode(EnvOrDefault("MCP_STDIO_MODE", "")),
-		statsEnabled:       EnvBool("MCP_STATS_ENABLED", false),
-		statsPath:          EnvOrDefault("MCP_STATS_PATH", ""),
-		statsSample:        EnvFloat("MCP_STATS_SAMPLE_RATE", 1),
-		maxFileBytes:       EnvInt64("MCP_MAX_FILE_BYTES", DefaultMaxFileBytes),
-		maxSearch:          EnvInt("MCP_MAX_SEARCH_RESULTS", DefaultMaxSearchResult),
-		maxDepth:           EnvInt("MCP_MAX_DEPTH", DefaultMaxDepth),
-		ragEnabled:         EnvBool("MCP_RAG_ENABLED", true),
-		ragMaxResults:      EnvInt("MCP_RAG_MAX_RESULTS", 10),
-		memoryEnabled:      EnvBool("MCP_MEMORY_ENABLED", true),
-		dataPath:           EnvOrDefault("MCP_DATA_PATH", ""),
-		ragIndexPath:       EnvOrDefault("MCP_RAG_INDEX_PATH", ""),
-		memoryDBPath:       EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
-		logPath:            EnvOrDefault("MCP_LOG_PATH", ""),
-		indexDirs:          EnvOrDefault("MCP_INDEX_DIRS", "docs"),
-		chunkSize:          EnvInt("MCP_CHUNK_SIZE", 2000),
-		chunkOverlap:       EnvInt("MCP_CHUNK_OVERLAP", 200),
-		jinaAPIKey:         EnvOrDefault("JINA_API_KEY", ""),
-		openaiAPIKey:       EnvOrDefault("OPENAI_API_KEY", ""),
-		openaiBaseURL:      EnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		openaiModel:        EnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-		ollamaBaseURL:      EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
-		embeddingDimension: EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
-		autoIndex:        EnvBool("MCP_RAG_AUTO_INDEX", true),
-		fileWatcher:      EnvBool("MCP_RAG_FILE_WATCHER", true),
-		watchInterval:    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
-		debounceDuration: EnvOrDefault("MCP_RAG_DEBOUNCE", "30s"),
-		httpMode:         EnvOrDefault("MCP_HTTP_MODE", "stdio"),
-		httpPort:         EnvInt("MCP_HTTP_PORT", 18080),
-		httpAuthToken:    EnvOrDefault("MCP_HTTP_AUTH_TOKEN", ""),
+func loadEnv() (envValues, error) {
+	if err := loadDotEnvFromCurrentDir(); err != nil {
+		return envValues{}, err
 	}
+
+	return envValues{
+		root:                             EnvOrDefault("MCP_ROOT", ""),
+		allow:                            EnvOrDefault("MCP_ALLOW_DIRS", ""),
+		outputMode:                       normalizeOutputMode(EnvOrDefault("MCP_STDIO_MODE", "")),
+		statsEnabled:                     EnvBool("MCP_STATS_ENABLED", false),
+		statsPath:                        EnvOrDefault("MCP_STATS_PATH", ""),
+		statsSample:                      EnvFloat("MCP_STATS_SAMPLE_RATE", 1),
+		maxFileBytes:                     EnvInt64("MCP_MAX_FILE_BYTES", DefaultMaxFileBytes),
+		maxSearch:                        EnvInt("MCP_MAX_SEARCH_RESULTS", DefaultMaxSearchResult),
+		maxDepth:                         EnvInt("MCP_MAX_DEPTH", DefaultMaxDepth),
+		ragEnabled:                       EnvBool("MCP_RAG_ENABLED", true),
+		ragMaxResults:                    EnvInt("MCP_RAG_MAX_RESULTS", 10),
+		memoryEnabled:                    EnvBool("MCP_MEMORY_ENABLED", true),
+		dataPath:                         EnvOrDefault("MCP_DATA_PATH", ""),
+		ragIndexPath:                     EnvOrDefault("MCP_RAG_INDEX_PATH", ""),
+		memoryDBPath:                     EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
+		logPath:                          EnvOrDefault("MCP_LOG_PATH", ""),
+		indexDirs:                        EnvOrDefault("MCP_INDEX_DIRS", "docs"),
+		indexExcludeDirs:                 EnvOrDefault("MCP_INDEX_EXCLUDE_DIRS", ""),
+		indexExcludeGlobs:                EnvOrDefault("MCP_INDEX_EXCLUDE_GLOBS", ""),
+		redactSecrets:                    EnvBool("MCP_REDACT_SECRETS", true),
+		chunkSize:                        EnvInt("MCP_CHUNK_SIZE", 2000),
+		chunkOverlap:                     EnvInt("MCP_CHUNK_OVERLAP", 200),
+		jinaAPIKey:                       EnvOrDefault("JINA_API_KEY", ""),
+		openaiAPIKey:                     EnvOrDefault("OPENAI_API_KEY", ""),
+		openaiBaseURL:                    EnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		openaiModel:                      EnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
+		embeddingDimension:               EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
+		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
+		autoIndex:                        EnvBool("MCP_RAG_AUTO_INDEX", true),
+		fileWatcher:                      EnvBool("MCP_RAG_FILE_WATCHER", true),
+		watchInterval:                    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
+		debounceDuration:                 EnvOrDefault("MCP_RAG_DEBOUNCE", "30s"),
+		httpMode:                         EnvOrDefault("MCP_HTTP_MODE", "stdio"),
+		httpHost:                         EnvOrDefault("MCP_HTTP_HOST", "127.0.0.1"),
+		httpPort:                         EnvInt("MCP_HTTP_PORT", 18080),
+		httpAuthToken:                    EnvOrDefault("MCP_HTTP_AUTH_TOKEN", ""),
+		httpInsecureAllowUnauthenticated: EnvBool("MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED", false),
+		sessionTrackingEnabled:           EnvBool("MCP_SESSION_TRACKING_ENABLED", true),
+		sessionIdleTimeout:               EnvOrDefault("MCP_SESSION_IDLE_TIMEOUT", "10m"),
+		sessionCheckpointInterval:        EnvOrDefault("MCP_SESSION_CHECKPOINT_INTERVAL", "30m"),
+		sessionMinEvents:                 EnvInt("MCP_SESSION_MIN_EVENTS", 2),
+	}, nil
 }
 
 // resolvePaths resolves all data paths relative to root and returns a Config.
@@ -194,8 +232,14 @@ func resolvePaths(ev envValues) (Config, error) {
 	}
 
 	indexDirsList := splitAllowlist(ev.indexDirs)
+	indexExcludeDirs := splitAllowlist(ev.indexExcludeDirs)
+	indexExcludeGlobs := splitCSV(ev.indexExcludeGlobs)
+	sessionMinEvents := ev.sessionMinEvents
+	if sessionMinEvents <= 0 {
+		sessionMinEvents = 2
+	}
 
-	return Config{
+	cfg := Config{
 		RootPath:         root,
 		AllowedPaths:     allowed,
 		MaxFileBytes:     ev.maxFileBytes,
@@ -215,9 +259,12 @@ func resolvePaths(ev envValues) (Config, error) {
 		RAGMaxResults: ev.ragMaxResults,
 		MemoryEnabled: ev.memoryEnabled,
 
-		IndexDirs:    indexDirsList,
-		ChunkSize:    ev.chunkSize,
-		ChunkOverlap:  ev.chunkOverlap,
+		IndexDirs:         indexDirsList,
+		IndexExcludeDirs:  indexExcludeDirs,
+		IndexExcludeGlobs: indexExcludeGlobs,
+		RedactSecrets:     ev.redactSecrets,
+		ChunkSize:         ev.chunkSize,
+		ChunkOverlap:      ev.chunkOverlap,
 
 		JinaAPIKey:         ev.jinaAPIKey,
 		OpenAIAPIKey:       ev.openaiAPIKey,
@@ -225,27 +272,45 @@ func resolvePaths(ev envValues) (Config, error) {
 		OpenAIModel:        ev.openaiModel,
 		OllamaBaseURL:      ev.ollamaBaseURL,
 		EmbeddingDimension: ev.embeddingDimension,
+		EmbeddingMode:      ev.embeddingMode,
 
 		AutoIndex:        ev.autoIndex,
 		FileWatcher:      ev.fileWatcher,
 		WatchInterval:    parseDurationOrDefault(ev.watchInterval, 5*time.Minute),
 		DebounceDuration: parseDurationOrDefault(ev.debounceDuration, 30*time.Second),
 
-		HTTPMode:      ev.httpMode,
-		HTTPPort:      ev.httpPort,
-		HTTPAuthToken: ev.httpAuthToken,
-	}, nil
+		HTTPMode:                         ev.httpMode,
+		HTTPHost:                         strings.TrimSpace(ev.httpHost),
+		HTTPPort:                         ev.httpPort,
+		HTTPAuthToken:                    ev.httpAuthToken,
+		HTTPInsecureAllowUnauthenticated: ev.httpInsecureAllowUnauthenticated,
+		SessionTrackingEnabled:           ev.sessionTrackingEnabled,
+		SessionIdleTimeout:               parseDurationOrDefault(ev.sessionIdleTimeout, 10*time.Minute),
+		SessionCheckpointInterval:        parseDurationOrDefault(ev.sessionCheckpointInterval, 30*time.Minute),
+		SessionMinEvents:                 sessionMinEvents,
+	}
+	if err := validateResolvedConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 // LoadFromEnv reads configuration only from environment variables (no flag parsing).
 // Use this for CLI subcommands that define their own flags.
 func LoadFromEnv() (Config, error) {
-	return resolvePaths(loadEnv())
+	ev, err := loadEnv()
+	if err != nil {
+		return Config{}, err
+	}
+	return resolvePaths(ev)
 }
 
 // Load reads configuration from environment variables and command-line flags.
 func Load() (Config, error) {
-	ev := loadEnv()
+	ev, err := loadEnv()
+	if err != nil {
+		return Config{}, err
+	}
 
 	flag.StringVar(&ev.root, "root", ev.root, "Repository root (defaults to current dir)")
 	flag.StringVar(&ev.allow, "allow", ev.allow, "Comma-separated allowlist of repo-relative paths")
@@ -262,6 +327,14 @@ func Load() (Config, error) {
 }
 
 func splitAllowlist(raw string) []string {
+	parts := splitCSV(raw)
+	for i, p := range parts {
+		parts[i] = filepath.Clean(p)
+	}
+	return parts
+}
+
+func splitCSV(raw string) []string {
 	if raw == "" {
 		return nil
 	}
@@ -272,7 +345,6 @@ func splitAllowlist(raw string) []string {
 		if item == "" {
 			continue
 		}
-		item = filepath.Clean(item)
 		out = append(out, item)
 	}
 	return out
@@ -325,6 +397,18 @@ func normalizeOutputMode(value string) string {
 	}
 }
 
+func normalizeEmbeddingMode(value string) string {
+	val := strings.TrimSpace(strings.ToLower(value))
+	switch val {
+	case "", "auto":
+		return "auto"
+	case "local-only", "local_only", "local":
+		return "local-only"
+	default:
+		return "auto"
+	}
+}
+
 // EnvBool returns an environment variable parsed as bool, or fallback on error.
 func EnvBool(key string, fallback bool) bool {
 	val := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
@@ -365,10 +449,22 @@ func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
 	return d
 }
 
+// EmbedderConfig returns the embedder.Config derived from this server config.
+func (c Config) EmbedderConfig() embedder.Config {
+	return embedder.Config{
+		JinaToken:     c.JinaAPIKey,
+		OpenAIToken:   c.OpenAIAPIKey,
+		OpenAIBaseURL: c.OpenAIBaseURL,
+		OpenAIModel:   c.OpenAIModel,
+		OllamaBaseURL: c.OllamaBaseURL,
+		Dimension:     c.EmbeddingDimension,
+		Mode:          c.EmbeddingMode,
+		MaxRetries:    1,
+		Timeout:       5 * time.Second,
+	}
+}
+
 // BoolToString converts a bool to "true" or "false" string for logging.
 func BoolToString(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
+	return strconv.FormatBool(b)
 }

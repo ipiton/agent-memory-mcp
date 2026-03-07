@@ -8,7 +8,20 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BINARY="$PROJECT_ROOT/bin/agent-memory-mcp"
-INDEX_DIR="$PROJECT_ROOT/data/rag-index"
+ENV_FILE="$PROJECT_ROOT/.env"
+
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+fi
+
+INDEX_DIR="${MCP_RAG_INDEX_PATH:-${MCP_DATA_PATH:-data}/rag-index}"
+case "$INDEX_DIR" in
+    /*) ;;
+    *) INDEX_DIR="$PROJECT_ROOT/$INDEX_DIR" ;;
+esac
 
 echo "=== Full RAG Reindex ==="
 echo "This will clear the existing index and rebuild it."

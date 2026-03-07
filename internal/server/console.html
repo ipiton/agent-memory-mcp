@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Retrieval Console</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: rgba(255, 250, 242, 0.92);
+      --panel-strong: #fff8ef;
+      --ink: #1e1a16;
+      --muted: #695d50;
+      --line: rgba(75, 54, 31, 0.14);
+      --accent: #b84d1f;
+      --accent-2: #df9a3b;
+      --good: #25735b;
+      --bad: #a33227;
+      --shadow: 0 18px 50px rgba(78, 54, 30, 0.14);
+      --radius: 22px;
+      --radius-sm: 14px;
+      --font-ui: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: var(--font-ui);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(223, 154, 59, 0.22), transparent 33%),
+        radial-gradient(circle at top right, rgba(184, 77, 31, 0.18), transparent 28%),
+        linear-gradient(180deg, #fcf7f1 0%, var(--bg) 100%);
+      padding: 28px;
+    }
+
+    .shell {
+      max-width: 1360px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero, .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .hero {
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 220px;
+      height: 220px;
+      right: -40px;
+      top: -70px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(223, 154, 59, 0.22), rgba(184, 77, 31, 0.12));
+      filter: blur(4px);
+    }
+
+    .eyebrow {
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 12px;
+      color: var(--accent);
+      margin: 0 0 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(32px, 5vw, 62px);
+      line-height: 0.95;
+      max-width: 10ch;
+    }
+
+    .hero p {
+      max-width: 68ch;
+      color: var(--muted);
+      font-size: 16px;
+      margin: 14px 0 0;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 9px 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.7);
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel { padding: 20px; }
+    .panel h2 {
+      margin: 0 0 4px;
+      font-size: 22px;
+    }
+    .panel .sub {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    input, select, textarea, button {
+      font: inherit;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+      padding: 12px 14px;
+      color: var(--ink);
+      min-height: 46px;
+    }
+
+    textarea {
+      min-height: 104px;
+      resize: vertical;
+    }
+
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 46px;
+      padding: 0 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.82);
+    }
+
+    .inline input[type="checkbox"] {
+      width: auto;
+      min-height: auto;
+      accent-color: var(--accent);
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 6px;
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 12px 18px;
+      cursor: pointer;
+      transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px rgba(49, 31, 15, 0.15);
+    }
+
+    .primary {
+      color: white;
+      background: linear-gradient(135deg, var(--accent), #de6f37);
+    }
+
+    .ghost {
+      color: var(--ink);
+      background: #efe5d7;
+    }
+
+    .results-shell {
+      display: grid;
+      gap: 18px;
+    }
+
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    .result-pane h3 {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+
+    .empty {
+      border-radius: var(--radius-sm);
+      border: 1px dashed var(--line);
+      padding: 28px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.45);
+      text-align: center;
+    }
+
+    .cards {
+      display: grid;
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px;
+      animation: rise 260ms ease both;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: start;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .score {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: rgba(223, 154, 59, 0.14);
+      color: #704418;
+      font-size: 12px;
+    }
+
+    .snippet, pre {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .trust, .debug {
+      margin-top: 12px;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .kv {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+    }
+
+    details {
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      padding: 12px 14px;
+      background: rgba(255,255,255,0.6);
+    }
+
+    summary {
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .error {
+      color: white;
+      background: linear-gradient(135deg, #ad3a2e, #88271e);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .good { color: var(--good); }
+    .bad { color: var(--bad); }
+
+    @media (max-width: 1020px) {
+      .layout, .compare-grid, .grid-2 {
+        grid-template-columns: 1fr;
+      }
+      body { padding: 16px; }
+      .hero, .panel { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <p class="eyebrow">Engineering Retrieval</p>
+      <h1>Retrieval Console</h1>
+      <p>Inspect hybrid ranking, trust signals, canonical vs raw layers, and debug output without leaving HTTP mode. The page is static; live queries still use the same authenticated backend as <span class="mono">/mcp</span>.</p>
+      <div class="status-strip" id="status-strip">
+        <span class="pill">Console ready</span>
+        <span class="pill" id="health-pill">Checking health...</span>
+        <span class="pill" id="backend-pill">Waiting for backend status</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="panel">
+        <h2>Query Setup</h2>
+        <p class="sub">Use compare mode to inspect normal vs debug retrieval side by side.</p>
+        <div class="form-grid">
+          <label>
+            Mode
+            <select id="mode">
+              <option value="documents">Documents / RAG</option>
+              <option value="memory">Raw memory</option>
+              <option value="canonical">Canonical knowledge</option>
+            </select>
+          </label>
+          <label>
+            Query
+            <textarea id="query" placeholder="e.g. ingress rollback after nginx upgrade"></textarea>
+          </label>
+          <div class="grid-2">
+            <label id="source-type-wrap">
+              Source type
+              <select id="source-type">
+                <option value="">Any</option>
+                <option value="docs">docs</option>
+                <option value="adr">adr</option>
+                <option value="rfc">rfc</option>
+                <option value="changelog">changelog</option>
+                <option value="runbook">runbook</option>
+                <option value="postmortem">postmortem</option>
+                <option value="ci_config">ci_config</option>
+                <option value="helm">helm</option>
+                <option value="terraform">terraform</option>
+                <option value="k8s">k8s</option>
+              </select>
+            </label>
+            <label>
+              Memory type
+              <select id="memory-type">
+                <option value="all">all</option>
+                <option value="semantic">semantic</option>
+                <option value="procedural">procedural</option>
+                <option value="episodic">episodic</option>
+                <option value="working">working</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>
+              Context
+              <input id="context" placeholder="payments">
+            </label>
+            <label>
+              Service
+              <input id="service" placeholder="api">
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>
+              Tags
+              <input id="tags" placeholder="runbook,migration">
+            </label>
+            <label>
+              Limit
+              <input id="limit" type="number" min="1" max="50" value="5">
+            </label>
+          </div>
+          <label>
+            Bearer token for shared mode
+            <input id="token" type="password" placeholder="Optional in local mode">
+          </label>
+          <div class="inline">
+            <input id="remember-token" type="checkbox" checked>
+            <span>Remember token in this browser session</span>
+          </div>
+          <div class="inline">
+            <input id="compare-debug" type="checkbox" checked>
+            <span>Compare normal vs debug mode for document search</span>
+          </div>
+          <div class="actions">
+            <button class="primary" id="run">Run query</button>
+            <button class="ghost" id="clear">Clear results</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="results-shell">
+        <section class="panel">
+          <h2>Inspection View</h2>
+          <p class="sub">Normal mode shows what an agent would get. Debug mode shows ranking signals, trust, freshness, and applied boosts.</p>
+          <div id="results-root" class="empty">Run a query to inspect retrieval.</div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      compareDebug: true,
+      token: sessionStorage.getItem("agent-memory-console-token") || "",
+    };
+
+    const ids = (name) => document.getElementById(name);
+
+    const modeEl = ids("mode");
+    const queryEl = ids("query");
+    const sourceTypeEl = ids("source-type");
+    const memoryTypeEl = ids("memory-type");
+    const contextEl = ids("context");
+    const serviceEl = ids("service");
+    const tagsEl = ids("tags");
+    const limitEl = ids("limit");
+    const tokenEl = ids("token");
+    const compareDebugEl = ids("compare-debug");
+    const rememberTokenEl = ids("remember-token");
+    const resultsRoot = ids("results-root");
+    const sourceTypeWrap = ids("source-type-wrap");
+
+    tokenEl.value = state.token;
+
+    function splitTags(value) {
+      return value.split(",").map((item) => item.trim()).filter(Boolean);
+    }
+
+    function updateModeControls() {
+      const isDocuments = modeEl.value === "documents";
+      sourceTypeWrap.style.display = isDocuments ? "grid" : "none";
+      compareDebugEl.disabled = !isDocuments;
+      if (!isDocuments) {
+        compareDebugEl.checked = false;
+      } else {
+        compareDebugEl.checked = state.compareDebug;
+      }
+    }
+
+    function authHeaders() {
+      const token = tokenEl.value.trim();
+      const headers = { "Content-Type": "application/json" };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+      return headers;
+    }
+
+    async function refreshHealth() {
+      try {
+        const response = await fetch("/health");
+        const health = await response.json();
+        ids("health-pill").textContent = response.ok ? "Health: ok" : "Health: unavailable";
+        ids("health-pill").className = `pill ${response.ok ? "good" : "bad"}`;
+        ids("backend-pill").textContent = `RAG ${health.rag_available ? "on" : "off"} | Memory ${health.memory_available ? "on" : "off"}`;
+      } catch (error) {
+        ids("health-pill").textContent = "Health check failed";
+        ids("health-pill").className = "pill bad";
+        ids("backend-pill").textContent = "Backend status unavailable";
+      }
+    }
+
+    function buildPayload(debug) {
+      return {
+        mode: modeEl.value,
+        query: queryEl.value.trim(),
+        source_type: sourceTypeEl.value,
+        memory_type: memoryTypeEl.value,
+        context: contextEl.value.trim(),
+        service: serviceEl.value.trim(),
+        tags: splitTags(tagsEl.value),
+        limit: Number(limitEl.value) || 5,
+        debug: Boolean(debug),
+      };
+    }
+
+    async function runQuery(debug) {
+      const payload = buildPayload(debug);
+      const response = await fetch("/console/api/query", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(body.error || `Request failed with ${response.status}`);
+      }
+      return body;
+    }
+
+    function trustLine(trust) {
+      if (!trust) {
+        return "";
+      }
+      return `
+        <div class="trust">
+          <div class="kv">
+            <span><strong>Layer</strong> ${trust.knowledge_layer || "unknown"}</span>
+            <span><strong>Source</strong> ${trust.source_type || "unknown"}</span>
+            <span><strong>Confidence</strong> ${Number(trust.confidence || 0).toFixed(2)}</span>
+            <span><strong>Freshness</strong> ${Number(trust.freshness_score || 0).toFixed(2)}</span>
+            <span><strong>Owner</strong> ${trust.owner || "unknown"}</span>
+            <span><strong>Verified</strong> ${trust.last_verified_at || "unknown"}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function docCard(result) {
+      const debug = result.debug ? `
+        <div class="debug">
+          <div class="kv mono">
+            <span>semantic=${Number(result.debug.breakdown.semantic || 0).toFixed(3)}</span>
+            <span>keyword_raw=${Number(result.debug.breakdown.keyword_raw || 0).toFixed(3)}</span>
+            <span>keyword_norm=${Number(result.debug.breakdown.keyword_normalized || 0).toFixed(3)}</span>
+            <span>recency=${Number(result.debug.breakdown.recency_boost || 0).toFixed(3)}</span>
+            <span>source=${Number(result.debug.breakdown.source_boost || 0).toFixed(3)}</span>
+            <span>confidence=${Number(result.debug.breakdown.confidence_boost || 0).toFixed(3)}</span>
+            <span>final=${Number(result.debug.breakdown.final_score || 0).toFixed(3)}</span>
+          </div>
+          ${result.debug.applied_boosts && result.debug.applied_boosts.length ? `<div class="kv"><span><strong>Boosts</strong> ${result.debug.applied_boosts.join(", ")}</span></div>` : ""}
+        </div>` : "";
+
+      return `
+        <article class="card">
+          <div class="card-head">
+            <h4 class="card-title">${result.title}</h4>
+            <span class="score">score ${Number(result.score || 0).toFixed(2)}</span>
+          </div>
+          <div class="meta">
+            <span class="tag">${result.source_type || "docs"}</span>
+            <span class="tag mono">${result.path}</span>
+          </div>
+          <p class="snippet">${result.snippet || ""}</p>
+          ${trustLine(result.trust)}
+          ${debug}
+        </article>
+      `;
+    }
+
+    function memoryCard(result, canonical = false) {
+      const record = canonical ? result.entry : result.memory;
+      const score = Number(result.score || 0).toFixed(2);
+      return `
+        <article class="card">
+          <div class="card-head">
+            <h4 class="card-title">${record.title || record.summary || "Untitled"}</h4>
+            <span class="score">score ${score}</span>
+          </div>
+          <div class="meta">
+            ${record.context ? `<span class="tag">${record.context}</span>` : ""}
+            ${record.service ? `<span class="tag">${record.service}</span>` : ""}
+            ${(record.tags || []).map(tag => `<span class="tag">${tag}</span>`).join("")}
+          </div>
+          <p class="snippet">${canonical ? (record.summary || "") : (record.content || "")}</p>
+          ${trustLine(canonical ? record.trust : result.trust)}
+        </article>
+      `;
+    }
+
+    function renderDocuments(response, title) {
+      const results = response.results?.results || [];
+      const debug = response.results?.debug;
+      return `
+        <section class="result-pane">
+          <h3>${title}</h3>
+          ${debug ? `<div class="kv"><span><strong>Signals</strong> ${debug.ranking_signals.join(", ")}</span><span><strong>Candidates</strong> ${debug.candidate_count}</span><span><strong>Returned</strong> ${debug.returned_count}</span></div>` : ""}
+          <div class="cards">
+            ${results.length ? results.map(docCard).join("") : '<div class="empty">No results</div>'}
+          </div>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre>${JSON.stringify(response.results, null, 2)}</pre>
+          </details>
+        </section>
+      `;
+    }
+
+    function renderMemoryLike(response, canonical = false) {
+      const results = response.results || [];
+      return `
+        <section class="result-pane">
+          <h3>${canonical ? "Canonical knowledge" : "Raw memory"} (${response.result_count})</h3>
+          <div class="cards">
+            ${results.length ? results.map((item) => canonical ? memoryCard(item, true) : memoryCard(item, false)).join("") : '<div class="empty">No results</div>'}
+          </div>
+          <details>
+            <summary>Raw JSON</summary>
+            <pre>${JSON.stringify(response.results, null, 2)}</pre>
+          </details>
+        </section>
+      `;
+    }
+
+    function renderSingle(response) {
+      if (response.mode === "documents") {
+        return renderDocuments(response, response.debug ? "Debug results" : "Results");
+      }
+      return renderMemoryLike(response, response.mode === "canonical");
+    }
+
+    async function handleRun() {
+      const query = queryEl.value.trim();
+      if (!query) {
+        resultsRoot.innerHTML = '<div class="error">Query is required.</div>';
+        return;
+      }
+
+      state.compareDebug = compareDebugEl.checked;
+      if (rememberTokenEl.checked) {
+        sessionStorage.setItem("agent-memory-console-token", tokenEl.value.trim());
+      } else {
+        sessionStorage.removeItem("agent-memory-console-token");
+      }
+
+      resultsRoot.innerHTML = '<div class="empty">Running query…</div>';
+
+      try {
+        if (modeEl.value === "documents" && compareDebugEl.checked) {
+          const [normal, debug] = await Promise.all([runQuery(false), runQuery(true)]);
+          resultsRoot.innerHTML = `
+            <div class="compare-grid">
+              ${renderDocuments(normal, "Normal mode")}
+              ${renderDocuments(debug, "Debug mode")}
+            </div>
+          `;
+          return;
+        }
+
+        const response = await runQuery(modeEl.value === "documents" ? compareDebugEl.checked : false);
+        resultsRoot.innerHTML = renderSingle(response);
+      } catch (error) {
+        resultsRoot.innerHTML = `<div class="error">${error.message}</div>`;
+      }
+    }
+
+    ids("run").addEventListener("click", handleRun);
+    ids("clear").addEventListener("click", () => {
+      resultsRoot.innerHTML = '<div class="empty">Run a query to inspect retrieval.</div>';
+    });
+    modeEl.addEventListener("change", updateModeControls);
+
+    updateModeControls();
+    refreshHealth();
+  </script>
+</body>
+</html>

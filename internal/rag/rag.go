@@ -1,32 +1,33 @@
-// Package rag provides RAG (Retrieval-Augmented Generation) with document indexing and semantic search.
+// Package rag provides RAG (Retrieval-Augmented Generation) with document indexing and hybrid retrieval.
 package rag
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 	"github.com/ipiton/agent-memory-mcp/internal/logger"
+	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
 )
 
 // SearchResult represents a single document match from a RAG search query.
 type SearchResult struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Path         string    `json:"path"`
-	Score        float64   `json:"score"`
-	Snippet      string    `json:"snippet"`
-	LastModified time.Time `json:"last_modified"`
+	ID           string         `json:"id"`
+	Title        string         `json:"title"`
+	Path         string         `json:"path"`
+	SourceType   string         `json:"source_type,omitempty"`
+	Score        float64        `json:"score"`
+	Snippet      string         `json:"snippet"`
+	LastModified time.Time      `json:"last_modified"`
+	Trust        *trust.Metadata `json:"trust,omitempty"`
+	Debug        *ResultDebug    `json:"debug,omitempty"`
 }
 
 // SearchResponse holds the results and metadata for a search query.
@@ -35,9 +36,38 @@ type SearchResponse struct {
 	Results    []SearchResult `json:"results"`
 	TotalFound int            `json:"total_found"`
 	SearchTime int64          `json:"search_time_ms"`
+	Debug      *SearchDebug   `json:"debug,omitempty"`
 }
 
-// Engine provides document indexing and semantic vector search over a repository.
+// ResultDebug explains how a single result was ranked.
+type ResultDebug struct {
+	Breakdown     ScoreBreakdown `json:"breakdown"`
+	AppliedBoosts []string       `json:"applied_boosts,omitempty"`
+}
+
+// ScoreBreakdown exposes the score components for a single result.
+type ScoreBreakdown struct {
+	Semantic          float64 `json:"semantic"`
+	KeywordRaw        float64 `json:"keyword_raw"`
+	KeywordNormalized float64 `json:"keyword_normalized"`
+	RecencyBoost      float64 `json:"recency_boost"`
+	SourceBoost       float64 `json:"source_boost"`
+	ConfidenceBoost   float64 `json:"confidence_boost"`
+	FinalScore        float64 `json:"final_score"`
+}
+
+// SearchDebug explains filters and ranking signals applied to the whole response.
+type SearchDebug struct {
+	AppliedFilters   []string `json:"applied_filters,omitempty"`
+	RankingSignals   []string `json:"ranking_signals"`
+	IndexedChunks    int      `json:"indexed_chunks"`
+	FilteredOut      int      `json:"filtered_out"`
+	DiscardedAsNoise int      `json:"discarded_as_noise"`
+	CandidateCount   int      `json:"candidate_count"`
+	ReturnedCount    int      `json:"returned_count"`
+}
+
+// Engine provides document indexing and hybrid retrieval over a repository.
 type Engine struct {
 	config         config.Config
 	repoRoot       string
@@ -52,10 +82,13 @@ type Engine struct {
 }
 
 type docServiceConfig struct {
-	IndexDirs    []string
-	RepoRoot     string
-	ChunkSize    int
-	ChunkOverlap int
+	IndexDirs         []string
+	IndexExcludeDirs  []string
+	IndexExcludeGlobs []string
+	RedactSecrets     bool
+	RepoRoot          string
+	ChunkSize         int
+	ChunkOverlap      int
 }
 
 type vecServiceConfig struct {
@@ -74,15 +107,25 @@ type document struct {
 }
 
 type searchQuery struct {
-	Query string
-	Limit int
+	Query      string
+	Limit      int
+	SourceType string
+	Debug      bool
 }
 
 type indexResult struct {
 	SuccessIDs []string
 	FailedIDs  []string
 	Errors     []error
+	ModelID    string
 }
+
+const (
+	indexStateMetadataKey = "index_state"
+	indexStateDirty       = "dirty"
+	indexStateReady       = "ready"
+	indexStartedAtKey     = "index_started_at"
+)
 
 // NewEngine creates a new Engine with the given configuration and optional file logger.
 func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
@@ -101,10 +144,13 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	}
 
 	dsCfg := docServiceConfig{
-		IndexDirs:    indexDirs,
-		RepoRoot:     repoRoot,
-		ChunkSize:    cfg.ChunkSize,
-		ChunkOverlap: cfg.ChunkOverlap,
+		IndexDirs:         indexDirs,
+		IndexExcludeDirs:  cfg.IndexExcludeDirs,
+		IndexExcludeGlobs: cfg.IndexExcludeGlobs,
+		RedactSecrets:     cfg.RedactSecrets,
+		RepoRoot:          repoRoot,
+		ChunkSize:         cfg.ChunkSize,
+		ChunkOverlap:      cfg.ChunkOverlap,
 	}
 	if dsCfg.ChunkSize == 0 {
 		dsCfg.ChunkSize = 2000
@@ -122,6 +168,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		OpenAIModel:   cfg.OpenAIModel,
 		OllamaBaseURL: cfg.OllamaBaseURL,
 		Dimension:     cfg.EmbeddingDimension,
+		Mode:          cfg.EmbeddingMode,
 		MaxRetries:    2,
 		Timeout:       10 * time.Second,
 	}, zapLogger)
@@ -186,8 +233,8 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	return engine
 }
 
-// Search performs a semantic search query across indexed documents.
-func (re *Engine) Search(query string, limit int) (*SearchResponse, error) {
+// Search performs a hybrid search query across indexed documents.
+func (re *Engine) Search(query string, limit int, sourceType string, debug bool) (*SearchResponse, error) {
 	if re == nil || re.vecService == nil {
 		return nil, fmt.Errorf("RAG engine not available")
 	}
@@ -200,8 +247,10 @@ func (re *Engine) Search(query string, limit int) (*SearchResponse, error) {
 	}
 
 	result, err := re.vecService.search(searchQuery{
-		Query: query,
-		Limit: limit,
+		Query:      query,
+		Limit:      limit,
+		SourceType: sourceType,
+		Debug:      debug,
 	})
 	if err != nil {
 		re.logger.Error("Vector search failed",
@@ -217,6 +266,7 @@ func (re *Engine) Search(query string, limit int) (*SearchResponse, error) {
 		Results:    result.Results,
 		TotalFound: result.TotalFound,
 		SearchTime: result.SearchTime,
+		Debug:      result.Debug,
 	}, nil
 }
 
@@ -226,40 +276,49 @@ func (re *Engine) IndexDocuments() error {
 		return fmt.Errorf("RAG engine not available")
 	}
 
-	startTime := time.Now()
-
-	const embeddingModel = "jina-v3-bge-m3-1024d"
+	startTime := time.Now().UTC()
 	const chunkerVersion = "char-v1"
-
-	store := re.vecService.store
-	oldModel, _ := store.GetMetadata("embedding_model")
-	oldChunker, _ := store.GetMetadata("chunker_version")
-
-	needsRebuild := false
-	if oldModel != "" && oldModel != embeddingModel {
-		re.logger.Warn("Embedding model changed - full rebuild required")
-		needsRebuild = true
-	}
-	if oldChunker != "" && oldChunker != chunkerVersion {
-		re.logger.Warn("Chunker version changed - full rebuild required")
-		needsRebuild = true
-	}
-
-	store.SetMetadata("embedding_model", embeddingModel)
-	store.SetMetadata("chunker_version", chunkerVersion)
 
 	allDocs, err := re.docService.collectDocuments()
 	if err != nil {
 		return fmt.Errorf("failed to collect documents: %w", err)
 	}
 
-	if len(allDocs) == 0 {
-		return fmt.Errorf("no documents found to index")
+	store := re.vecService.store
+	oldModel, _ := store.GetMetadata("embedding_model")
+	oldChunker, _ := store.GetMetadata("chunker_version")
+	indexState, _ := store.GetMetadata(indexStateMetadataKey)
+
+	needsRebuild := false
+	if indexState == indexStateDirty {
+		re.logger.Warn("Index state marked dirty - forcing rebuild to recover tracking consistency")
+		needsRebuild = true
+	}
+	if oldModel != "" && len(allDocs) > 0 {
+		currentModel, err := re.vecService.detectModelID(allDocs[0].Content)
+		if err != nil {
+			return fmt.Errorf("failed to detect current embedding model: %w", err)
+		}
+		if oldModel != currentModel {
+			re.logger.Warn("Embedding model changed - full rebuild required",
+				zap.String("old_model", oldModel),
+				zap.String("current_model", currentModel),
+			)
+			needsRebuild = true
+		}
+	}
+	if oldChunker != "" && oldChunker != chunkerVersion {
+		re.logger.Warn("Chunker version changed - full rebuild required")
+		needsRebuild = true
 	}
 
 	indexedFiles, err := store.GetAllIndexedFiles()
 	if err != nil {
 		indexedFiles = make(map[string]*vectorstore.IndexedFileInfo)
+	}
+
+	if len(allDocs) == 0 && len(indexedFiles) == 0 && !needsRebuild {
+		return fmt.Errorf("no documents found to index")
 	}
 
 	toAdd, toRemove := re.calculateIndexChanges(allDocs, indexedFiles, needsRebuild)
@@ -272,26 +331,41 @@ func (re *Engine) IndexDocuments() error {
 		zap.Bool("force_rebuild", needsRebuild),
 	)
 
+	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
+		Metadata: map[string]string{
+			indexStateMetadataKey: indexStateDirty,
+			indexStartedAtKey:     startTime.Format(time.RFC3339),
+		},
+	}); err != nil {
+		return fmt.Errorf("failed to mark index state dirty: %w", err)
+	}
+
 	if len(toRemove) > 0 {
 		re.logger.Info("Removing deleted documents", zap.Int("count", len(toRemove)))
 		for _, filePath := range toRemove {
 			if err := re.vecService.removeDocument(filePath); err != nil {
-				re.logger.Warn("Failed to remove document", zap.String("path", filePath), zap.Error(err))
+				return fmt.Errorf("failed to remove indexed document %q: %w", filePath, err)
 			}
-			store.DeleteIndexedFile(filePath)
 		}
 	}
+
+	indexedModel := oldModel
+	indexedFilesToUpsert := make(map[string]*vectorstore.IndexedFileInfo)
+	failedFiles := make(map[string]struct{})
 
 	if len(toAdd) > 0 {
 		re.logger.Info("Starting to index documents", zap.Int("count", len(toAdd)))
 
 		chunkCountsByFile := make(map[string]int)
+		docsByID := make(map[string]document, len(toAdd))
 		for _, doc := range toAdd {
 			chunkCountsByFile[doc.Path]++
+			docsByID[doc.ID] = doc
 		}
 
 		batchSize := 50
 		totalBatches := (len(toAdd) + batchSize - 1) / batchSize
+		currentBatchModel := ""
 
 		for batchNum := 0; batchNum < totalBatches; batchNum++ {
 			start := batchNum * batchSize
@@ -309,42 +383,51 @@ func (re *Engine) IndexDocuments() error {
 			if err != nil {
 				return fmt.Errorf("failed to index: %w", err)
 			}
-
-			// Collect files that have ANY failed chunks — don't mark them as indexed
-			failedFiles := make(map[string]bool)
-			for _, failedID := range result.FailedIDs {
-				for _, doc := range batch {
-					if doc.ID == failedID {
-						failedFiles[doc.Path] = true
-						break
-					}
+			if result.ModelID != "" {
+				if currentBatchModel == "" {
+					currentBatchModel = result.ModelID
+				} else if currentBatchModel != result.ModelID {
+					return fmt.Errorf("embedding model changed during indexing: started with %s, got %s", currentBatchModel, result.ModelID)
 				}
 			}
 
-			updatedFiles := make(map[string]bool)
+			for _, failedID := range result.FailedIDs {
+				doc, ok := docsByID[failedID]
+				if !ok {
+					continue
+				}
+				failedFiles[doc.Path] = struct{}{}
+				delete(indexedFilesToUpsert, doc.Path)
+			}
+
 			for _, successID := range result.SuccessIDs {
-				for _, doc := range batch {
-					if doc.ID == successID && !updatedFiles[doc.Path] && !failedFiles[doc.Path] {
-						fileHash := doc.FileHash
-						if fileHash == "" {
-							fileHash = calculateFileHash(doc.Content)
-						}
+				doc, ok := docsByID[successID]
+				if !ok {
+					continue
+				}
+				if _, failed := failedFiles[doc.Path]; failed {
+					continue
+				}
+				if _, alreadyTracked := indexedFilesToUpsert[doc.Path]; alreadyTracked {
+					continue
+				}
 
-						chunkCount := chunkCountsByFile[doc.Path]
-						if chunkCount == 0 {
-							chunkCount = 1
-						}
+				fileHash := doc.FileHash
+				if fileHash == "" {
+					fileHash = calculateFileHash(doc.Content)
+				}
 
-						store.SetIndexedFile(&vectorstore.IndexedFileInfo{
-							FilePath:   doc.Path,
-							Hash:       fileHash,
-							ModTime:    doc.LastModified,
-							Size:       int64(len(doc.Content)),
-							ChunkCount: chunkCount,
-						})
-						updatedFiles[doc.Path] = true
-						break
-					}
+				chunkCount := chunkCountsByFile[doc.Path]
+				if chunkCount == 0 {
+					chunkCount = 1
+				}
+
+				indexedFilesToUpsert[doc.Path] = &vectorstore.IndexedFileInfo{
+					FilePath:   doc.Path,
+					Hash:       fileHash,
+					ModTime:    doc.LastModified,
+					Size:       int64(len(doc.Content)),
+					ChunkCount: chunkCount,
 				}
 			}
 
@@ -361,17 +444,69 @@ func (re *Engine) IndexDocuments() error {
 				time.Sleep(50 * time.Millisecond)
 			}
 		}
+
+		if currentBatchModel != "" {
+			indexedModel = currentBatchModel
+		}
 	}
 
-	store.SetMetadata("last_indexed", time.Now().Format(time.RFC3339))
+	deletePaths := append([]string(nil), toRemove...)
+	for filePath := range failedFiles {
+		deletePaths = append(deletePaths, filePath)
+	}
+	sort.Strings(deletePaths)
+
+	upsertPaths := make([]string, 0, len(indexedFilesToUpsert))
+	for filePath := range indexedFilesToUpsert {
+		upsertPaths = append(upsertPaths, filePath)
+	}
+	sort.Strings(upsertPaths)
+
+	upsertFiles := make([]*vectorstore.IndexedFileInfo, 0, len(upsertPaths))
+	for _, filePath := range upsertPaths {
+		upsertFiles = append(upsertFiles, indexedFilesToUpsert[filePath])
+	}
+
+	finalMetadata := map[string]string{
+		"chunker_version":     chunkerVersion,
+		indexStateMetadataKey: indexStateReady,
+		indexStartedAtKey:     startTime.Format(time.RFC3339),
+		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
+	}
+	if indexedModel != "" {
+		finalMetadata["embedding_model"] = indexedModel
+	}
+	if len(failedFiles) > 0 {
+		finalMetadata[indexStateMetadataKey] = indexStateDirty
+	}
+
+	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
+		Metadata:        finalMetadata,
+		UpsertFiles:     upsertFiles,
+		DeleteFilePaths: deletePaths,
+	}); err != nil {
+		return fmt.Errorf("failed to commit index state: %w", err)
+	}
 
 	duration := time.Since(startTime)
 	re.logger.Info("Indexing completed", zap.Duration("duration", duration))
+
+	if len(failedFiles) > 0 {
+		return fmt.Errorf("indexing completed with %d failed file(s); index state remains dirty for recovery", len(failedFiles))
+	}
 
 	return nil
 }
 
 func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) (toAdd []document, toRemove []string) {
+	if forceRebuild {
+		toAdd = append(toAdd, currentDocs...)
+		for filePath := range indexedFiles {
+			toRemove = append(toRemove, filePath)
+		}
+		return toAdd, toRemove
+	}
+
 	// Group docs by path for O(1) lookup
 	docsByPath := make(map[string][]document)
 	for _, doc := range currentDocs {
@@ -558,176 +693,6 @@ func (re *Engine) needsIndexing() bool {
 	return needsIndex
 }
 
-func calculateFileHash(content string) string {
-	h := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(h[:])
-}
-
-// === Document Service ===
-
-type documentService struct {
-	config docServiceConfig
-	logger *zap.Logger
-}
-
-func newDocumentService(cfg docServiceConfig, logger *zap.Logger) *documentService {
-	return &documentService{config: cfg, logger: logger}
-}
-
-func (ds *documentService) collectDocuments() ([]document, error) {
-	var allDocs []document
-
-	for _, dir := range ds.config.IndexDirs {
-		fullPath := dir
-		if !filepath.IsAbs(dir) {
-			fullPath = filepath.Join(ds.config.RepoRoot, dir)
-		}
-
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			ds.logger.Warn("Path not found", zap.String("path", fullPath))
-			continue
-		}
-
-		if !info.IsDir() {
-			if strings.HasSuffix(fullPath, ".md") {
-				docs, err := ds.processFile(fullPath)
-				if err != nil {
-					ds.logger.Warn("Failed to process file", zap.String("path", fullPath), zap.Error(err))
-				} else {
-					allDocs = append(allDocs, docs...)
-				}
-			}
-			continue
-		}
-
-		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() && strings.HasSuffix(path, ".md") {
-				docs, err := ds.processFile(path)
-				if err != nil {
-					ds.logger.Warn("Failed to process file", zap.String("path", path), zap.Error(err))
-					return nil
-				}
-				allDocs = append(allDocs, docs...)
-			}
-			return nil
-		})
-		if err != nil {
-			ds.logger.Error("Failed to walk directory", zap.String("path", fullPath), zap.Error(err))
-		}
-	}
-
-	return allDocs, nil
-}
-
-func (ds *documentService) processFile(path string) ([]document, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	relPath := strings.TrimPrefix(path, ds.config.RepoRoot)
-	relPath = strings.TrimPrefix(relPath, "/")
-
-	title := ds.extractTitle(string(content), filepath.Base(path))
-	cleanContent := ds.removeFrontmatter(string(content))
-
-	fileHash := calculateFileHash(cleanContent)
-	modTime := ds.getFileModTime(path)
-
-	chunks := ds.splitIntoChunks(cleanContent)
-
-	var docs []document
-	for i, chunk := range chunks {
-		docs = append(docs, document{
-			ID:           fmt.Sprintf("%s-%d", relPath, i),
-			Content:      chunk,
-			Title:        title,
-			Path:         relPath,
-			LastModified: modTime,
-			FileHash:     fileHash,
-		})
-	}
-
-	return docs, nil
-}
-
-func (ds *documentService) extractTitle(content, filename string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "# ") {
-			return strings.TrimPrefix(line, "# ")
-		}
-	}
-	return strings.TrimSuffix(filename, filepath.Ext(filename))
-}
-
-func (ds *documentService) removeFrontmatter(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) > 1 && strings.TrimSpace(lines[0]) == "---" {
-		for i, line := range lines[1:] {
-			if strings.TrimSpace(line) == "---" {
-				return strings.Join(lines[i+2:], "\n")
-			}
-		}
-	}
-	return content
-}
-
-func (ds *documentService) splitIntoChunks(content string) []string {
-	chunkSize := ds.config.ChunkSize
-	overlap := ds.config.ChunkOverlap
-
-	if len(content) <= chunkSize {
-		return []string{content}
-	}
-
-	var chunks []string
-	contentLen := len(content)
-	step := chunkSize - overlap
-
-	for start := 0; start < contentLen; start += step {
-		end := start + chunkSize
-		if end > contentLen {
-			end = contentLen
-		}
-
-		if end < contentLen {
-			breakPoint := end
-			for i := end; i > end-100 && i > start; i-- {
-				if content[i] == ' ' || content[i] == '\n' {
-					breakPoint = i
-					break
-				}
-			}
-			end = breakPoint
-		}
-
-		chunk := strings.TrimSpace(content[start:end])
-		if len(chunk) > 0 {
-			chunks = append(chunks, chunk)
-		}
-
-		if end >= contentLen {
-			break
-		}
-	}
-
-	return chunks
-}
-
-func (ds *documentService) getFileModTime(path string) time.Time {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Now()
-	}
-	return info.ModTime()
-}
-
 // === Vector Service ===
 
 type vectorService struct {
@@ -759,38 +724,37 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 func (vs *vectorService) search(query searchQuery) (*SearchResponse, error) {
 	startTime := time.Now()
 
-	queryEmbedding, err := vs.config.Embedder.EmbedQuery(query.Query)
+	queryResult, err := vs.config.Embedder.EmbedQueryDetailed(query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	results, err := vs.store.Search(queryEmbedding, query.Limit)
+	storedModel, err := vs.store.GetMetadata("embedding_model")
+	if err == nil && storedModel != "" && storedModel != queryResult.ModelID {
+		return nil, fmt.Errorf("embedding model mismatch: index was built with %s but current query model is %s. Run index_documents to rebuild the index", storedModel, queryResult.ModelID)
+	}
+
+	semanticLimit := max(query.Limit*8, 50)
+	keywordLimit := max(query.Limit*12, 100)
+
+	semanticResults, err := vs.store.Search(queryResult.Embedding, semanticLimit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search: %w", err)
+		return nil, fmt.Errorf("failed to load semantic candidates: %w", err)
 	}
 
-	var searchResults []SearchResult
-	for _, result := range results {
-		snippet := result.Content
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
-		}
-
-		searchResults = append(searchResults, SearchResult{
-			ID:           result.ID,
-			Title:        result.Title,
-			Path:         result.DocPath,
-			Score:        result.Score,
-			Snippet:      snippet,
-			LastModified: result.LastModified,
-		})
+	keywordResults, err := vs.store.KeywordSearch(query.Query, keywordLimit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load keyword candidates: %w", err)
 	}
+
+	searchResults, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
 
 	return &SearchResponse{
 		Query:      query.Query,
 		Results:    searchResults,
 		TotalFound: len(searchResults),
 		SearchTime: time.Since(startTime).Milliseconds(),
+		Debug:      debugInfo,
 	}, nil
 }
 
@@ -808,7 +772,7 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 	}
 
 	// Batch embed all texts at once
-	embeddings, err := vs.config.Embedder.BatchEmbed(texts)
+	batchResult, err := vs.config.Embedder.BatchEmbedDetailed(texts)
 	if err != nil {
 		// Batch failed entirely — mark all as failed
 		for _, doc := range docs {
@@ -818,6 +782,8 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 		vs.logger.Error("Batch embedding failed", zap.Error(err), zap.Int("count", len(docs)))
 		return result, nil
 	}
+	result.ModelID = batchResult.ModelID
+	embeddings := batchResult.Embeddings
 
 	var chunks []vectorstore.Chunk
 	for i, doc := range docs {
@@ -850,7 +816,14 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 	return result, nil
 }
 
+func (vs *vectorService) detectModelID(text string) (string, error) {
+	result, err := vs.config.Embedder.EmbedDetailed(text)
+	if err != nil {
+		return "", err
+	}
+	return result.ModelID, nil
+}
+
 func (vs *vectorService) removeDocument(path string) error {
 	return vs.store.DeleteByDocPath(path)
 }
-

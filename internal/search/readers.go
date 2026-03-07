@@ -12,7 +12,7 @@ func ReadTextFile(path string, offset int64, maxBytes int64, size int64) (string
 	if err != nil {
 		return "", false, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Seek to offset if specified
 	if offset > 0 {

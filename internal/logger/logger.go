@@ -79,10 +79,15 @@ func (fl *FileLogger) Debug(msg string, fields ...zap.Field) {
 	fl.Logger.Debug(msg, fields...)
 }
 
-// Sync flushes any buffered log entries to disk.
-func (fl *FileLogger) Sync() error {
+// Close syncs and closes the logger.
+func (fl *FileLogger) Close() error {
 	if fl == nil || fl.Logger == nil {
 		return nil
 	}
 	return fl.Logger.Sync()
+}
+
+// Sync flushes any buffered log entries to disk.
+func (fl *FileLogger) Sync() error {
+	return fl.Close()
 }
