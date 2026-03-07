@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-07
+
 ### Added
 
 - Opinionated solo-local setup with one recommended `.agent-memory/` data layout
@@ -36,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Background session tracking with idle/shutdown auto-close, periodic raw checkpoints, and persisted review queue items
 - Optional `notifications/session_event` support for `task_done`, `final_summary`, `checkpoint`, and `reset` boundaries in background session tracking
 - `resolve_review_item` MCP tool and `resolve-review-item` CLI command for clearing pending review queue items without deleting the audit trail
+- `context.Context` propagation through all public APIs (embedder, memory store, RAG engine, session close)
+- Automatic log rotation via lumberjack with size-based file rotation
+- Auto-detection of embedding model mismatch with background re-embed on startup
+- Shared `internal/review` package for review resolution logic (eliminates CLI/server duplication)
+- Goroutine leak test (`TestStoreCloseNoGoroutineLeak`) for memory store lifecycle validation
+- JSON-RPC error code constants (`rpcErrInvalidParams`, `rpcErrMethodNotFound`, `rpcErrInternalError`, `rpcErrServerError`)
 
 ### Changed
 
@@ -53,7 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `search` / `recall` and MCP `semantic_search` / `recall_memory` now show trust summaries in human-readable output
 - Workflow-oriented store tools now stamp `last_verified_at` metadata on new entries
 - Canonical, outdated, merged, and archived memory states now affect trust-aware recall ranking
-- README now documents the consolidation workflow and conflict-reporting tools
+- README and generated client config snippets now document the project-bank-plus-close-session rhythm, including coding/incident/migration close recipes and raw-only fallback
+- README and `.env.example` now document the background session-maintenance policy and the session-tracking configuration knobs
 - Project context summaries now surface canonical knowledge before raw memory when canonical entries exist
 - Trust summaries now expose the knowledge layer: `raw`, `canonical`, or `document`
 - Shared-service docs now describe the explicit path `solo local -> team laptop -> shared service`
@@ -75,9 +84,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Session analysis reports now include explicit summary counts, review summaries, and next actions such as `accept_all`, `review_changes`, and `save_raw_only`
 - Session analysis now infers `coding/incident/migration/research/cleanup` mode from explicit input or summary signals, exposes the chosen mode in reports, and keeps incident/migration consolidation in stricter review-first policy
 - Added structured project bank views for `canonical_overview`, `decisions`, `runbooks`, `incidents`, `caveats`, `migrations`, and `review_queue` with shared filters across MCP and CLI
-- README and generated client config snippets now document the project-bank-plus-close-session rhythm, including coding/incident/migration close recipes and raw-only fallback
-- README and `.env.example` now document the background session-maintenance policy and the session-tracking configuration knobs
 - Active `review_queue` views now hide already resolved inbox items while keeping the underlying memories for audit purposes
+- RAG engine background goroutines now tracked via `sync.WaitGroup` and cancellable via stop channel for clean shutdown
+- Session tracker activities capped at 1000 entries to prevent unbounded memory growth in long sessions
+- Merged content in `merge_duplicates` now enforced to 256 KB limit to prevent OOM on large merge operations
+- Embedder lifecycle now managed by server: `Close()` called on shutdown to release idle HTTP connections
+- All hardcoded JSON-RPC error codes replaced with named constants for consistency
 
 ### Fixed
 
@@ -89,6 +101,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid hosted batch embeddings are now rejected and retried through fallback providers before they can poison memory or RAG vector stores
 - Misconfigured chunk settings can no longer trigger an infinite chunking loop during indexing
 - `repo_*` allowlists can no longer point outside the configured project root through absolute or parent-relative paths
+- `embedding_model` index now created after column migration instead of in initial schema, preventing SQL errors on fresh databases
+- RAG engine `autoIndexIfNeeded` goroutine no longer leaks on shutdown — uses cancellable select instead of blocking `time.Sleep`
+- Embedder HTTP client idle connections no longer leak across server restarts
+
+## [0.2.1] - 2026-02-23
+
+### Fixed
+
+- Security hardening: data race fixes, code quality improvements
+
+### Changed
+
+- Updated installation options and examples in README
+
+## [0.2.0] - 2026-02-23
+
+### Added
+
+- CLI subcommands architecture
+- GoReleaser build pipeline
+- Homebrew tap support
 
 ## [0.1.0] - 2025-02-20
 

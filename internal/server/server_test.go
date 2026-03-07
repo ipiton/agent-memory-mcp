@@ -203,8 +203,17 @@ func TestHealthEndpoint(t *testing.T) {
 	s := newTestServer(t, "secret")
 	mux := buildMux(s)
 
-	// Health should be accessible without auth
+	// Health requires auth when token is configured
+	reqNoAuth := httptest.NewRequest(http.MethodGet, "/health", nil)
+	recNoAuth := httptest.NewRecorder()
+	mux.ServeHTTP(recNoAuth, reqNoAuth)
+	if recNoAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", recNoAuth.Code)
+	}
+
+	// Health with valid auth
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Header.Set("Authorization", "Bearer secret")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -218,6 +227,16 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	if result["status"] != "ok" {
 		t.Fatalf("expected status ok, got %v", result["status"])
+	}
+
+	// Health without token configured should work without auth
+	sNoToken := newTestServer(t, "")
+	muxNoToken := buildMux(sNoToken)
+	reqOpen := httptest.NewRequest(http.MethodGet, "/health", nil)
+	recOpen := httptest.NewRecorder()
+	muxNoToken.ServeHTTP(recOpen, reqOpen)
+	if recOpen.Code != http.StatusOK {
+		t.Fatalf("expected 200 without token, got %d", recOpen.Code)
 	}
 }
 
@@ -518,7 +537,7 @@ func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, rErr := s.callAnalyzeSession(map[string]any{
+	result, rErr := s.callCloseSession(map[string]any{
 		"summary": "Runbook: Rollback api deployment with helm rollback and verify health.\nDecision: Disable HPA for api during migration accepted.",
 		"context": "payments",
 		"service": "api",
@@ -526,7 +545,7 @@ func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 		"dry_run": true,
 	})
 	if rErr != nil {
-		t.Fatalf("callAnalyzeSession returned error: %+v", rErr)
+		t.Fatalf("callCloseSession returned error: %+v", rErr)
 	}
 
 	toolRes, ok := result.(toolResult)
@@ -556,7 +575,7 @@ func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 func TestCallAnalyzeSessionSaveRawPersistsSessionSummary(t *testing.T) {
 	s := newMemoryTestServer(t)
 
-	result, rErr := s.callAnalyzeSession(map[string]any{
+	result, rErr := s.callCloseSession(map[string]any{
 		"summary":    "Decision: Disable HPA for api during migration accepted.",
 		"context":    "payments",
 		"service":    "api",
@@ -571,7 +590,7 @@ func TestCallAnalyzeSessionSaveRawPersistsSessionSummary(t *testing.T) {
 		},
 	})
 	if rErr != nil {
-		t.Fatalf("callAnalyzeSession returned error: %+v", rErr)
+		t.Fatalf("callCloseSession returned error: %+v", rErr)
 	}
 
 	toolRes, ok := result.(toolResult)
@@ -623,7 +642,7 @@ func TestCallAnalyzeSessionAutoApplyLowRiskReturnsAppliedState(t *testing.T) {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, rErr := s.callAnalyzeSession(map[string]any{
+	result, rErr := s.callCloseSession(map[string]any{
 		"summary":             "Decision: Disable HPA for api during rollout accepted.",
 		"context":             "payments",
 		"service":             "api",
@@ -632,7 +651,7 @@ func TestCallAnalyzeSessionAutoApplyLowRiskReturnsAppliedState(t *testing.T) {
 		"auto_apply_low_risk": true,
 	})
 	if rErr != nil {
-		t.Fatalf("callAnalyzeSession returned error: %+v", rErr)
+		t.Fatalf("callCloseSession returned error: %+v", rErr)
 	}
 
 	toolRes, ok := result.(toolResult)
@@ -739,13 +758,13 @@ func TestCallAcceptSessionChangesUsesWriteEnabledDefaults(t *testing.T) {
 func TestCallAnalyzeSessionInfersMigrationModeFromSummary(t *testing.T) {
 	s := newMemoryTestServer(t)
 
-	result, rErr := s.callAnalyzeSession(map[string]any{
+	result, rErr := s.callCloseSession(map[string]any{
 		"summary": "Completed schema backfill and cutover for payments-db after dual-write verification.",
 		"context": "payments",
 		"service": "payments-db",
 	})
 	if rErr != nil {
-		t.Fatalf("callAnalyzeSession returned error: %+v", rErr)
+		t.Fatalf("callCloseSession returned error: %+v", rErr)
 	}
 
 	toolRes, ok := result.(toolResult)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1281,4 +1282,39 @@ func containsTag(tags []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func TestStoreCloseNoGoroutineLeak(t *testing.T) {
+	t.Helper()
+	// Allow background goroutines from the runtime/testing framework to settle.
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	const iterations = 5
+	for i := 0; i < iterations; i++ {
+		dbPath := filepath.Join(t.TempDir(), "leak.db")
+		store, err := NewStore(dbPath, nil, zap.NewNop())
+		if err != nil {
+			t.Fatalf("NewStore: %v", err)
+		}
+		_ = store.Store(context.Background(), &Memory{
+			Content: "test content",
+			Type:    TypeSemantic,
+		})
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	// Give goroutines time to exit.
+	time.Sleep(200 * time.Millisecond)
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	current := runtime.NumGoroutine()
+	// Allow a margin of 3 goroutines for runtime jitter.
+	if current > baseline+3 {
+		t.Errorf("goroutine leak: baseline=%d, current=%d (delta=%d)", baseline, current, current-baseline)
+	}
 }

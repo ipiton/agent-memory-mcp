@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,15 +15,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// snapshotReadonlyMemories returns pointers to cached Memory objects for read-only iteration.
-// Callers MUST NOT mutate the returned items. Use copyMemory before returning to external callers.
-// The snapshot is safe to iterate after RLock release because write operations use copy-on-write
-// (they replace map entries with new objects, never mutating existing ones in place).
-func (ms *Store) snapshotReadonlyMemories() []*Memory {
+// snapshotReadonlyMemories returns pointers to cached cachedMemory objects for read-only iteration.
+func (ms *Store) snapshotReadonlyMemories() []*cachedMemory {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
-	snapshot := make([]*Memory, 0, len(ms.memories))
+	snapshot := make([]*cachedMemory, 0, len(ms.memories))
 	for _, m := range ms.memories {
 		snapshot = append(snapshot, m)
 	}
@@ -29,25 +28,19 @@ func (ms *Store) snapshotReadonlyMemories() []*Memory {
 }
 
 // snapshotForContext returns a read-only snapshot pre-filtered by context.
-// If context is empty, returns all memories (same as snapshotReadonlyMemories).
-// Uses contextIndex for O(1) lookup instead of full scan when context is specified.
-func (ms *Store) snapshotForContext(context string) []*Memory {
+func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
+	if ctx == "" {
+		return ms.snapshotReadonlyMemories()
+	}
+
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
-	if context == "" {
-		snapshot := make([]*Memory, 0, len(ms.memories))
-		for _, m := range ms.memories {
-			snapshot = append(snapshot, m)
-		}
-		return snapshot
-	}
-
-	indexed, ok := ms.contextIndex[context]
+	indexed, ok := ms.contextIndex[ctx]
 	if !ok {
 		return nil
 	}
-	snapshot := make([]*Memory, 0, len(indexed))
+	snapshot := make([]*cachedMemory, 0, len(indexed))
 	for _, m := range indexed {
 		snapshot = append(snapshot, m)
 	}
@@ -73,7 +66,15 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 	}
 
-	const minScore = 0.05
+	const (
+		minScore = 0.05
+
+		// Recall scoring weights: weightedScore = rawScore * (baseW + importance*importanceW + confidence*confidenceW) + freshness*freshnessW
+		baseW       = 0.45
+		importanceW = 0.35
+		confidenceW = 0.20
+		freshnessW  = 0.03
+	)
 
 	var results []*SearchResult
 	useHeap := limit > 0
@@ -87,11 +88,11 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	now := time.Now()
 
 	for _, m := range snapshot {
-		if !ms.matchFilters(m, filters) {
+		if !ms.matchCachedFilters(m, filters) {
 			continue
 		}
 
-		trust := deriveTrustMetadata(m, now)
+		trust := deriveTrustMetadataFromCached(m, now)
 
 		var score float64
 		if len(queryEmbedding) > 0 && len(m.Embedding) > 0 && m.EmbeddingModel != "" && m.EmbeddingModel == queryModelID {
@@ -103,13 +104,14 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			score = ms.textMatchScore(query, m)
 		}
 
-		weightedScore := score*(0.45+m.Importance*0.35+trust.Confidence*0.20) + trust.FreshnessScore*0.03
+		weightedScore := score*(baseW+m.Importance*importanceW+trust.Confidence*confidenceW) + trust.FreshnessScore*freshnessW
 		if weightedScore < minScore {
 			continue
 		}
 
 		candidate := &SearchResult{
-			Memory: m,
+			// We'll fill the full Memory later for the top results
+			Memory: &Memory{ID: m.ID},
 			Score:  weightedScore,
 			Trust:  trust,
 		}
@@ -137,10 +139,22 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		return results[i].Score > results[j].Score
 	})
 
+	// Fetch full Memory objects for the final results
 	ids := make([]string, len(results))
 	for i, r := range results {
-		r.Memory = copyMemory(r.Memory)
 		ids[i] = r.Memory.ID
+	}
+
+	if len(ids) > 0 {
+		memMap, err := ms.getBatch(ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range results {
+			if m, ok := memMap[r.Memory.ID]; ok {
+				r.Memory = m
+			}
+		}
 	}
 
 	select {
@@ -159,8 +173,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	return results, nil
 }
 
-// matchFilters checks if a memory matches the filters.
-func (ms *Store) matchFilters(m *Memory, filters Filters) bool {
+func (ms *Store) matchCachedFilters(m *cachedMemory, filters Filters) bool {
 	if filters.Type != "" && m.Type != filters.Type {
 		return false
 	}
@@ -194,37 +207,40 @@ func (ms *Store) matchFilters(m *Memory, filters Filters) bool {
 	return true
 }
 
-// textMatchScore calculates a simple text matching score.
-func (ms *Store) textMatchScore(query string, m *Memory) float64 {
+func (ms *Store) textMatchScore(query string, m *cachedMemory) float64 {
 	queryLower := strings.ToLower(query)
-	contentLower := strings.ToLower(m.Content)
 	titleLower := strings.ToLower(m.Title)
+	contentLower := strings.ToLower(m.Content)
 
 	score := 0.0
-	if strings.Contains(contentLower, queryLower) {
-		score += 0.5
-	}
-	if strings.Contains(titleLower, queryLower) {
-		score += 0.7
+	if titleLower != "" && strings.Contains(titleLower, queryLower) {
+		score += 0.6
+	} else if contentLower != "" && strings.Contains(contentLower, queryLower) {
+		score += 0.3
 	}
 
 	queryWords := scoring.TokenizeWords(queryLower)
-	contentWords := scoring.TokenizeWords(contentLower)
+	if len(queryWords) == 0 {
+		return score
+	}
+
+	// Optimization: build a map of content and title words for O(1) matching
+	wordSet := make(map[string]struct{})
+	for _, w := range scoring.TokenizeWords(titleLower) {
+		wordSet[w] = struct{}{}
+	}
+	for _, w := range scoring.TokenizeWords(contentLower) {
+		wordSet[w] = struct{}{}
+	}
 
 	matchCount := 0
 	for _, qw := range queryWords {
-		for _, cw := range contentWords {
-			if qw == cw {
-				matchCount++
-				break
-			}
+		if _, ok := wordSet[qw]; ok {
+			matchCount++
 		}
 	}
 
-	if len(queryWords) > 0 {
-		score += float64(matchCount) / float64(len(queryWords)) * 0.3
-	}
-
+	score += (float64(matchCount) / float64(len(queryWords))) * 0.4
 	return score
 }
 
@@ -282,80 +298,209 @@ func (ms *Store) flushAccessStats(ids []string) {
 
 	now := time.Now()
 
-	ms.mu.Lock()
-	for _, id := range ids {
-		if m, exists := ms.memories[id]; exists {
-			updated := copyMemory(m)
-			updated.AccessedAt = now
-			updated.AccessCount++
-			ms.cacheSetLocked(updated)
-		}
-	}
-	ms.mu.Unlock()
-
+	// Write to DB first — only update cache for IDs that succeed.
+	successIDs := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if _, err := ms.db.Exec(`
 			UPDATE memories SET accessed_at = ?, access_count = access_count + 1
 			WHERE id = ?
 		`, now, id); err != nil {
 			ms.logger.Warn("Failed to update access stats", zap.String("id", id), zap.Error(err))
+		} else {
+			successIDs = append(successIDs, id)
 		}
 	}
-}
 
-// Get retrieves a memory by ID from the in-memory cache (returns a copy).
-func (ms *Store) Get(id string) (*Memory, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-
-	m, exists := ms.memories[id]
-	if !exists {
-		return nil, fmt.Errorf("memory not found: %s", id)
+	if len(successIDs) == 0 {
+		return
 	}
 
-	return copyMemory(m), nil
+	ms.mu.Lock()
+	for _, id := range successIDs {
+		if m, exists := ms.memories[id]; exists {
+			m.AccessedAt = now
+			m.AccessCount++
+		}
+	}
+	ms.mu.Unlock()
+}
+
+// Get retrieves a memory by ID from the database.
+func (ms *Store) Get(id string) (*Memory, error) {
+	row := ms.db.QueryRow(`
+		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
+		       embedding, created_at, updated_at, accessed_at, access_count
+		FROM memories WHERE id = ?
+	`, id)
+
+	var m Memory
+	var tagsJSON, metadataJSON, embeddingModel sql.NullString
+	var embeddingBlob []byte
+	var createdAt, updatedAt, accessedAt sql.NullTime
+
+	err := row.Scan(
+		&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
+		&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
+		&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+	)
+	if err == sql.ErrNoRows {
+		return nil, &ErrNotFound{ID: id}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if tagsJSON.Valid && tagsJSON.String != "" {
+		_ = json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
+	}
+	if metadataJSON.Valid && metadataJSON.String != "" {
+		_ = json.Unmarshal([]byte(metadataJSON.String), &m.Metadata)
+	}
+	if len(embeddingBlob) > 0 {
+		m.Embedding, _ = unmarshalEmbeddingBinary(embeddingBlob)
+	}
+	if embeddingModel.Valid {
+		m.EmbeddingModel = embeddingModel.String
+	}
+	if createdAt.Valid {
+		m.CreatedAt = createdAt.Time
+	}
+	if updatedAt.Valid {
+		m.UpdatedAt = updatedAt.Time
+	}
+	if accessedAt.Valid {
+		m.AccessedAt = accessedAt.Time
+	}
+
+	return &m, nil
+}
+
+func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
+	if len(ids) == 0 {
+		return make(map[string]*Memory), nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`
+		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
+		       embedding, created_at, updated_at, accessed_at, access_count
+		FROM memories WHERE id IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	rows, err := ms.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]*Memory)
+	for rows.Next() {
+		var m Memory
+		var tagsJSON, metadataJSON, embeddingModel sql.NullString
+		var embeddingBlob []byte
+		var createdAt, updatedAt, accessedAt sql.NullTime
+
+		err := rows.Scan(
+			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
+			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
+			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+		)
+		if err != nil {
+			continue
+		}
+		if tagsJSON.Valid && tagsJSON.String != "" {
+			_ = json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
+		}
+		if metadataJSON.Valid && metadataJSON.String != "" {
+			_ = json.Unmarshal([]byte(metadataJSON.String), &m.Metadata)
+		}
+		if len(embeddingBlob) > 0 {
+			m.Embedding, _ = unmarshalEmbeddingBinary(embeddingBlob)
+		}
+		if embeddingModel.Valid {
+			m.EmbeddingModel = embeddingModel.String
+		}
+		if createdAt.Valid {
+			m.CreatedAt = createdAt.Time
+		}
+		if updatedAt.Valid {
+			m.UpdatedAt = updatedAt.Time
+		}
+		if accessedAt.Valid {
+			m.AccessedAt = accessedAt.Time
+		}
+		result[m.ID] = &m
+	}
+	return result, nil
 }
 
 // List returns memories matching the given filters, sorted by update time descending.
 func (ms *Store) List(ctx context.Context, filters Filters, limit int) ([]*Memory, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
 
-	var results []*Memory
+	var filteredIDs []string
+	idToCached := make(map[string]*cachedMemory)
 	for _, m := range snapshot {
-		if ms.matchFilters(m, filters) {
+		if ms.matchCachedFilters(m, filters) {
+			filteredIDs = append(filteredIDs, m.ID)
+			idToCached[m.ID] = m
+		}
+	}
+
+	sort.Slice(filteredIDs, func(i, j int) bool {
+		return idToCached[filteredIDs[i]].UpdatedAt.After(idToCached[filteredIDs[j]].UpdatedAt)
+	})
+
+	if limit > 0 && len(filteredIDs) > limit {
+		filteredIDs = filteredIDs[:limit]
+	}
+
+	memMap, err := ms.getBatch(filteredIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*Memory, 0, len(filteredIDs))
+	for _, id := range filteredIDs {
+		if m, ok := memMap[id]; ok {
 			results = append(results, m)
 		}
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
-	})
-
-	if limit > 0 && len(results) > limit {
-		results = results[:limit]
-	}
-
-	copies := make([]*Memory, 0, len(results))
-	for _, m := range results {
-		copies = append(copies, copyMemory(m))
-	}
-
-	return copies, nil
+	return results, nil
 }
 
 // ExportAll returns all memories sorted by CreatedAt ascending.
 func (ms *Store) ExportAll(ctx context.Context) ([]*Memory, error) {
-	result := ms.snapshotReadonlyMemories()
+	snapshot := ms.snapshotReadonlyMemories()
 
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
+	sort.Slice(snapshot, func(i, j int) bool {
+		return snapshot[i].CreatedAt.Before(snapshot[j].CreatedAt)
 	})
 
-	copies := make([]*Memory, 0, len(result))
-	for _, m := range result {
-		copies = append(copies, copyMemory(m))
+	ids := make([]string, len(snapshot))
+	for i, m := range snapshot {
+		ids[i] = m.ID
 	}
-	return copies, nil
+
+	// For large exports, we might want to stream or batch this.
+	// But let's keep it simple for now.
+	memMap, err := ms.getBatch(ids)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*Memory, 0, len(ids))
+	for _, id := range ids {
+		if m, ok := memMap[id]; ok {
+			results = append(results, m)
+		}
+	}
+	return results, nil
 }
 
 // Count returns the total number of stored memories.

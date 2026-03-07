@@ -56,7 +56,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		}
 
 		ct := r.Header.Get("Content-Type")
-		if ct != "" && !strings.HasPrefix(ct, "application/json") {
+		if !strings.HasPrefix(ct, "application/json") {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
@@ -80,6 +80,9 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 	})
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeHTTPRequest(w, r, authToken) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "ok",
 			"rag_available":    server.ragEngine != nil,
@@ -105,7 +108,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 			return
 		}
 		ct := r.Header.Get("Content-Type")
-		if ct != "" && !strings.HasPrefix(ct, "application/json") {
+		if !strings.HasPrefix(ct, "application/json") {
 			http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 			return
 		}
@@ -226,5 +229,9 @@ func authorizeHTTPRequest(w http.ResponseWriter, r *http.Request, authToken stri
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		// Connection likely closed; log at debug level would be ideal
+		// but we only have the http.ResponseWriter here.
+		_ = err
+	}
 }

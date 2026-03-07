@@ -15,7 +15,7 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
-	if err := NormalizeMemoryForStore(m); err != nil {
+	if err := m.Validate(); err != nil {
 		return err
 	}
 
@@ -43,7 +43,7 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	}
 
 	ms.mu.Lock()
-	ms.cacheSetLocked(copyMemory(m))
+	ms.cacheSetLocked(toCachedMemory(m))
 	ms.mu.Unlock()
 
 	ms.logger.Info("Memory stored",
@@ -59,11 +59,9 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
-	ms.mu.RLock()
-	current, exists := ms.memories[id]
-	ms.mu.RUnlock()
-	if !exists {
-		return fmt.Errorf("memory not found: %s", id)
+	current, err := ms.Get(id)
+	if err != nil {
+		return err
 	}
 
 	m := copyMemory(current)
@@ -110,11 +108,11 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 			}
 			mergedMetadata[k] = v
 		}
-		m.Metadata = normalizeMetadata(mergedMetadata)
+		m.Metadata = NormalizeMetadata(mergedMetadata)
 	}
 
 	m.UpdatedAt = time.Now()
-	if err := NormalizeMemoryForStore(m); err != nil {
+	if err := m.Validate(); err != nil {
 		return err
 	}
 
@@ -123,7 +121,7 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	}
 
 	ms.mu.Lock()
-	ms.cacheSetLocked(m)
+	ms.cacheSetLocked(toCachedMemory(m))
 	ms.mu.Unlock()
 
 	ms.logger.Info("Memory updated", zap.String("id", id))
@@ -144,13 +142,6 @@ type Update struct {
 func (ms *Store) Delete(ctx context.Context, id string) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
-
-	ms.mu.RLock()
-	_, exists := ms.memories[id]
-	ms.mu.RUnlock()
-	if !exists {
-		return fmt.Errorf("memory not found: %s", id)
-	}
 
 	if _, err := ms.db.Exec("DELETE FROM memories WHERE id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete memory: %w", err)
@@ -260,16 +251,13 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 
 	primaryID = strings.TrimSpace(primaryID)
 	if primaryID == "" {
-		return nil, fmt.Errorf("primary memory id is required")
+		return nil, &ErrValidation{Message: "primary memory id is required"}
 	}
 
-	ms.mu.RLock()
-	primaryCurrent, exists := ms.memories[primaryID]
-	ms.mu.RUnlock()
-	if !exists {
-		return nil, fmt.Errorf("memory not found: %s", primaryID)
+	primary, err := ms.Get(primaryID)
+	if err != nil {
+		return nil, err
 	}
-	primary := copyMemory(primaryCurrent)
 
 	seen := map[string]struct{}{primaryID: {}}
 	duplicates := make([]*Memory, 0, len(duplicateIDs))
@@ -283,18 +271,15 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 			continue
 		}
 		seen[duplicateID] = struct{}{}
-		ms.mu.RLock()
-		duplicateCurrent, exists := ms.memories[duplicateID]
-		ms.mu.RUnlock()
-		if !exists {
-			return nil, fmt.Errorf("memory not found: %s", duplicateID)
+		duplicate, err := ms.Get(duplicateID)
+		if err != nil {
+			return nil, err
 		}
-		duplicate := copyMemory(duplicateCurrent)
 		duplicates = append(duplicates, duplicate)
 		normalizedDuplicateIDs = append(normalizedDuplicateIDs, duplicateID)
 	}
 	if len(duplicates) == 0 {
-		return nil, fmt.Errorf("at least one duplicate memory id is required")
+		return nil, &ErrValidation{Message: "at least one duplicate memory id is required"}
 	}
 
 	now := time.Now()
@@ -313,13 +298,13 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	tags := append([]string(nil), primary.Tags...)
 	mergedContent := mergeContent(primary.Content, duplicates)
 	for _, duplicate := range duplicates {
-		tags = unionStrings(tags, duplicate.Tags)
+		tags = UnionStrings(tags, duplicate.Tags)
 	}
 
 	updatedPrimary := copyMemory(primary)
 	updatedPrimary.Content = mergedContent
 	updatedPrimary.Tags = tags
-	updatedPrimary.Metadata = normalizeMetadata(metadata)
+	updatedPrimary.Metadata = NormalizeMetadata(metadata)
 	updatedPrimary.UpdatedAt = now
 	if updatedPrimary.Content != primary.Content {
 		updatedPrimary.Embedding = nil
@@ -334,7 +319,7 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 			}
 		}
 	}
-	if err := NormalizeMemoryForStore(updatedPrimary); err != nil {
+	if err := updatedPrimary.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -357,9 +342,9 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 			importance = 0.10
 		}
 		updatedDuplicate.Importance = importance
-		updatedDuplicate.Metadata = normalizeMetadata(duplicateMetadata)
+		updatedDuplicate.Metadata = NormalizeMetadata(duplicateMetadata)
 		updatedDuplicate.UpdatedAt = now
-		if err := NormalizeMemoryForStore(updatedDuplicate); err != nil {
+		if err := updatedDuplicate.Validate(); err != nil {
 			return nil, err
 		}
 		updatedDuplicates = append(updatedDuplicates, updatedDuplicate)
@@ -385,9 +370,9 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	}
 
 	ms.mu.Lock()
-	ms.cacheSetLocked(updatedPrimary)
+	ms.cacheSetLocked(toCachedMemory(updatedPrimary))
 	for _, duplicate := range updatedDuplicates {
-		ms.cacheSetLocked(duplicate)
+		ms.cacheSetLocked(toCachedMemory(duplicate))
 	}
 	ms.mu.Unlock()
 
@@ -424,7 +409,15 @@ func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 	}
 
 	for _, m := range snapshot {
-		embedResult, err := ms.embedder.EmbedDetailed(ctx, m.Content)
+		// We need content for re-embedding
+		full, err := ms.Get(m.ID)
+		if err != nil {
+			result.Failed++
+			result.FailedByID[m.ID] = err.Error()
+			continue
+		}
+
+		embedResult, err := ms.embedder.EmbedDetailed(ctx, full.Content)
 		if err != nil {
 			result.Failed++
 			result.FailedByID[m.ID] = err.Error()
@@ -467,11 +460,9 @@ func (ms *Store) updateStoredEmbedding(id string, embedding []float32, embedding
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
-	ms.mu.RLock()
-	current, exists := ms.memories[id]
-	ms.mu.RUnlock()
-	if !exists {
-		return fmt.Errorf("memory not found: %s", id)
+	current, err := ms.Get(id)
+	if err != nil {
+		return err
 	}
 	updated := copyMemory(current)
 	updated.EmbeddingModel = embeddingModel
@@ -483,7 +474,7 @@ func (ms *Store) updateStoredEmbedding(id string, embedding []float32, embedding
 	}
 
 	ms.mu.Lock()
-	ms.cacheSetLocked(updated)
+	ms.cacheSetLocked(toCachedMemory(updated))
 	ms.mu.Unlock()
 	return nil
 }

@@ -14,11 +14,11 @@ func buildSessionDelta(summary memory.SessionSummary) (memory.SessionDelta, []*e
 	delta := memory.SessionDelta{
 		Summary:             &summary,
 		ExtractedEntities:   uniqueEngineeringTypes(collectEntities(segments)...),
-		TouchedServices:     uniqueStrings(append([]string{summary.Service}, collectTouchedServices(summary.Summary)...)...),
-		TouchedPaths:        uniqueStrings(collectPaths(summary.Summary)...),
-		SuspectedChanges:    uniqueStrings(collectSuspectedChanges(segments)...),
-		InferredTopics:      uniqueStrings(append([]string{string(summary.Mode), summary.Context}, collectTopics(segments)...)...),
-		Risks:               uniqueStrings(collectRisks(segments)...),
+		TouchedServices:     memory.UnionStrings(append([]string{summary.Service}, collectTouchedServices(summary.Summary)...)),
+		TouchedPaths:        memory.UnionStrings(collectPaths(summary.Summary)),
+		SuspectedChanges:    memory.UnionStrings(collectSuspectedChanges(segments)),
+		InferredTopics:      memory.UnionStrings(append([]string{string(summary.Mode), summary.Context}, collectTopics(segments)...)),
+		Risks:               memory.UnionStrings(collectRisks(segments)),
 		LinkedExistingItems: nil,
 	}
 
@@ -43,7 +43,7 @@ func buildSessionDelta(summary memory.SessionSummary) (memory.SessionDelta, []*e
 			Tags:       memory.BuildEngineeringTags(entity, summary.Service, "", segment.status, segment.reviewRequired, append(summary.Tags, "session-close")),
 			Metadata:   metadata,
 		}
-		if err := memory.NormalizeMemoryForStore(candidate); err != nil {
+		if err := candidate.Validate(); err != nil {
 			continue
 		}
 		candidates = append(candidates, &extractedCandidate{
@@ -121,7 +121,7 @@ func (s *Service) planActions(ctx context.Context, summary memory.SessionSummary
 		actions = append(actions, action)
 	}
 
-	return actions, uniqueStrings(linked...), nil
+	return actions, memory.UnionStrings(linked), nil
 }
 
 func bestExistingMatch(candidate *memory.Memory, existing []*memory.Memory) (*memory.Memory, float64, []string) {

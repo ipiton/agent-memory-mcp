@@ -15,7 +15,7 @@ func ValidateType(value Type, defaultType Type) (Type, error) {
 	case TypeEpisodic, TypeSemantic, TypeProcedural, TypeWorking:
 		return value, nil
 	default:
-		return "", fmt.Errorf("invalid memory type %q (expected episodic, semantic, procedural, or working)", value)
+		return "", &ErrValidation{Message: fmt.Sprintf("invalid memory type %q (expected episodic, semantic, procedural, or working)", value)}
 	}
 }
 
@@ -43,38 +43,6 @@ func NormalizeTags(tags []string) []string {
 	return result
 }
 
-func NormalizeMemoryForStore(m *Memory) error {
-	if m == nil {
-		return fmt.Errorf("memory is required")
-	}
-
-	m.Content = strings.TrimSpace(m.Content)
-	if m.Content == "" {
-		return fmt.Errorf("content parameter is required")
-	}
-
-	normalizedType, err := ValidateType(m.Type, TypeSemantic)
-	if err != nil {
-		return err
-	}
-	m.Type = normalizedType
-	m.Title = strings.TrimSpace(m.Title)
-	m.Context = strings.TrimSpace(m.Context)
-	m.Tags = NormalizeTags(m.Tags)
-	normalizedMetadata, err := normalizeEngineeringMetadata(m.Metadata, m.Tags, m.Type)
-	if err != nil {
-		return err
-	}
-	m.Metadata = normalizedMetadata
-	m.Tags = normalizeEngineeringTags(m.Tags, m.Metadata)
-
-	if m.Importance < 0 || m.Importance > 1 {
-		return fmt.Errorf("importance must be between 0.0 and 1.0")
-	}
-
-	return nil
-}
-
 func DisplayTitle(m *Memory, maxLen int) string {
 	if m == nil {
 		return ""
@@ -94,7 +62,8 @@ func DisplayTitle(m *Memory, maxLen int) string {
 	return value
 }
 
-func normalizeMetadata(metadata map[string]string) map[string]string {
+// NormalizeMetadata trims keys/values and drops empty entries.
+func NormalizeMetadata(metadata map[string]string) map[string]string {
 	if len(metadata) == 0 {
 		return nil
 	}

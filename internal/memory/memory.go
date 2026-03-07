@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,63 @@ type Memory struct {
 	AccessCount    int               `json:"access_count"` // How many times retrieved
 }
 
+// Validate ensures the memory entry is consistent and ready for storage.
+func (m *Memory) Validate() error {
+	if m == nil {
+		return &ErrValidation{Message: "memory is required"}
+	}
+
+	content := strings.TrimSpace(m.Content)
+	if content == "" {
+		return &ErrValidation{Message: "content parameter is required"}
+	}
+	m.Content = content
+
+	normalizedType, err := ValidateType(m.Type, TypeSemantic)
+	if err != nil {
+		return err
+	}
+	m.Type = normalizedType
+
+	m.Title = strings.TrimSpace(m.Title)
+	m.Context = strings.TrimSpace(m.Context)
+	m.Tags = NormalizeTags(m.Tags)
+
+	normalizedMetadata, err := normalizeEngineeringMetadata(m.Metadata, m.Tags, m.Type)
+	if err != nil {
+		return err
+	}
+	m.Metadata = normalizedMetadata
+	m.Tags = normalizeEngineeringTags(m.Tags, m.Metadata)
+
+	if m.Importance < 0 || m.Importance > 1 {
+		return &ErrValidation{Message: "importance must be between 0.0 and 1.0"}
+	}
+
+	return nil
+}
+
+// cachedMemory is a RAM-efficient representation of a Memory entry for fast filtering and search.
+// Content is NOT cached in RAM to save space.
+type cachedMemory struct {
+	ID             string
+	Content        string
+	Type           Type
+	Title          string
+	Tags           []string
+	Context        string
+	Lifecycle      LifecycleStatus
+	KnowledgeLayer string
+	Owner          string
+	Importance     float64
+	Embedding      []float32
+	EmbeddingModel string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	AccessedAt     time.Time
+	AccessCount    int
+}
+
 // Store provides persistent memory storage backed by SQLite with in-memory vector search.
 //
 // Lock ordering: writeMu MUST be acquired before mu. Never hold mu while acquiring writeMu.
@@ -56,10 +114,10 @@ type Store struct {
 	mu       sync.RWMutex // protects in-memory cache (memories, contextIndex)
 	accessCh chan []string // batched access stats updates
 	accessWG sync.WaitGroup
-	// In-memory cache for fast search
-	memories     map[string]*Memory
-	contextIndex map[string]map[string]*Memory // context → id → *Memory
-	loadErrors   int                           // count of unmarshal errors during cache load
+	// In-memory cache for fast search (minimal fields)
+	memories     map[string]*cachedMemory
+	contextIndex map[string]map[string]*cachedMemory // context → id → *cachedMemory
+	loadErrors   int                                 // count of unmarshal errors during cache load
 }
 
 // NewStore creates a new Store backed by a SQLite database at dbPath.
@@ -114,14 +172,20 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 		logger:       logger,
 		embedder:     embedder,
 		accessCh:     make(chan []string, 64),
-		memories:     make(map[string]*Memory),
-		contextIndex: make(map[string]map[string]*Memory),
+		memories:     make(map[string]*cachedMemory),
+		contextIndex: make(map[string]map[string]*cachedMemory),
 	}
 
-	// Load memories into cache
+	// Load memories into cache — must succeed before starting background workers.
 	if err := store.loadMemoriesToCache(); err != nil {
+		close(store.accessCh)
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to load memories: %w", err)
+	}
+	if errs := store.LoadErrors(); errs > 0 {
+		logger.Warn("Some memories failed to load from database",
+			zap.Int("load_errors", errs),
+		)
 	}
 
 	store.accessWG.Add(1)
@@ -132,11 +196,10 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 	return store, nil
 }
 
-// loadMemoriesToCache loads all memories from SQLite into memory cache
 func (ms *Store) loadMemoriesToCache() error {
 	rows, err := ms.db.Query(`
-		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
-		       embedding, created_at, updated_at, accessed_at, access_count
+		SELECT id, content, type, title, tags, context, importance, metadata,
+		       embedding_model, embedding, created_at, updated_at, accessed_at, access_count
 		FROM memories
 	`)
 	if err != nil {
@@ -147,12 +210,12 @@ func (ms *Store) loadMemoriesToCache() error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	ms.memories = make(map[string]*Memory)
-	ms.contextIndex = make(map[string]map[string]*Memory)
+	ms.memories = make(map[string]*cachedMemory)
+	ms.contextIndex = make(map[string]map[string]*cachedMemory)
 	ms.loadErrors = 0
 
 	for rows.Next() {
-		var m Memory
+		var m cachedMemory
 		var tagsJSON, metadataJSON, embeddingModel sql.NullString
 		var embeddingBlob []byte
 		var createdAt, updatedAt, accessedAt sql.NullTime
@@ -176,19 +239,32 @@ func (ms *Store) loadMemoriesToCache() error {
 			}
 		}
 
-		// Parse metadata
+		// Derived metadata for trust scoring
+		metadata := make(map[string]string)
 		if metadataJSON.Valid && metadataJSON.String != "" {
-			if err := json.Unmarshal([]byte(metadataJSON.String), &m.Metadata); err != nil {
-				ms.logger.Warn("Failed to unmarshal metadata", zap.String("id", m.ID), zap.Error(err))
-				ms.loadErrors++
-			}
+			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
+		}
+		m.Lifecycle = LifecycleStatusOf(&Memory{Type: m.Type, Metadata: metadata})
+		m.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
+		m.Owner = strings.TrimSpace(metadata[MetadataOwner])
+		if m.KnowledgeLayer == "" && m.Lifecycle == LifecycleCanonical {
+			m.KnowledgeLayer = "canonical"
+		}
+		if m.KnowledgeLayer == "" {
+			m.KnowledgeLayer = "raw"
+		}
+		if m.Owner == "" {
+			m.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(&m))
 		}
 
-		// Parse embedding
+		// Parse embedding (binary format)
 		if len(embeddingBlob) > 0 {
-			if err := json.Unmarshal(embeddingBlob, &m.Embedding); err != nil {
+			parsed, err := unmarshalEmbeddingBinary(embeddingBlob)
+			if err != nil {
 				ms.logger.Warn("Failed to unmarshal embedding", zap.String("id", m.ID), zap.Error(err))
 				ms.loadErrors++
+			} else {
+				m.Embedding = parsed
 			}
 		}
 		if embeddingModel.Valid {
@@ -206,8 +282,7 @@ func (ms *Store) loadMemoriesToCache() error {
 			m.AccessedAt = accessedAt.Time
 		}
 
-		cp := copyMemory(&m)
-		ms.cacheSetLocked(cp)
+		ms.cacheSetLocked(&m)
 	}
 
 	return rows.Err()
@@ -215,7 +290,7 @@ func (ms *Store) loadMemoriesToCache() error {
 
 // cacheSetLocked adds or updates a memory in the cache and context index.
 // Caller MUST hold ms.mu for writing.
-func (ms *Store) cacheSetLocked(m *Memory) {
+func (ms *Store) cacheSetLocked(m *cachedMemory) {
 	if old, exists := ms.memories[m.ID]; exists && old.Context != m.Context {
 		if idx, ok := ms.contextIndex[old.Context]; ok {
 			delete(idx, m.ID)
@@ -227,10 +302,41 @@ func (ms *Store) cacheSetLocked(m *Memory) {
 	ms.memories[m.ID] = m
 	if m.Context != "" {
 		if ms.contextIndex[m.Context] == nil {
-			ms.contextIndex[m.Context] = make(map[string]*Memory)
+			ms.contextIndex[m.Context] = make(map[string]*cachedMemory)
 		}
 		ms.contextIndex[m.Context][m.ID] = m
 	}
+}
+
+func toCachedMemory(m *Memory) *cachedMemory {
+	cm := &cachedMemory{
+		ID:             m.ID,
+		Content:        m.Content,
+		Type:           m.Type,
+		Title:          m.Title,
+		Tags:           m.Tags,
+		Context:        m.Context,
+		Importance:     m.Importance,
+		Embedding:      m.Embedding,
+		EmbeddingModel: m.EmbeddingModel,
+		CreatedAt:      m.CreatedAt,
+		UpdatedAt:      m.UpdatedAt,
+		AccessedAt:     m.AccessedAt,
+		AccessCount:    m.AccessCount,
+	}
+	cm.Lifecycle = LifecycleStatusOf(m)
+	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]))
+	cm.Owner = strings.TrimSpace(m.Metadata[MetadataOwner])
+	if cm.KnowledgeLayer == "" && cm.Lifecycle == LifecycleCanonical {
+		cm.KnowledgeLayer = "canonical"
+	}
+	if cm.KnowledgeLayer == "" {
+		cm.KnowledgeLayer = "raw"
+	}
+	if cm.Owner == "" {
+		cm.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(cm))
+	}
+	return cm
 }
 
 // cacheDeleteLocked removes a memory from the cache and context index.
@@ -339,6 +445,9 @@ func ensureMemorySchema(db *sql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE memories ADD COLUMN embedding_model TEXT`); err != nil {
 			return err
 		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_embedding_model ON memories(embedding_model)`); err != nil {
+		return err
 	}
 	return nil
 }

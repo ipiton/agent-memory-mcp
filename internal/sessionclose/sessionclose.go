@@ -233,7 +233,7 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 		}
 		mem.Metadata[key] = value
 	}
-	for key, value := range normalizeStringMap(opts.Metadata) {
+	for key, value := range memory.NormalizeMetadata(opts.Metadata) {
 		if isProtectedSessionMetadataKey(key) && key != memory.MetadataRecordKind {
 			continue
 		}
@@ -251,7 +251,7 @@ func normalizeSummary(summary memory.SessionSummary, now time.Time) (memory.Sess
 	if summary.Summary == "" {
 		return memory.SessionSummary{}, fmt.Errorf("session summary is required")
 	}
-	summary.Metadata = normalizeStringMap(summary.Metadata)
+	summary.Metadata = memory.NormalizeMetadata(summary.Metadata)
 	modeValue := strings.TrimSpace(string(summary.Mode))
 	if modeValue == "" {
 		modeValue = strings.TrimSpace(summary.Metadata[memory.MetadataSessionMode])

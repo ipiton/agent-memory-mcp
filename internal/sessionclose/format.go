@@ -189,7 +189,7 @@ func annotateHandling(actions []CandidateAction, mode memory.SessionMode) []Cand
 		handling, modeTrace := classifyActionHandling(actions[i], mode)
 		actions[i].Handling = handling
 		if len(modeTrace) > 0 {
-			actions[i].DecisionTrace = uniqueStrings(append(actions[i].DecisionTrace, modeTrace...)...)
+			actions[i].DecisionTrace = memory.UnionStrings(append(actions[i].DecisionTrace, modeTrace...))
 		}
 	}
 	return actions

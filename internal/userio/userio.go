@@ -70,14 +70,6 @@ func NormalizeTags(tags []string) []string {
 	return memory.NormalizeTags(tags)
 }
 
-func FormatMemoryTrust(tm *trust.Metadata) string {
-	return FormatTrust(tm)
-}
-
-func FormatDocumentTrust(tm *trust.Metadata) string {
-	return FormatTrust(tm)
-}
-
 func FormatTrust(tm *trust.Metadata) string {
 	if tm == nil {
 		return ""

@@ -111,6 +111,13 @@ func New(config Config, logger *zap.Logger) (*Embedder, error) {
 	}, nil
 }
 
+// Close releases resources held by the Embedder, including idle HTTP connections.
+func (e *Embedder) Close() {
+	if e != nil && e.client != nil {
+		e.client.CloseIdleConnections()
+	}
+}
+
 func (e *Embedder) localOnlyMode() bool {
 	return strings.EqualFold(e.config.Mode, "local-only")
 }

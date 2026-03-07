@@ -72,36 +72,36 @@ func (s *MCPServer) handleResourcesRead(params json.RawMessage) (any, *rpcError)
 		s.stats.Log(event)
 	}()
 	if err := json.Unmarshal(params, &req); err != nil {
-		rErr = &rpcError{Code: -32602, Message: "invalid params", Data: err.Error()}
+		rErr = &rpcError{Code: rpcErrInvalidParams, Message: "invalid params", Data: err.Error()}
 		return nil, rErr
 	}
 	if req.URI == "" {
-		rErr = &rpcError{Code: -32602, Message: "uri is required"}
+		rErr = &rpcError{Code: rpcErrInvalidParams, Message: "uri is required"}
 		return nil, rErr
 	}
 	path, err := parseURI(req.URI)
 	if err != nil {
-		rErr = &rpcError{Code: -32602, Message: err.Error()}
+		rErr = &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		return nil, rErr
 	}
 	relPath = path
 
 	abs, err := s.pathGuard.Resolve(path)
 	if err != nil {
-		rErr = &rpcError{Code: -32602, Message: err.Error()}
+		rErr = &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		return nil, rErr
 	}
 
 	info, err := os.Stat(abs)
 	if err != nil {
-		rErr = &rpcError{Code: -32603, Message: "failed to stat path", Data: err.Error()}
+		rErr = &rpcError{Code: rpcErrInternalError, Message: "failed to stat path", Data: err.Error()}
 		return nil, rErr
 	}
 
 	if info.IsDir() {
 		listing, err := listDirectory(abs, s.config.MaxDepth, s.pathGuard)
 		if err != nil {
-			rErr = &rpcError{Code: -32603, Message: "failed to list directory", Data: err.Error()}
+			rErr = &rpcError{Code: rpcErrInternalError, Message: "failed to list directory", Data: err.Error()}
 			return nil, rErr
 		}
 		return map[string]any{"contents": []resourceContent{
@@ -115,7 +115,7 @@ func (s *MCPServer) handleResourcesRead(params json.RawMessage) (any, *rpcError)
 
 	content, _, err := search.ReadTextFile(abs, 0, s.config.MaxFileBytes, info.Size())
 	if err != nil {
-		rErr = &rpcError{Code: -32603, Message: err.Error()}
+		rErr = &rpcError{Code: rpcErrInternalError, Message: err.Error()}
 		return nil, rErr
 	}
 

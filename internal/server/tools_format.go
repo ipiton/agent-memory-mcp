@@ -8,7 +8,6 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
-	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -225,7 +224,7 @@ func (s *MCPServer) formatProjectBankView(result *memory.ProjectBankViewResult) 
 				fmt.Fprintf(&buf, "   Tags: %s\n", strings.Join(item.Tags, ", "))
 			}
 			if item.Trust != nil {
-				fmt.Fprintf(&buf, "   Trust: %s\n", formatMemoryTrust(item.Trust))
+				fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(item.Trust))
 			}
 			if !item.LastVerifiedAt.IsZero() {
 				fmt.Fprintf(&buf, "   Last verified: %s\n", item.LastVerifiedAt.UTC().Format(time.RFC3339))
@@ -260,7 +259,7 @@ func formatCanonicalKnowledgeList(entries []*memory.CanonicalKnowledge, context 
 			fmt.Fprintf(&buf, "   Tags: %v\n", entry.Tags)
 		}
 		if entry.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatMemoryTrust(entry.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(entry.Trust))
 		}
 		fmt.Fprintf(&buf, "   %s\n", truncateText(entry.Summary, 220))
 	}
@@ -291,7 +290,7 @@ func formatCanonicalKnowledgeRecall(query string, results []*memory.CanonicalSea
 			fmt.Fprintf(&buf, "   Service: %s\n", entry.Service)
 		}
 		if entry.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatMemoryTrust(entry.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(entry.Trust))
 		}
 		fmt.Fprintf(&buf, "   %s\n", truncateText(entry.Summary, 220))
 	}
@@ -311,7 +310,7 @@ func (s *MCPServer) formatWorkflowMemoryResults(heading string, results []*memor
 			fmt.Fprintf(&buf, "   Tags: %v\n", mem.Tags)
 		}
 		if result.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatMemoryTrust(result.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(result.Trust))
 		}
 		fmt.Fprintf(&buf, "   %s\n", truncateText(mem.Content, 220))
 	}
@@ -343,7 +342,7 @@ func (s *MCPServer) formatWorkflowDocResults(heading string, results *rag.Search
 			fmt.Fprintf(&buf, "   Source type: %s\n", result.SourceType)
 		}
 		if result.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatDocTrust(result.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(result.Trust))
 		}
 		fmt.Fprintf(&buf, "   Path: %s\n", result.Path)
 		fmt.Fprintf(&buf, "   %s\n", result.Snippet)
@@ -385,7 +384,7 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 			fmt.Fprintf(&buf, "   Tags: %v\n", m.Tags)
 		}
 		if r.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatMemoryTrust(r.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(r.Trust))
 		}
 
 		snippet := m.Content
@@ -397,14 +396,6 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 	}
 
 	return buf.String()
-}
-
-func formatMemoryTrust(tm *trust.Metadata) string {
-	return userio.FormatTrust(tm)
-}
-
-func formatDocTrust(tm *trust.Metadata) string {
-	return userio.FormatTrust(tm)
 }
 
 func (s *MCPServer) formatMemoryList(memories []*memory.Memory) string {

@@ -79,7 +79,7 @@ func TestFormatTrustSummarySkipsZeroVerified(t *testing.T) {
 func TestFormatTrustWrappers(t *testing.T) {
 	verifiedAt := time.Date(2026, time.March, 2, 10, 30, 0, 0, time.UTC)
 
-	memTrust := FormatMemoryTrust(&trust.Metadata{
+	memTrust := FormatTrust(&trust.Metadata{
 		KnowledgeLayer: "canonical",
 		SourceType:     "decision",
 		Confidence:     0.93,
@@ -87,7 +87,7 @@ func TestFormatTrustWrappers(t *testing.T) {
 		Owner:          "platform",
 		LastVerifiedAt: verifiedAt,
 	})
-	docTrust := FormatDocumentTrust(&trust.Metadata{
+	docTrust := FormatTrust(&trust.Metadata{
 		KnowledgeLayer: "document",
 		SourceType:     "runbook",
 		Confidence:     0.88,

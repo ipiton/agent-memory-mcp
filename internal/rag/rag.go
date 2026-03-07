@@ -80,6 +80,7 @@ type Engine struct {
 	lastIndexCheck time.Time
 	stopWatcher    chan struct{}
 	stopOnce       sync.Once
+	bgWG           sync.WaitGroup // tracks background goroutines for clean shutdown
 }
 
 type docServiceConfig struct {
@@ -213,13 +214,21 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		if fileLogger != nil {
 			fileLogger.Info("Starting auto-indexing check")
 		}
-		go engine.autoIndexIfNeeded()
+		engine.bgWG.Add(1)
+		go func() {
+			defer engine.bgWG.Done()
+			engine.autoIndexIfNeeded()
+		}()
 
 		if cfg.FileWatcher {
 			if fileLogger != nil {
 				fileLogger.Info("Starting file watcher for auto-reindexing")
 			}
-			go engine.startFileWatcher()
+			engine.bgWG.Add(1)
+			go func() {
+				defer engine.bgWG.Done()
+				engine.startFileWatcher()
+			}()
 		}
 	}
 
@@ -549,7 +558,11 @@ func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map
 }
 
 func (re *Engine) autoIndexIfNeeded() {
-	time.Sleep(2 * time.Second)
+	select {
+	case <-time.After(2 * time.Second):
+	case <-re.stopWatcher:
+		return
+	}
 
 	if re.needsIndexing() {
 		re.logger.Info("Index needs updating, starting auto-indexing")
@@ -637,12 +650,14 @@ func (re *Engine) indexWithLock(trigger string) {
 	}
 }
 
-// Stop gracefully stops the Engine, terminating the file watcher.
+// Stop gracefully stops the Engine, terminating the file watcher
+// and waiting for background goroutines to finish.
 func (re *Engine) Stop() {
 	if re != nil {
 		re.stopOnce.Do(func() {
 			close(re.stopWatcher)
 		})
+		re.bgWG.Wait()
 	}
 }
 

@@ -17,12 +17,13 @@ func copyMetadata(metadata map[string]string) map[string]string {
 	return cloned
 }
 
-func unionStrings(values ...[]string) []string {
-	seen := make(map[string]struct{})
-	result := make([]string, 0)
+// UnionStrings deduplicates and sorts values from one or more slices.
+func UnionStrings[T ~string](values ...[]T) []T {
+	seen := make(map[T]struct{})
+	result := make([]T, 0)
 	for _, group := range values {
 		for _, value := range group {
-			value = strings.TrimSpace(value)
+			value = T(strings.TrimSpace(string(value)))
 			if value == "" {
 				continue
 			}
@@ -33,7 +34,7 @@ func unionStrings(values ...[]string) []string {
 			result = append(result, value)
 		}
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
 }
 
@@ -53,8 +54,11 @@ func splitCSV(value string) []string {
 }
 
 func joinCSVUnique(values ...[]string) string {
-	return strings.Join(unionStrings(values...), ",")
+	return strings.Join(UnionStrings(values...), ",")
 }
+
+// maxMergedContentLen limits merged content to prevent unbounded growth during merge operations.
+const maxMergedContentLen = 256 * 1024
 
 func mergeContent(primary string, duplicates []*Memory) string {
 	content := strings.TrimSpace(primary)
@@ -72,9 +76,13 @@ func mergeContent(primary string, duplicates []*Memory) string {
 		title := strings.TrimSpace(duplicate.Title)
 		if title != "" {
 			content += fmt.Sprintf("\n\nMerged note from %s:\n%s", title, duplicateContent)
-			continue
+		} else {
+			content += "\n\nMerged note:\n" + duplicateContent
 		}
-		content += "\n\nMerged note:\n" + duplicateContent
+		if len(content) > maxMergedContentLen {
+			content = content[:maxMergedContentLen] + "\n[truncated: merged content exceeded size limit]"
+			break
+		}
 	}
 	return content
 }

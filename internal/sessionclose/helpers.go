@@ -1,45 +1,13 @@
 package sessionclose
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
 
-func uniqueStrings(values ...string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
 func uniqueEngineeringTypes(values ...memory.EngineeringType) []memory.EngineeringType {
-	seen := make(map[memory.EngineeringType]struct{}, len(values))
-	result := make([]memory.EngineeringType, 0, len(values))
-	for _, value := range values {
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result
+	return memory.UnionStrings(values)
 }
 
 func lexicalOverlap(a string, b string) float64 {
@@ -70,18 +38,19 @@ func lexicalOverlap(a string, b string) float64 {
 	return float64(matches) / float64(denominator)
 }
 
+var punctuationReplacer = strings.NewReplacer(
+	":", " ",
+	";", " ",
+	",", " ",
+	".", " ",
+	"(", " ",
+	")", " ",
+	"/", " ",
+)
+
 func normalizeText(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	replacer := strings.NewReplacer(
-		":", " ",
-		";", " ",
-		",", " ",
-		".", " ",
-		"(", " ",
-		")", " ",
-		"/", " ",
-	)
-	value = replacer.Replace(value)
+	value = punctuationReplacer.Replace(value)
 	return strings.Join(strings.Fields(value), " ")
 }
 
@@ -111,11 +80,11 @@ func mergeMetadata(base map[string]string, extra map[string]string) map[string]s
 	if len(base) == 0 && len(extra) == 0 {
 		return nil
 	}
-	merged := normalizeStringMap(base)
+	merged := memory.NormalizeMetadata(base)
 	if merged == nil {
 		merged = make(map[string]string)
 	}
-	for key, value := range normalizeStringMap(extra) {
+	for key, value := range memory.NormalizeMetadata(extra) {
 		merged[key] = value
 	}
 	if len(merged) == 0 {
@@ -141,7 +110,7 @@ func sanitizeKnowledgeCandidate(candidate *memory.Memory) *memory.Memory {
 		sanitized.Tags = append(sanitized.Tags, tag)
 	}
 	sanitized.Tags = memory.NormalizeTags(sanitized.Tags)
-	sanitized.Metadata = normalizeStringMap(candidate.Metadata)
+	sanitized.Metadata = memory.NormalizeMetadata(candidate.Metadata)
 	delete(sanitized.Metadata, memory.MetadataRecordKind)
 	delete(sanitized.Metadata, memory.MetadataDerivedFrom)
 	delete(sanitized.Metadata, memory.MetadataSessionMode)
@@ -207,25 +176,6 @@ func rawSummaryTags(summary memory.SessionSummary) []string {
 		tags = append(tags, "service:"+summary.Service)
 	}
 	return memory.NormalizeTags(tags)
-}
-
-func normalizeStringMap(values map[string]string) map[string]string {
-	if len(values) == 0 {
-		return nil
-	}
-	normalized := make(map[string]string, len(values))
-	for key, value := range values {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key == "" || value == "" {
-			continue
-		}
-		normalized[key] = value
-	}
-	if len(normalized) == 0 {
-		return nil
-	}
-	return normalized
 }
 
 func isProtectedSessionMetadataKey(key string) bool {

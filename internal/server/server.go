@@ -28,6 +28,10 @@ const maxRequestBodyBytes = 10 * 1024 * 1024 // 10 MB
 
 const protocolVersion = "2024-11-05"
 
+// Version is set via ldflags at build time: -ldflags "-X ...server.Version=..."
+// Falls back to "dev" if not set.
+var Version = "dev"
+
 // JSON-RPC structures
 
 type rpcRequest struct {
@@ -58,6 +62,7 @@ type MCPServer struct {
 	stats          *stats.Logger
 	ragEngine      *rag.Engine
 	memoryStore    *memory.Store
+	embedder       *embedder.Embedder
 	fileLogger     *logger.FileLogger
 	sessionTracker *sessionTracker
 	toolHandlers   map[string]toolHandler
@@ -67,6 +72,7 @@ type MCPServer struct {
 func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	var ragEngine *rag.Engine
 	var memoryStore *memory.Store
+	var emb *embedder.Embedder
 	var fileLogger *logger.FileLogger
 
 	if cfg.LogPath != "" {
@@ -112,10 +118,10 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			fmt.Fprintf(os.Stderr, "warning: failed to create memory store directory: %v\n", err)
 		}
 
-		var emb *embedder.Embedder
 		var err error
 		emb, err = embedder.New(cfg.EmbedderConfig(), zap.NewNop())
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: embedder unavailable, memory will use text-only matching: %v\n", err)
 			if fileLogger != nil {
 				fileLogger.Warn("Embedder initialization failed, memory will use text-only matching", zap.Error(err))
 			}
@@ -131,6 +137,10 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 				)
 			}
 			memoryStore = nil
+			if emb != nil {
+				emb.Close()
+			}
+			emb = nil
 		} else {
 			if fileLogger != nil {
 				fileLogger.Info("Memory store initialized successfully",
@@ -154,6 +164,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		stats:          stats.NewLogger(cfg),
 		ragEngine:      ragEngine,
 		memoryStore:    memoryStore,
+		embedder:       emb,
 		fileLogger:     fileLogger,
 		sessionTracker: newSessionTracker(cfg, memoryStore, fileLogger),
 	}
@@ -289,7 +300,7 @@ func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 	case "tools/call":
 		return s.handleToolsCall(req.Params)
 	default:
-		return nil, &rpcError{Code: -32601, Message: "method not found"}
+		return nil, &rpcError{Code: rpcErrMethodNotFound, Message: "method not found"}
 	}
 }
 
@@ -306,7 +317,7 @@ func (s *MCPServer) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 		},
 		"serverInfo": map[string]any{
 			"name":    "agent-memory-mcp",
-			"version": "0.2.0",
+			"version": Version,
 		},
 	}, nil
 }
@@ -323,6 +334,9 @@ func (s *MCPServer) Shutdown() {
 		if err := s.memoryStore.Close(); err != nil && s.fileLogger != nil {
 			s.fileLogger.Warn("Failed to close memory store", zap.Error(err))
 		}
+	}
+	if s.embedder != nil {
+		s.embedder.Close()
 	}
 	if s.fileLogger != nil {
 		if err := s.fileLogger.Sync(); err != nil {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/paths"
 	"go.uber.org/zap"
 )
 
@@ -20,23 +21,8 @@ type documentService struct {
 	logger *zap.Logger
 }
 
-var defaultIndexExcludeDirs = map[string]struct{}{
-	".git":              {},
-	".idea":             {},
-	".vscode":           {},
-	".next":             {},
-	".terraform":        {},
-	".agent-memory":     {},
-	"node_modules":      {},
-	"vendor":            {},
-	"dist":              {},
-	"build":             {},
-	"coverage":          {},
-	"logs":              {},
-	"artifacts":         {},
-	"test-results":      {},
-	"playwright-report": {},
-}
+// defaultIndexExcludeDirs uses the shared exclude list from paths package.
+var defaultIndexExcludeDirs = paths.DefaultExcludeDirs
 
 var privateKeyBlockPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
 var inlineSecretPatterns = []*regexp.Regexp{

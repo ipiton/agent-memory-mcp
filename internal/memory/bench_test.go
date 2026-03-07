@@ -106,10 +106,9 @@ func BenchmarkTextMatchScore(b *testing.B) {
 	}
 	b.Cleanup(func() { _ = store.Close() })
 
-	mem := &Memory{
-		Content: "This is a detailed document about Kubernetes deployment strategies including blue-green and canary deployments with monitoring setup",
-		Title:   "Kubernetes deployment strategies",
-		Type:    TypeSemantic,
+	mem := &cachedMemory{
+		Title: "Kubernetes deployment strategies",
+		Type:  TypeSemantic,
 	}
 
 	b.ResetTimer()

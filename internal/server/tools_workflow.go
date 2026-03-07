@@ -8,6 +8,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
+	"github.com/ipiton/agent-memory-mcp/internal/review"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
@@ -19,10 +20,6 @@ type sessionAnalysisOptions struct {
 }
 
 func (s *MCPServer) callCloseSession(args map[string]any) (any, *rpcError) {
-	return s.runSessionAnalysis(args, sessionAnalysisOptions{})
-}
-
-func (s *MCPServer) callAnalyzeSession(args map[string]any) (any, *rpcError) {
 	return s.runSessionAnalysis(args, sessionAnalysisOptions{})
 }
 
@@ -55,19 +52,19 @@ func (s *MCPServer) callResolveReviewItem(args map[string]any) (any, *rpcError) 
 
 	id, ok := getString(args, "id")
 	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
 	}
 
-	resolution, err := normalizeReviewResolution(mustString(args, "resolution"))
+	resolution, err := review.NormalizeResolution(mustString(args, "resolution"))
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	note := strings.TrimSpace(mustString(args, "note"))
 	owner := strings.TrimSpace(mustString(args, "owner"))
 
 	resolved, err := resolveReviewItemInStore(s.memoryStore, strings.TrimSpace(id), resolution, note, owner, time.Now().UTC())
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to resolve review item", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to resolve review item", Data: err.Error()}
 	}
 
 	format, fmtErr := parseFormat(args)
@@ -94,9 +91,9 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 		return nil, err
 	}
 
-	resolution, err := normalizeReviewResolution(mustString(args, "resolution"))
+	resolution, err := review.NormalizeResolution(mustString(args, "resolution"))
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	note := strings.TrimSpace(mustString(args, "note"))
 	owner := strings.TrimSpace(mustString(args, "owner"))
@@ -112,7 +109,7 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 		Limit:   limit,
 	})
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to select review queue items", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to select review queue items", Data: err.Error()}
 	}
 
 	result := map[string]any{
@@ -134,7 +131,7 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 		for _, id := range ids {
 			resolved, err := resolveReviewItemInStore(s.memoryStore, id, resolution, note, owner, now)
 			if err != nil {
-				return nil, &rpcError{Code: -32000, Message: "failed to resolve review queue", Data: err.Error()}
+				return nil, &rpcError{Code: rpcErrServerError, Message: "failed to resolve review queue", Data: err.Error()}
 			}
 			resolvedItems = append(resolvedItems, resolved)
 		}
@@ -166,7 +163,7 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 
 	summaryText, ok := getString(args, "summary")
 	if !ok || strings.TrimSpace(summaryText) == "" {
-		return nil, &rpcError{Code: -32602, Message: "summary parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
 	}
 
 	modeValue := mustString(args, "mode")
@@ -174,18 +171,18 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 	if strings.TrimSpace(modeValue) != "" {
 		validatedMode, err := memory.ValidateSessionMode(modeValue, "")
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		mode = validatedMode
 	}
 
 	startedAt, err := parseOptionalRFC3339(args, "started_at")
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	endedAt, err := parseOptionalRFC3339(args, "ended_at")
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	saveRaw, saveRawProvided := getBool(args, "save_raw")
@@ -197,10 +194,10 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 		dryRun = false
 	}
 	if dryRun && saveRaw {
-		return nil, &rpcError{Code: -32602, Message: "save_raw requires dry_run=false"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "save_raw requires dry_run=false"}
 	}
 	if dryRun && autoApplyLowRisk {
-		return nil, &rpcError{Code: -32602, Message: "auto_apply_low_risk requires dry_run=false"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "auto_apply_low_risk requires dry_run=false"}
 	}
 	if options.forceDryRun != nil {
 		dryRun = *options.forceDryRun
@@ -230,7 +227,7 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 
 	result, analyzeErr := sessionclose.New(s.memoryStore).Analyze(context.Background(), request)
 	if analyzeErr != nil {
-		return nil, &rpcError{Code: -32000, Message: "session analysis failed", Data: analyzeErr.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "session analysis failed", Data: analyzeErr.Error()}
 	}
 
 	format, fmtErr := parseFormat(args)
@@ -245,122 +242,85 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 	}
 }
 
+func (s *MCPServer) storeEngineeringMemory(args map[string]any, entityType memory.EngineeringType, entityLabel string, content string, titleFallback string, defaultImportance float64, extraTags []string, extraMeta map[string]string) (any, *rpcError) {
+	title, _ := getString(args, "title")
+	service := mustString(args, "service")
+	severity := mustString(args, "severity")
+	status := mustString(args, "status")
+	mem := &memory.Memory{
+		Title:      defaultTitle(title, titleFallback),
+		Content:    content,
+		Type:       memory.DefaultStorageTypeForEngineeringType(entityType),
+		Context:    mustString(args, "context"),
+		Importance: getImportance(args, defaultImportance),
+		Tags:       memory.BuildEngineeringTags(entityType, service, severity, status, false, append(extraTags, getStringSlice(args, "tags")...)),
+		Metadata:   memory.BuildEngineeringMetadata(entityType, service, severity, status, false, extraMeta),
+	}
+	return s.storeWorkflowMemory(entityLabel, mem)
+}
+
 func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
 	decision, ok := getString(args, "decision")
 	if !ok || strings.TrimSpace(decision) == "" {
-		return nil, &rpcError{Code: -32602, Message: "decision parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "decision parameter is required"}
 	}
-
-	title, _ := getString(args, "title")
-	rationale, _ := getString(args, "rationale")
-	consequences, _ := getString(args, "consequences")
-	context, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	owner, _ := getString(args, "owner")
-	status, _ := getString(args, "status")
-
-	mem := &memory.Memory{
-		Title:      defaultTitle(title, decision),
-		Content:    joinContentLines(prefixedLine("Decision", decision), prefixedLine("Rationale", rationale), prefixedLine("Consequences", consequences), prefixedLine("Service", service), prefixedLine("Owner", owner), prefixedLine("Status", status)),
-		Type:       memory.TypeSemantic,
-		Context:    context,
-		Importance: getImportance(args, 0.85),
-		Tags:       buildEntityTags(memory.EngineeringTypeDecision, service, "", status, false, getStringSlice(args, "tags")),
-		Metadata:   buildEntityMetadata(memory.EngineeringTypeDecision, service, "", status, false, map[string]string{"owner": owner}),
-	}
-
-	return s.storeWorkflowMemory("Decision", mem)
+	owner := mustString(args, "owner")
+	content := joinContentLines(
+		prefixedLine("Decision", decision), prefixedLine("Rationale", mustString(args, "rationale")),
+		prefixedLine("Consequences", mustString(args, "consequences")), prefixedLine("Service", mustString(args, "service")),
+		prefixedLine("Owner", owner), prefixedLine("Status", mustString(args, "status")),
+	)
+	return s.storeEngineeringMemory(args, memory.EngineeringTypeDecision, "Decision", content, decision, 0.85, nil, map[string]string{"owner": owner})
 }
 
 func (s *MCPServer) callStoreIncident(args map[string]any) (any, *rpcError) {
 	summary, ok := getString(args, "summary")
 	if !ok || strings.TrimSpace(summary) == "" {
-		return nil, &rpcError{Code: -32602, Message: "summary parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
 	}
-
-	title, _ := getString(args, "title")
-	impact, _ := getString(args, "impact")
-	rootCause, _ := getString(args, "root_cause")
-	resolution, _ := getString(args, "resolution")
-	context, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	severity, _ := getString(args, "severity")
-
-	mem := &memory.Memory{
-		Title:      defaultTitle(title, summary),
-		Content:    joinContentLines(prefixedLine("Incident", summary), prefixedLine("Impact", impact), prefixedLine("Root cause", rootCause), prefixedLine("Resolution", resolution), prefixedLine("Service", service), prefixedLine("Severity", severity)),
-		Type:       memory.TypeEpisodic,
-		Context:    context,
-		Importance: getImportance(args, 0.90),
-		Tags:       buildEntityTags(memory.EngineeringTypeIncident, service, severity, "", false, getStringSlice(args, "tags")),
-		Metadata:   buildEntityMetadata(memory.EngineeringTypeIncident, service, severity, "", false, nil),
-	}
-
-	return s.storeWorkflowMemory("Incident", mem)
+	content := joinContentLines(
+		prefixedLine("Incident", summary), prefixedLine("Impact", mustString(args, "impact")),
+		prefixedLine("Root cause", mustString(args, "root_cause")), prefixedLine("Resolution", mustString(args, "resolution")),
+		prefixedLine("Service", mustString(args, "service")), prefixedLine("Severity", mustString(args, "severity")),
+	)
+	return s.storeEngineeringMemory(args, memory.EngineeringTypeIncident, "Incident", content, summary, 0.90, nil, nil)
 }
 
 func (s *MCPServer) callStoreRunbook(args map[string]any) (any, *rpcError) {
 	procedure, ok := getString(args, "procedure")
 	if !ok || strings.TrimSpace(procedure) == "" {
-		return nil, &rpcError{Code: -32602, Message: "procedure parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "procedure parameter is required"}
 	}
-
-	title, _ := getString(args, "title")
-	trigger, _ := getString(args, "trigger")
-	verification, _ := getString(args, "verification")
-	rollback, _ := getString(args, "rollback")
-	context, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-
-	mem := &memory.Memory{
-		Title:      defaultTitle(title, procedure),
-		Content:    joinContentLines(prefixedLine("Procedure", procedure), prefixedLine("Trigger", trigger), prefixedLine("Verification", verification), prefixedLine("Rollback", rollback), prefixedLine("Service", service)),
-		Type:       memory.TypeProcedural,
-		Context:    context,
-		Importance: getImportance(args, 0.85),
-		Tags:       buildEntityTags(memory.EngineeringTypeRunbook, service, "", "", false, getStringSlice(args, "tags")),
-		Metadata:   buildEntityMetadata(memory.EngineeringTypeRunbook, service, "", "", false, nil),
-	}
-
-	return s.storeWorkflowMemory("Runbook", mem)
+	content := joinContentLines(
+		prefixedLine("Procedure", procedure), prefixedLine("Trigger", mustString(args, "trigger")),
+		prefixedLine("Verification", mustString(args, "verification")), prefixedLine("Rollback", mustString(args, "rollback")),
+		prefixedLine("Service", mustString(args, "service")),
+	)
+	return s.storeEngineeringMemory(args, memory.EngineeringTypeRunbook, "Runbook", content, procedure, 0.85, nil, nil)
 }
 
 func (s *MCPServer) callStorePostmortem(args map[string]any) (any, *rpcError) {
 	summary, ok := getString(args, "summary")
 	if !ok || strings.TrimSpace(summary) == "" {
-		return nil, &rpcError{Code: -32602, Message: "summary parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
 	}
-
-	title, _ := getString(args, "title")
-	impact, _ := getString(args, "impact")
-	rootCause, _ := getString(args, "root_cause")
-	actionItems, _ := getString(args, "action_items")
-	followUp, _ := getString(args, "follow_up")
-	context, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	severity, _ := getString(args, "severity")
-
-	mem := &memory.Memory{
-		Title:      defaultTitle(title, summary),
-		Content:    joinContentLines(prefixedLine("Postmortem", summary), prefixedLine("Impact", impact), prefixedLine("Root cause", rootCause), prefixedLine("Action items", actionItems), prefixedLine("Follow-up", followUp), prefixedLine("Service", service), prefixedLine("Severity", severity)),
-		Type:       memory.TypeEpisodic,
-		Context:    context,
-		Importance: getImportance(args, 0.85),
-		Tags:       buildEntityTags(memory.EngineeringTypePostmortem, service, severity, "", false, append([]string{"incident"}, getStringSlice(args, "tags")...)),
-		Metadata:   buildEntityMetadata(memory.EngineeringTypePostmortem, service, severity, "", false, nil),
-	}
-
-	return s.storeWorkflowMemory("Postmortem", mem)
+	content := joinContentLines(
+		prefixedLine("Postmortem", summary), prefixedLine("Impact", mustString(args, "impact")),
+		prefixedLine("Root cause", mustString(args, "root_cause")), prefixedLine("Action items", mustString(args, "action_items")),
+		prefixedLine("Follow-up", mustString(args, "follow_up")), prefixedLine("Service", mustString(args, "service")),
+		prefixedLine("Severity", mustString(args, "severity")),
+	)
+	return s.storeEngineeringMemory(args, memory.EngineeringTypePostmortem, "Postmortem", content, summary, 0.85, []string{"incident"}, nil)
 }
 
 func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 	query, ok := getString(args, "query")
 	if !ok || strings.TrimSpace(query) == "" {
-		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
 	}
 
 	ctx := context.Background()
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 	limit := boundedLimit(args, 5, 20)
@@ -369,11 +329,11 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 	if s.memoryStore != nil {
 		results, err := s.memoryStore.Recall(ctx, query, memory.Filters{
 			Type:    memory.TypeProcedural,
-			Context: context,
+			Context: memContext,
 			Tags:    []string{"runbook"},
 		}, min(limit*3, 50))
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: "runbook recall failed", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrServerError, Message: "runbook recall failed", Data: err.Error()}
 		}
 		memoryResults = filterMemorySearchResults(results, service, requiredTags, limit)
 	}
@@ -383,22 +343,22 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 		searchQuery := mergeQueryWithService(query, service)
 		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "runbook", debug)
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: "runbook document search failed", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrServerError, Message: "runbook document search failed", Data: err.Error()}
 		}
 		docResults = results
 	}
 
-	return toolResultText(s.formatWorkflowSearch("Runbook search", query, context, service, memoryResults, docResults, "Memory runbooks", "Indexed runbook docs")), nil
+	return toolResultText(s.formatWorkflowSearch("Runbook search", query, memContext, service, memoryResults, docResults, "Memory runbooks", "Indexed runbook docs")), nil
 }
 
 func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcError) {
 	query, ok := getString(args, "query")
 	if !ok || strings.TrimSpace(query) == "" {
-		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
 	}
 
 	ctx := context.Background()
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 	limit := boundedLimit(args, 5, 20)
@@ -408,11 +368,11 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 	if s.memoryStore != nil {
 		results, err := s.memoryStore.Recall(ctx, query, memory.Filters{
 			Type:    memory.TypeEpisodic,
-			Context: context,
+			Context: memContext,
 			Tags:    []string{"incident", "postmortem"},
 		}, min(limit*3, 50))
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: "incident recall failed", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrServerError, Message: "incident recall failed", Data: err.Error()}
 		}
 		memoryResults = filterMemorySearchResults(results, service, requiredTags, limit)
 	}
@@ -422,21 +382,21 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 		searchQuery := mergeQueryWithService(query, service)
 		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "postmortem", debug)
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: "postmortem document search failed", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrServerError, Message: "postmortem document search failed", Data: err.Error()}
 		}
 		docResults = results
 	}
 
-	return toolResultText(s.formatWorkflowSearch("Similar incidents", query, context, service, memoryResults, docResults, "Incident memories", "Indexed postmortems")), nil
+	return toolResultText(s.formatWorkflowSearch("Similar incidents", query, memContext, service, memoryResults, docResults, "Incident memories", "Indexed postmortems")), nil
 }
 
 func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcError) {
 	if s.memoryStore == nil && s.ragEngine == nil {
-		return nil, &rpcError{Code: -32000, Message: "no memory or RAG backend available"}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "no memory or RAG backend available"}
 	}
 
 	ctx := context.Background()
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	focus, _ := getString(args, "focus")
 	service, _ := getString(args, "service")
 	limit := boundedLimit(args, 5, 20)
@@ -448,7 +408,7 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 
 	if s.memoryStore != nil {
 		fetchLimit := min(limit*5, 100)
-		filters := memory.Filters{Context: context}
+		filters := memory.Filters{Context: memContext}
 
 		var allMemories []*memory.Memory
 		if strings.TrimSpace(focus) != "" {
@@ -463,7 +423,7 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 		}
 
 		for _, m := range allMemories {
-			if serviceTag != "" && !hasAllTags(m.Tags, []string{serviceTag}) {
+			if serviceTag != "" && !memory.HasAllTags(m.Tags, []string{serviceTag}) {
 				continue
 			}
 			if memory.IsCanonicalMemory(m) && len(canonicalEntries) < limit {
@@ -491,12 +451,12 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 		searchQuery := mergeQueryWithService(focus, service)
 		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "", false)
 		if err != nil {
-			return nil, &rpcError{Code: -32000, Message: "project context search failed", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrServerError, Message: "project context search failed", Data: err.Error()}
 		}
 		relatedDocs = results
 	}
 
-	return toolResultText(s.formatProjectContextSummary(context, focus, service, canonicalEntries, decisions, runbooks, incidents, relatedDocs)), nil
+	return toolResultText(s.formatProjectContextSummary(memContext, focus, service, canonicalEntries, decisions, runbooks, incidents, relatedDocs)), nil
 }
 
 func (s *MCPServer) storeWorkflowMemory(entityLabel string, mem *memory.Memory) (any, *rpcError) {
@@ -508,10 +468,10 @@ func (s *MCPServer) storeWorkflowMemory(entityLabel string, mem *memory.Memory) 
 	mem.Context = strings.TrimSpace(mem.Context)
 	mem.Tags = userio.NormalizeTags(mem.Tags)
 	if err := userio.ValidateMemoryContent(mem.Content); err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to store memory", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to store memory", Data: err.Error()}
 	}
 
 	return toolResultText(fmt.Sprintf("%s stored:\n- ID: %s\n- Type: %s\n- Title: %s\n- Tags: %v",
@@ -575,19 +535,6 @@ func getStringMap(args map[string]any, key string) map[string]string {
 	}
 }
 
-func normalizeReviewResolution(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "resolved", nil
-	}
-	switch value {
-	case "resolved", "dismissed", "deferred":
-		return value, nil
-	default:
-		return "", fmt.Errorf("resolution must be resolved, dismissed, or deferred")
-	}
-}
-
 func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memory.ProjectBankOptions) ([]string, error) {
 	normalizedIDs := normalizeIDs(ids)
 	if len(normalizedIDs) > 0 {
@@ -631,29 +578,6 @@ func normalizeIDs(values []string) []string {
 	return result
 }
 
-func resolvedReviewTags(tags []string, resolution string) []string {
-	filtered := make([]string, 0, len(tags)+1)
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		switch {
-		case tag == "":
-			continue
-		case tag == "review:required":
-			continue
-		case strings.HasPrefix(tag, "review:"):
-			continue
-		case tag == "status:review_required":
-			continue
-		case tag == "status:resolved" || tag == "status:dismissed" || tag == "status:deferred":
-			continue
-		default:
-			filtered = append(filtered, tag)
-		}
-	}
-	filtered = append(filtered, "review:"+resolution, "status:"+resolution)
-	return memory.NormalizeTags(filtered)
-}
-
 func resolveReviewItemInStore(store *memory.Store, id string, resolution string, note string, owner string, resolvedAt time.Time) (map[string]any, error) {
 	item, err := store.Get(strings.TrimSpace(id))
 	if err != nil {
@@ -676,7 +600,7 @@ func resolveReviewItemInStore(store *memory.Store, id string, resolution string,
 	}
 
 	if err := store.Update(context.Background(), item.ID, memory.Update{
-		Tags:     resolvedReviewTags(item.Tags, resolution),
+		Tags:     review.ResolvedTags(item.Tags, resolution),
 		Metadata: metadata,
 	}); err != nil {
 		return nil, err
@@ -707,17 +631,9 @@ func parseFormat(args map[string]any) (string, *rpcError) {
 		return "text", nil
 	}
 	if f != "text" && f != "json" {
-		return "", &rpcError{Code: -32602, Message: "format must be text or json"}
+		return "", &rpcError{Code: rpcErrInvalidParams, Message: "format must be text or json"}
 	}
 	return f, nil
-}
-
-func buildEntityTags(entity memory.EngineeringType, service string, severity string, status string, reviewRequired bool, extra []string) []string {
-	return memory.BuildEngineeringTags(entity, service, severity, status, reviewRequired, extra)
-}
-
-func buildEntityMetadata(entity memory.EngineeringType, service string, severity string, status string, reviewRequired bool, extra map[string]string) map[string]string {
-	return memory.BuildEngineeringMetadata(entity, service, severity, status, reviewRequired, extra)
 }
 
 func defaultTitle(title string, fallback string) string {
@@ -777,22 +693,6 @@ func mergeQueryWithService(query string, service string) string {
 	return strings.TrimSpace(query + " " + service)
 }
 
-func hasAllTags(tags []string, required []string) bool {
-	if len(required) == 0 {
-		return true
-	}
-	tagSet := make(map[string]struct{}, len(tags))
-	for _, tag := range tags {
-		tagSet[tag] = struct{}{}
-	}
-	for _, requiredTag := range required {
-		if _, ok := tagSet[requiredTag]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 type taggedItem interface {
 	itemTags() []string
 	itemService() string
@@ -823,7 +723,7 @@ func filterByTags[T any](items []T, wrap func(T) (taggedItem, bool), service str
 		if svc != "" && service != "" && strings.TrimSpace(svc) != strings.TrimSpace(service) {
 			continue
 		}
-		if !hasAllTags(tagged.itemTags(), requiredTags) {
+		if !memory.HasAllTags(tagged.itemTags(), requiredTags) {
 			continue
 		}
 		filtered = append(filtered, item)

@@ -25,6 +25,8 @@ type sessionTracker struct {
 	checkpointInterval time.Duration
 	minEvents          int
 	now                func() time.Time
+	ctx                context.Context
+	cancel             context.CancelFunc
 
 	mu      sync.Mutex
 	timer   *time.Timer
@@ -63,6 +65,7 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 	if store == nil || !cfg.SessionTrackingEnabled {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionTracker{
 		store:              store,
 		closeService:       sessionclose.New(store),
@@ -71,6 +74,8 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 		checkpointInterval: cfg.SessionCheckpointInterval,
 		minEvents:          cfg.SessionMinEvents,
 		now:                time.Now,
+		ctx:                ctx,
+		cancel:             cancel,
 	}
 }
 
@@ -126,6 +131,11 @@ func (st *sessionTracker) HandleToolCall(name string, args map[string]any, rErr 
 			Line: activity.Line,
 			At:   now,
 		})
+		// Cap activities to prevent unbounded memory growth in long sessions.
+		const maxActivities = 1000
+		if len(session.activities) > maxActivities {
+			session.activities = session.activities[len(session.activities)-maxActivities:]
+		}
 	}
 	st.resetIdleTimerLocked()
 	if st.shouldCheckpointLocked(now) {
@@ -179,6 +189,7 @@ func (st *sessionTracker) Close() {
 	st.mu.Unlock()
 
 	st.flushSession("shutdown", session)
+	st.cancel()
 }
 
 func (st *sessionTracker) handleManualSessionBoundary(name string, args map[string]any) bool {
@@ -297,7 +308,7 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 	}
 
 	summary := session.summary(boundary)
-	result, err := st.closeService.Analyze(context.Background(), sessionclose.AnalyzeRequest{
+	result, err := st.closeService.Analyze(st.ctx, sessionclose.AnalyzeRequest{
 		Summary:          summary,
 		DryRun:           false,
 		SaveRaw:          true,
@@ -328,7 +339,7 @@ func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
 	}
 
 	summary := session.summary("checkpoint")
-	if _, err := st.closeService.SaveRawSummaryWithOptions(context.Background(), summary, sessionclose.RawSaveOptions{
+	if _, err := st.closeService.SaveRawSummaryWithOptions(st.ctx, summary, sessionclose.RawSaveOptions{
 		RecordKind: memory.RecordKindSessionCheckpoint,
 		ExtraTags:  []string{"session-checkpoint"},
 		Metadata: map[string]string{
@@ -388,7 +399,7 @@ func (st *sessionTracker) persistReviewQueue(boundary string, result *sessionclo
 			Tags:       tags,
 			Metadata:   metadata,
 		}
-		if err := st.store.Store(context.Background(), mem); err != nil {
+		if err := st.store.Store(st.ctx, mem); err != nil {
 			return err
 		}
 	}

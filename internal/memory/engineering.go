@@ -97,7 +97,7 @@ func ValidateEngineeringType(value string, allowEmpty bool) (EngineeringType, er
 		if allowEmpty {
 			return "", nil
 		}
-		return "", fmt.Errorf("engineering type is required")
+		return "", &ErrValidation{Message: "engineering type is required"}
 	case EngineeringTypeDecision,
 		EngineeringTypeIncident,
 		EngineeringTypeRunbook,
@@ -107,7 +107,7 @@ func ValidateEngineeringType(value string, allowEmpty bool) (EngineeringType, er
 		EngineeringTypeProcedure:
 		return normalizeEngineeringType(value), nil
 	default:
-		return "", fmt.Errorf("invalid engineering type %q", strings.TrimSpace(value))
+		return "", &ErrValidation{Message: fmt.Sprintf("invalid engineering type %q", strings.TrimSpace(value))}
 	}
 }
 
@@ -120,7 +120,7 @@ func ValidateSessionMode(value string, defaultMode SessionMode) (SessionMode, er
 	case SessionModeCoding, SessionModeIncident, SessionModeMigration, SessionModeResearch, SessionModeCleanup:
 		return SessionMode(value), nil
 	default:
-		return "", fmt.Errorf("invalid session mode %q", value)
+		return "", &ErrValidation{Message: fmt.Sprintf("invalid session mode %q", value)}
 	}
 }
 
@@ -256,13 +256,13 @@ func BuildEngineeringMetadata(entity EngineeringType, service string, severity s
 
 	normalized, err := normalizeEngineeringMetadata(metadata, nil, DefaultStorageTypeForEngineeringType(entity))
 	if err != nil {
-		return normalizeMetadata(metadata)
+		return NormalizeMetadata(metadata)
 	}
 	return normalized
 }
 
 func normalizeEngineeringMetadata(metadata map[string]string, tags []string, storageType Type) (map[string]string, error) {
-	normalized := normalizeMetadata(metadata)
+	normalized := NormalizeMetadata(metadata)
 	if normalized == nil {
 		normalized = make(map[string]string)
 	}
@@ -290,7 +290,7 @@ func normalizeEngineeringMetadata(metadata map[string]string, tags []string, sto
 	if lifecycle := normalizeLifecycleStatus(normalized[MetadataLifecycleStatus]); lifecycle != "" {
 		normalized[MetadataLifecycleStatus] = string(lifecycle)
 	} else if strings.TrimSpace(normalized[MetadataLifecycleStatus]) != "" {
-		return nil, fmt.Errorf("invalid lifecycle status %q", normalized[MetadataLifecycleStatus])
+		return nil, &ErrValidation{Message: fmt.Sprintf("invalid lifecycle status %q", normalized[MetadataLifecycleStatus])}
 	}
 
 	if normalized[MetadataLifecycleStatus] == "" {
@@ -309,7 +309,7 @@ func normalizeEngineeringMetadata(metadata map[string]string, tags []string, sto
 	case "1", "true", "yes":
 		normalized[MetadataReviewRequired] = "true"
 	default:
-		return nil, fmt.Errorf("invalid review_required value %q", normalized[MetadataReviewRequired])
+		return nil, &ErrValidation{Message: fmt.Sprintf("invalid review_required value %q", normalized[MetadataReviewRequired])}
 	}
 
 	if len(normalized) == 0 {
@@ -366,7 +366,7 @@ func normalizeEngineeringType(value string) EngineeringType {
 	case "procedure", "procedures":
 		return EngineeringTypeProcedure
 	default:
-		return EngineeringType(strings.ToLower(strings.TrimSpace(value)))
+		return ""
 	}
 }
 

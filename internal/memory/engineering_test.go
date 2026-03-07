@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestNormalizeMemoryForStoreAlignsEngineeringMetadataAndTags(t *testing.T) {
+func TestValidateAlignsEngineeringMetadataAndTags(t *testing.T) {
 	mem := &Memory{
 		Content: "rollback ingress deployment",
 		Type:    TypeProcedural,
@@ -16,8 +16,8 @@ func TestNormalizeMemoryForStoreAlignsEngineeringMetadataAndTags(t *testing.T) {
 		},
 	}
 
-	if err := NormalizeMemoryForStore(mem); err != nil {
-		t.Fatalf("NormalizeMemoryForStore: %v", err)
+	if err := mem.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 
 	if got := mem.Metadata[MetadataEntity]; got != string(EngineeringTypeRunbook) {
@@ -108,11 +108,11 @@ func TestReviewRequiredReducesTrustConfidence(t *testing.T) {
 	review.Metadata = copyMetadata(base.Metadata)
 	review.Metadata[MetadataReviewRequired] = "true"
 
-	if err := NormalizeMemoryForStore(base); err != nil {
-		t.Fatalf("NormalizeMemoryForStore base: %v", err)
+	if err := base.Validate(); err != nil {
+		t.Fatalf("Validate base: %v", err)
 	}
-	if err := NormalizeMemoryForStore(review); err != nil {
-		t.Fatalf("NormalizeMemoryForStore review: %v", err)
+	if err := review.Validate(); err != nil {
+		t.Fatalf("Validate review: %v", err)
 	}
 
 	baseTrust := deriveTrustMetadata(base, now)

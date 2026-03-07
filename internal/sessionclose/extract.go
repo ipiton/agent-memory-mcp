@@ -42,7 +42,7 @@ func extractSegments(summary memory.SessionSummary) []segment {
 			entity:         entity,
 			status:         status,
 			reviewRequired: reviewRequired,
-			trace:          uniqueStrings(trace...),
+			trace:          memory.UnionStrings(trace),
 		})
 	}
 
@@ -57,7 +57,7 @@ func extractSegments(summary memory.SessionSummary) []segment {
 			entity:         entity,
 			status:         status,
 			reviewRequired: reviewRequired,
-			trace:          uniqueStrings(trace...),
+			trace:          memory.UnionStrings(trace),
 		})
 	}
 
@@ -308,7 +308,7 @@ func collectPaths(text string) []string {
 		}
 		values = append(values, match)
 	}
-	return uniqueStrings(values...)
+	return memory.UnionStrings(values)
 }
 
 func collectSuspectedChanges(segments []segment) []string {

@@ -15,13 +15,24 @@ func (s *MCPServer) callStoreMemory(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	content, ok := getString(args, "content")
-	if !ok {
-		return nil, &rpcError{Code: -32602, Message: "content parameter is required"}
+	type params struct {
+		Content    string   `json:"content"`
+		Title      string   `json:"title"`
+		Type       string   `json:"type"`
+		Context    string   `json:"context"`
+		Importance *float64 `json:"importance"`
 	}
-	content = strings.TrimSpace(content)
+	p, err := parseParams[params](args)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "failed to parse parameters", Data: err.Error()}
+	}
+
+	content := strings.TrimSpace(p.Content)
+	if content == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "content parameter is required"}
+	}
 	if err := userio.ValidateMemoryContent(content); err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	mem := &memory.Memory{
@@ -30,34 +41,33 @@ func (s *MCPServer) callStoreMemory(args map[string]any) (any, *rpcError) {
 		Importance: 0.5,
 	}
 
-	if title, ok := getString(args, "title"); ok {
-		mem.Title = strings.TrimSpace(title)
+	if p.Title != "" {
+		mem.Title = strings.TrimSpace(p.Title)
 	}
 
-	if memType, ok := getString(args, "type"); ok {
-		parsedType, err := userio.ParseMemoryType(memType, memory.TypeSemantic, false)
+	if p.Type != "" {
+		parsedType, err := userio.ParseMemoryType(p.Type, memory.TypeSemantic, false)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		mem.Type = parsedType
 	}
 
-	if context, ok := getString(args, "context"); ok {
-		mem.Context = strings.TrimSpace(context)
+	if p.Context != "" {
+		mem.Context = strings.TrimSpace(p.Context)
 	}
 	mem.Tags = userio.NormalizeTags(getStringSlice(args, "tags"))
 
-	if importance, ok := args["importance"].(float64); ok {
-		normalizedImportance, err := userio.NormalizeImportance(importance, memory.DefaultImportance)
+	if p.Importance != nil {
+		normalizedImportance, err := userio.NormalizeImportance(*p.Importance, memory.DefaultImportance)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		mem.Importance = normalizedImportance
 	}
 
-	err := s.memoryStore.Store(context.Background(), mem)
-	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to store memory", Data: err.Error()}
+	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to store memory", Data: err.Error()}
 	}
 
 	return toolResultText(fmt.Sprintf("Memory stored:\n- ID: %s\n- Type: %s\n- Title: %s",
@@ -69,35 +79,50 @@ func (s *MCPServer) callRecallMemory(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	query, ok := getString(args, "query")
-	if !ok {
-		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
+	type params struct {
+		Query   string `json:"query"`
+		Type    string `json:"type"`
+		Context string `json:"context"`
+		Limit   int    `json:"limit"`
 	}
-	query = strings.TrimSpace(query)
-	if err := userio.ValidateQuery(query); err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+	p, err := parseParams[params](args)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "failed to parse parameters", Data: err.Error()}
 	}
 
-	limit := boundedLimit(args, 10, 50)
+	query := strings.TrimSpace(p.Query)
+	if query == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	}
+	if err := userio.ValidateQuery(query); err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+	}
+
+	limit := p.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
 
 	filters := memory.Filters{}
-
-	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
-		parsedType, err := userio.ParseMemoryType(memType, "", true)
+	if p.Type != "" && p.Type != "all" {
+		parsedType, err := userio.ParseMemoryType(p.Type, "", true)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		filters.Type = parsedType
 	}
 
-	if context, ok := getString(args, "context"); ok {
-		filters.Context = strings.TrimSpace(context)
+	if p.Context != "" {
+		filters.Context = strings.TrimSpace(p.Context)
 	}
 	filters.Tags = userio.NormalizeTags(getStringSlice(args, "tags"))
 
 	results, err := s.memoryStore.Recall(context.Background(), query, filters, limit)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "memory recall failed", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "memory recall failed", Data: err.Error()}
 	}
 
 	return toolResultText(s.formatMemoryResults(query, results)), nil
@@ -108,40 +133,49 @@ func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	id, ok := getString(args, "id")
-	if !ok || id == "" {
-		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
+	type params struct {
+		ID         string   `json:"id"`
+		Content    string   `json:"content"`
+		Title      string   `json:"title"`
+		Importance *float64 `json:"importance"`
+	}
+	p, err := parseParams[params](args)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "failed to parse parameters", Data: err.Error()}
+	}
+
+	if p.ID == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
 	}
 
 	updates := memory.Update{}
-
-	if content, ok := getString(args, "content"); ok {
-		content = strings.TrimSpace(content)
-		if content != "" {
-			if err := userio.ValidateMemoryContent(content); err != nil {
-				return nil, &rpcError{Code: -32602, Message: err.Error()}
-			}
+	if p.Content != "" {
+		content := strings.TrimSpace(p.Content)
+		if err := userio.ValidateMemoryContent(content); err != nil {
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		updates.Content = content
 	}
-	if title, ok := getString(args, "title"); ok {
-		updates.Title = strings.TrimSpace(title)
+	if p.Title != "" {
+		updates.Title = strings.TrimSpace(p.Title)
 	}
-	updates.Tags = userio.NormalizeTags(getStringSlice(args, "tags"))
-	if importance, ok := args["importance"].(float64); ok {
-		normalizedImportance, err := userio.NormalizeImportance(importance, 0)
+	if tags := getStringSlice(args, "tags"); tags != nil {
+		updates.Tags = userio.NormalizeTags(tags)
+	}
+	if p.Importance != nil {
+		normalizedImportance, err := userio.NormalizeImportance(*p.Importance, 0)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		updates.Importance = &normalizedImportance
 	}
 
-	err := s.memoryStore.Update(context.Background(), id, updates)
+	err = s.memoryStore.Update(context.Background(), p.ID, updates)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to update memory", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to update memory", Data: err.Error()}
 	}
 
-	return toolResultText(fmt.Sprintf("Memory updated (ID: %s)", id)), nil
+	return toolResultText(fmt.Sprintf("Memory updated (ID: %s)", p.ID)), nil
 }
 
 func (s *MCPServer) callDeleteMemory(args map[string]any) (any, *rpcError) {
@@ -149,17 +183,24 @@ func (s *MCPServer) callDeleteMemory(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	id, ok := getString(args, "id")
-	if !ok || id == "" {
-		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
+	type params struct {
+		ID string `json:"id"`
 	}
-
-	err := s.memoryStore.Delete(context.Background(), id)
+	p, err := parseParams[params](args)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to delete memory", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "failed to parse parameters", Data: err.Error()}
 	}
 
-	return toolResultText(fmt.Sprintf("Memory deleted (ID: %s)", id)), nil
+	if p.ID == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	}
+
+	err = s.memoryStore.Delete(context.Background(), p.ID)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to delete memory", Data: err.Error()}
+	}
+
+	return toolResultText(fmt.Sprintf("Memory deleted (ID: %s)", p.ID)), nil
 }
 
 func (s *MCPServer) callListMemories(args map[string]any) (any, *rpcError) {
@@ -167,25 +208,40 @@ func (s *MCPServer) callListMemories(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	limit := boundedLimit(args, 20, 100)
+	type params struct {
+		Type    string `json:"type"`
+		Context string `json:"context"`
+		Limit   int    `json:"limit"`
+	}
+	p, err := parseParams[params](args)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "failed to parse parameters", Data: err.Error()}
+	}
+
+	limit := p.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
 
 	filters := memory.Filters{}
-
-	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
-		parsedType, err := userio.ParseMemoryType(memType, "", true)
+	if p.Type != "" && p.Type != "all" {
+		parsedType, err := userio.ParseMemoryType(p.Type, "", true)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		filters.Type = parsedType
 	}
 
-	if context, ok := getString(args, "context"); ok {
-		filters.Context = strings.TrimSpace(context)
+	if p.Context != "" {
+		filters.Context = strings.TrimSpace(p.Context)
 	}
 
 	memories, err := s.memoryStore.List(context.Background(), filters, limit)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to list memories", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to list memories", Data: err.Error()}
 	}
 
 	return toolResultText(s.formatMemoryList(memories)), nil
@@ -237,16 +293,16 @@ func (s *MCPServer) callMergeDuplicates(args map[string]any) (any, *rpcError) {
 
 	primaryID, ok := getString(args, "primary_id")
 	if !ok || strings.TrimSpace(primaryID) == "" {
-		return nil, &rpcError{Code: -32602, Message: "primary_id parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "primary_id parameter is required"}
 	}
 	duplicateIDs := getStringSlice(args, "duplicate_ids")
 	if len(duplicateIDs) == 0 {
-		return nil, &rpcError{Code: -32602, Message: "duplicate_ids parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "duplicate_ids parameter is required"}
 	}
 
 	result, err := s.memoryStore.MergeDuplicates(context.Background(), primaryID, duplicateIDs)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to merge duplicates", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to merge duplicates", Data: err.Error()}
 	}
 
 	return toolResultText(fmt.Sprintf(
@@ -264,14 +320,14 @@ func (s *MCPServer) callMarkOutdated(args map[string]any) (any, *rpcError) {
 
 	id, ok := getString(args, "id")
 	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
 	}
 	reason, _ := getString(args, "reason")
 	supersededBy, _ := getString(args, "superseded_by")
 
 	result, err := s.memoryStore.MarkOutdated(context.Background(), id, reason, supersededBy)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to mark memory outdated", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to mark memory outdated", Data: err.Error()}
 	}
 
 	return toolResultText(fmt.Sprintf(
@@ -290,13 +346,13 @@ func (s *MCPServer) callPromoteToCanonical(args map[string]any) (any, *rpcError)
 
 	id, ok := getString(args, "id")
 	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
 	}
 	owner, _ := getString(args, "owner")
 
 	result, err := s.memoryStore.PromoteToCanonical(context.Background(), id, owner)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to promote memory to canonical", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to promote memory to canonical", Data: err.Error()}
 	}
 
 	return toolResultText(fmt.Sprintf(
@@ -316,22 +372,22 @@ func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 
 	ctx := context.Background()
 	limit := boundedLimit(args, 10, 50)
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 
-	filters := memory.Filters{Context: context}
+	filters := memory.Filters{Context: memContext}
 	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
 		parsedType, err := userio.ParseMemoryType(memType, "", true)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		filters.Type = parsedType
 	}
 
 	report, err := s.memoryStore.ConflictsReport(ctx, filters, limit*3)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to build conflicts report", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to build conflicts report", Data: err.Error()}
 	}
 
 	filtered := make([]memory.ConflictReportItem, 0, len(report))
@@ -339,7 +395,7 @@ func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 		if service != "" && strings.TrimSpace(item.Service) != strings.TrimSpace(service) {
 			continue
 		}
-		if len(requiredTags) > 0 && !hasAllTags(item.Tags, requiredTags) {
+		if len(requiredTags) > 0 && !memory.HasAllTags(item.Tags, requiredTags) {
 			continue
 		}
 		filtered = append(filtered, item)
@@ -348,7 +404,7 @@ func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 		}
 	}
 
-	return toolResultText(formatConflictReport(filtered, context, service)), nil
+	return toolResultText(formatConflictReport(filtered, memContext, service)), nil
 }
 
 func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcError) {
@@ -358,26 +414,26 @@ func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcEr
 
 	ctx := context.Background()
 	limit := boundedLimit(args, 10, 50)
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 
-	filters := memory.Filters{Context: context}
+	filters := memory.Filters{Context: memContext}
 	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
 		parsedType, err := userio.ParseMemoryType(memType, "", true)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		filters.Type = parsedType
 	}
 
 	entries, err := s.memoryStore.ListCanonical(ctx, filters, limit*3)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to list canonical knowledge", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to list canonical knowledge", Data: err.Error()}
 	}
 
 	filtered := filterCanonicalEntries(entries, service, requiredTags, limit)
-	return toolResultText(formatCanonicalKnowledgeList(filtered, context, service)), nil
+	return toolResultText(formatCanonicalKnowledgeList(filtered, memContext, service)), nil
 }
 
 func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpcError) {
@@ -388,31 +444,31 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 	ctx := context.Background()
 	query, ok := getString(args, "query")
 	if !ok {
-		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
 	}
 	query = strings.TrimSpace(query)
 	if err := userio.ValidateQuery(query); err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	limit := boundedLimit(args, 10, 50)
-	context, _ := getString(args, "context")
+	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 
-	filters := memory.Filters{Context: context}
+	filters := memory.Filters{Context: memContext}
 	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
 		parsedType, err := userio.ParseMemoryType(memType, "", true)
 		if err != nil {
-			return nil, &rpcError{Code: -32602, Message: err.Error()}
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 		}
 		filters.Type = parsedType
 	}
 
 	results, err := s.memoryStore.RecallCanonical(ctx, query, filters, limit*3)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to recall canonical knowledge", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to recall canonical knowledge", Data: err.Error()}
 	}
 
 	filtered := filterCanonicalSearchResults(results, service, requiredTags, limit)
-	return toolResultText(formatCanonicalKnowledgeRecall(query, filtered, context, service)), nil
+	return toolResultText(formatCanonicalKnowledgeRecall(query, filtered, memContext, service)), nil
 }

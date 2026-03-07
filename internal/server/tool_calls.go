@@ -37,12 +37,12 @@ func (s *MCPServer) callRepoList(args map[string]any) (any, *rpcError) {
 
 	abs, err := s.pathGuard.Resolve(path)
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	entries, err := walkList(abs, maxDepth, s.pathGuard)
 	if err != nil {
-		return nil, &rpcError{Code: -32603, Message: "failed to list", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrInternalError, Message: "failed to list", Data: err.Error()}
 	}
 
 	return toolResultJSON(entries), nil
@@ -51,7 +51,7 @@ func (s *MCPServer) callRepoList(args map[string]any) (any, *rpcError) {
 func (s *MCPServer) callRepoRead(args map[string]any) (any, *rpcError) {
 	path, ok := getString(args, "path")
 	if !ok || path == "" {
-		return nil, &rpcError{Code: -32602, Message: "path is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "path is required"}
 	}
 	maxBytes := s.config.MaxFileBytes
 	if val, ok := getInt64(args, "max_bytes"); ok {
@@ -68,23 +68,23 @@ func (s *MCPServer) callRepoRead(args map[string]any) (any, *rpcError) {
 
 	abs, err := s.pathGuard.Resolve(path)
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	info, err := os.Stat(abs)
 	if err != nil {
-		return nil, &rpcError{Code: -32603, Message: "failed to stat file", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrInternalError, Message: "failed to stat file", Data: err.Error()}
 	}
 	if info.IsDir() {
 		listing, err := listDirectory(abs, s.config.MaxDepth, s.pathGuard)
 		if err != nil {
-			return nil, &rpcError{Code: -32603, Message: "failed to list directory", Data: err.Error()}
+			return nil, &rpcError{Code: rpcErrInternalError, Message: "failed to list directory", Data: err.Error()}
 		}
 		return map[string]any{"path": path, "content": listing}, nil
 	}
 	content, _, err := search.ReadTextFile(abs, offset, maxBytes, info.Size())
 	if err != nil {
-		return nil, &rpcError{Code: -32603, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInternalError, Message: err.Error()}
 	}
 	return toolResultText(fmt.Sprintf("path: %s\n\n%s", path, content)), nil
 }
@@ -92,7 +92,7 @@ func (s *MCPServer) callRepoRead(args map[string]any) (any, *rpcError) {
 func (s *MCPServer) callRepoSearch(args map[string]any) (any, *rpcError) {
 	query, ok := getString(args, "query")
 	if !ok || query == "" {
-		return nil, &rpcError{Code: -32602, Message: "query is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query is required"}
 	}
 	path, _ := getString(args, "path")
 	maxResults := s.config.MaxSearchResults
@@ -103,7 +103,7 @@ func (s *MCPServer) callRepoSearch(args map[string]any) (any, *rpcError) {
 	}
 	matches, err := search.Repo(s.pathGuard, query, path, maxResults, s.config.MaxFileBytes)
 	if err != nil {
-		return nil, &rpcError{Code: -32603, Message: "search failed", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrInternalError, Message: "search failed", Data: err.Error()}
 	}
 	return toolResultText(search.FormatMatches(matches)), nil
 }

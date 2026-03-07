@@ -48,6 +48,43 @@ func deriveTrustMetadata(m *Memory, now time.Time) *trust.Metadata {
 	}
 }
 
+func deriveTrustMetadataFromCached(m *cachedMemory, now time.Time) *trust.Metadata {
+	sourceType := cachedMemoryEntity(m)
+	owner := m.Owner
+	layer := m.KnowledgeLayer
+	lifecycle := m.Lifecycle
+	reviewRequired := m.Lifecycle == "review_required" || strings.Contains(strings.Join(m.Tags, ","), "review:required")
+
+	lastVerifiedAt := m.UpdatedAt
+	if lastVerifiedAt.IsZero() {
+		lastVerifiedAt = m.CreatedAt
+	}
+
+	return &trust.Metadata{
+		KnowledgeLayer: layer,
+		SourceType:     sourceType,
+		Confidence:     confidenceForMemory(sourceType, lifecycle, owner, layer, reviewRequired),
+		LastVerifiedAt: lastVerifiedAt,
+		Owner:          owner,
+		FreshnessScore: scoring.FreshnessScore(lastVerifiedAt, now),
+	}
+}
+
+func cachedMemoryEntity(m *cachedMemory) string {
+	if m == nil {
+		return ""
+	}
+	// Simplified entity detection for cached objects
+	for _, tag := range m.Tags {
+		t := strings.ToLower(strings.TrimSpace(tag))
+		switch t {
+		case "decision", "runbook", "postmortem", "incident":
+			return t
+		}
+	}
+	return string(m.Type)
+}
+
 func parseMetadataTime(value string) time.Time {
 	value = strings.TrimSpace(value)
 	if value == "" {

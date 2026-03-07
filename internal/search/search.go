@@ -20,31 +20,12 @@ type Match struct {
 	Text string `json:"text"`
 }
 
-var skipDirs = map[string]struct{}{
-	".git":              {},
-	".idea":             {},
-	".vscode":           {},
-	"node_modules":      {},
-	"dist":              {},
-	"build":             {},
-	".next":             {},
-	"vendor":            {},
-	"bin":               {},
-	"coverage":          {},
-	"test-results":      {},
-	"artifacts":         {},
-	"logs":              {},
-	".agent-memory":     {},
-	"playwright-report": {},
-}
-
 // ShouldSkipDir reports whether the directory should be excluded from search.
 func ShouldSkipDir(name string, isDir bool) bool {
 	if !isDir {
 		return false
 	}
-	_, ok := skipDirs[name]
-	return ok
+	return paths.ShouldSkipDir(name)
 }
 
 // Repo searches for a query string across allowed repository files.

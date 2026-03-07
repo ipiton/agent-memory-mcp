@@ -10,6 +10,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/review"
 )
 
 func runResolveReviewItem(args []string) {
@@ -26,7 +27,7 @@ func runResolveReviewItem(args []string) {
 		os.Exit(1)
 	}
 
-	resolutionValue, err := normalizeReviewResolutionValue(*resolution)
+	resolutionValue, err := review.NormalizeResolution(*resolution)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -69,7 +70,7 @@ func runResolveReviewItem(args []string) {
 	}
 
 	if err := store.Update(context.Background(), itemID, memory.Update{
-		Tags:     resolvedReviewQueueTags(mem.Tags, resolutionValue),
+		Tags:     review.ResolvedTags(mem.Tags, resolutionValue),
 		Metadata: metadata,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -88,38 +89,3 @@ func runResolveReviewItem(args []string) {
 	fmt.Printf("Resolved review item %s as %s\n", itemID, resolutionValue)
 }
 
-func normalizeReviewResolutionValue(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "resolved", nil
-	}
-	switch value {
-	case "resolved", "dismissed", "deferred":
-		return value, nil
-	default:
-		return "", fmt.Errorf("resolution must be resolved, dismissed, or deferred")
-	}
-}
-
-func resolvedReviewQueueTags(tags []string, resolution string) []string {
-	filtered := make([]string, 0, len(tags)+1)
-	for _, tag := range tags {
-		tag = strings.TrimSpace(tag)
-		switch {
-		case tag == "":
-			continue
-		case tag == "review:required":
-			continue
-		case strings.HasPrefix(tag, "review:"):
-			continue
-		case tag == "status:review_required":
-			continue
-		case tag == "status:resolved" || tag == "status:dismissed" || tag == "status:deferred":
-			continue
-		default:
-			filtered = append(filtered, tag)
-		}
-	}
-	filtered = append(filtered, "review:"+resolution, "status:"+resolution)
-	return memory.NormalizeTags(filtered)
-}

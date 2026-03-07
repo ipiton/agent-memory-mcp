@@ -10,10 +10,82 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/stats"
 )
 
+// JSON-RPC error codes.
+const (
+	rpcErrInvalidParams  = -32602
+	rpcErrMethodNotFound = -32601
+	rpcErrInternalError  = -32603
+	rpcErrServerError    = -32000
+)
+
 type tool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+}
+
+var sessionAnalysisSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"summary": map[string]any{
+			"type":        "string",
+			"description": "Raw session summary text to analyze",
+		},
+		"mode": map[string]any{
+			"type":        "string",
+			"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
+			"description": "Optional session mode that influences conservative type fallback",
+			"default":     "coding",
+		},
+		"context": map[string]any{
+			"type":        "string",
+			"description": "Optional project, task, or workflow context",
+		},
+		"service": map[string]any{
+			"type":        "string",
+			"description": "Optional service or component name",
+		},
+		"started_at": map[string]any{
+			"type":        "string",
+			"description": "Optional RFC3339 session start timestamp",
+		},
+		"ended_at": map[string]any{
+			"type":        "string",
+			"description": "Optional RFC3339 session end timestamp",
+		},
+		"tags": map[string]any{
+			"type":        "array",
+			"items":       map[string]any{"type": "string"},
+			"description": "Optional tags copied into extracted candidates and raw session memory",
+		},
+		"metadata": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "string"},
+			"description":          "Optional string metadata for the raw session summary",
+		},
+		"dry_run": map[string]any{
+			"type":        "boolean",
+			"default":     true,
+			"description": "If true, only plan actions without saving the raw summary",
+		},
+		"save_raw": map[string]any{
+			"type":        "boolean",
+			"default":     false,
+			"description": "Persist the raw session summary when dry_run is false",
+		},
+		"auto_apply_low_risk": map[string]any{
+			"type":        "boolean",
+			"default":     false,
+			"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
+		},
+		"format": map[string]any{
+			"type":        "string",
+			"enum":        []string{"text", "json"},
+			"default":     "text",
+			"description": "Return a human-readable report or structured JSON",
+		},
+	},
+	"required": []string{"summary"},
 }
 
 func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
@@ -451,136 +523,12 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		{
 			Name:        "close_session",
 			Description: "Analyze a finished session into raw summary metadata, candidate knowledge items, and review-safe consolidation actions",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"summary": map[string]any{
-						"type":        "string",
-						"description": "Raw session summary text to analyze",
-					},
-					"mode": map[string]any{
-						"type":        "string",
-						"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
-						"description": "Optional session mode that influences conservative type fallback",
-						"default":     "coding",
-					},
-					"context": map[string]any{
-						"type":        "string",
-						"description": "Optional project, task, or workflow context",
-					},
-					"service": map[string]any{
-						"type":        "string",
-						"description": "Optional service or component name",
-					},
-					"started_at": map[string]any{
-						"type":        "string",
-						"description": "Optional RFC3339 session start timestamp",
-					},
-					"ended_at": map[string]any{
-						"type":        "string",
-						"description": "Optional RFC3339 session end timestamp",
-					},
-					"tags": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "Optional tags copied into extracted candidates and raw session memory",
-					},
-					"metadata": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "string"},
-						"description":          "Optional string metadata for the raw session summary",
-					},
-					"dry_run": map[string]any{
-						"type":        "boolean",
-						"default":     true,
-						"description": "If true, only plan actions without saving the raw summary",
-					},
-					"save_raw": map[string]any{
-						"type":        "boolean",
-						"default":     false,
-						"description": "Persist the raw session summary when dry_run is false",
-					},
-					"auto_apply_low_risk": map[string]any{
-						"type":        "boolean",
-						"default":     false,
-						"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"enum":        []string{"text", "json"},
-						"default":     "text",
-						"description": "Return a human-readable report or structured JSON",
-					},
-				},
-				"required": []string{"summary"},
-			},
+			InputSchema: sessionAnalysisSchema,
 		},
 		{
 			Name:        "analyze_session",
 			Description: "Compatibility alias for close_session with the same planning and reporting behavior",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"summary": map[string]any{
-						"type":        "string",
-						"description": "Raw session summary text to analyze",
-					},
-					"mode": map[string]any{
-						"type":        "string",
-						"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
-						"description": "Optional session mode that influences conservative type fallback",
-						"default":     "coding",
-					},
-					"context": map[string]any{
-						"type":        "string",
-						"description": "Optional project, task, or workflow context",
-					},
-					"service": map[string]any{
-						"type":        "string",
-						"description": "Optional service or component name",
-					},
-					"started_at": map[string]any{
-						"type":        "string",
-						"description": "Optional RFC3339 session start timestamp",
-					},
-					"ended_at": map[string]any{
-						"type":        "string",
-						"description": "Optional RFC3339 session end timestamp",
-					},
-					"tags": map[string]any{
-						"type":        "array",
-						"items":       map[string]any{"type": "string"},
-						"description": "Optional tags copied into extracted candidates and raw session memory",
-					},
-					"metadata": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "string"},
-						"description":          "Optional string metadata for the raw session summary",
-					},
-					"dry_run": map[string]any{
-						"type":        "boolean",
-						"default":     true,
-						"description": "If true, only plan actions without saving the raw summary",
-					},
-					"save_raw": map[string]any{
-						"type":        "boolean",
-						"default":     false,
-						"description": "Persist the raw session summary when dry_run is false",
-					},
-					"auto_apply_low_risk": map[string]any{
-						"type":        "boolean",
-						"default":     false,
-						"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"enum":        []string{"text", "json"},
-						"default":     "text",
-						"description": "Return a human-readable report or structured JSON",
-					},
-				},
-				"required": []string{"summary"},
-			},
+			InputSchema: sessionAnalysisSchema,
 		},
 		{
 			Name:        "review_session_changes",
@@ -910,7 +858,58 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 			},
 		},
 	}
-	return map[string]any{"tools": tools}, nil
+	filtered := make([]tool, 0, len(tools))
+	for _, t := range tools {
+		if s.ragEngine == nil && ragTools[t.Name] {
+			continue
+		}
+		if s.memoryStore == nil && memoryTools[t.Name] {
+			continue
+		}
+		if s.memoryStore == nil && s.ragEngine == nil && hybridTools[t.Name] {
+			continue
+		}
+		filtered = append(filtered, t)
+	}
+	return map[string]any{"tools": filtered}, nil
+}
+
+var ragTools = map[string]bool{
+	"semantic_search":  true,
+	"index_documents":  true,
+}
+
+var memoryTools = map[string]bool{
+	"store_memory":               true,
+	"recall_memory":              true,
+	"update_memory":              true,
+	"delete_memory":              true,
+	"list_memories":              true,
+	"memory_stats":               true,
+	"merge_duplicates":           true,
+	"mark_outdated":              true,
+	"promote_to_canonical":       true,
+	"conflicts_report":           true,
+	"list_canonical_knowledge":   true,
+	"recall_canonical_knowledge": true,
+	"close_session":              true,
+	"analyze_session":            true,
+	"review_session_changes":     true,
+	"accept_session_changes":     true,
+	"resolve_review_item":        true,
+	"resolve_review_queue":       true,
+	"store_decision":             true,
+	"store_incident":             true,
+	"store_runbook":              true,
+	"store_postmortem":           true,
+	"project_bank_view":          true,
+}
+
+// hybridTools require at least one of memoryStore or ragEngine.
+var hybridTools = map[string]bool{
+	"search_runbooks":           true,
+	"recall_similar_incidents":  true,
+	"summarize_project_context": true,
 }
 
 type toolHandler func(args map[string]any) (any, *rpcError)
@@ -935,7 +934,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"list_canonical_knowledge":   s.callListCanonicalKnowledge,
 		"recall_canonical_knowledge": s.callRecallCanonicalKnowledge,
 		"close_session":              s.callCloseSession,
-		"analyze_session":            s.callAnalyzeSession,
+		"analyze_session":            s.callCloseSession,
 		"review_session_changes":     s.callReviewSessionChanges,
 		"accept_session_changes":     s.callAcceptSessionChanges,
 		"resolve_review_item":        s.callResolveReviewItem,
@@ -958,19 +957,19 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal(params, &req); err != nil {
-		rErr := &rpcError{Code: -32602, Message: "invalid params", Data: err.Error()}
+		rErr := &rpcError{Code: rpcErrInvalidParams, Message: "invalid params", Data: err.Error()}
 		s.logToolEvent("", nil, start, rErr)
 		return nil, rErr
 	}
 	if req.Name == "" {
-		rErr := &rpcError{Code: -32602, Message: "tool name is required"}
+		rErr := &rpcError{Code: rpcErrInvalidParams, Message: "tool name is required"}
 		s.logToolEvent("", req.Arguments, start, rErr)
 		return nil, rErr
 	}
 
 	handler, ok := s.toolHandlers[req.Name]
 	if !ok {
-		rErr := &rpcError{Code: -32601, Message: fmt.Sprintf("unknown tool: %s", req.Name)}
+		rErr := &rpcError{Code: rpcErrMethodNotFound, Message: fmt.Sprintf("unknown tool: %s", req.Name)}
 		s.logToolEvent(req.Name, req.Arguments, start, rErr)
 		return nil, rErr
 	}
@@ -1013,6 +1012,18 @@ func (s *MCPServer) logToolEvent(name string, args map[string]any, start time.Ti
 		event.MaxDepth = maxDepth
 	}
 	s.stats.Log(event)
+}
+
+func parseParams[T any](args map[string]any) (T, error) {
+	var result T
+	data, err := json.Marshal(args)
+	if err != nil {
+		return result, err
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func getString(args map[string]any, key string) (string, bool) {
@@ -1128,14 +1139,14 @@ func getStringSlice(args map[string]any, key string) []string {
 
 func (s *MCPServer) requireMemoryStore() *rpcError {
 	if s.memoryStore == nil {
-		return &rpcError{Code: -32000, Message: "Memory store not available"}
+		return &rpcError{Code: rpcErrServerError, Message: "Memory store not available"}
 	}
 	return nil
 }
 
 func (s *MCPServer) requireRAGEngine() *rpcError {
 	if s.ragEngine == nil {
-		return &rpcError{Code: -32000, Message: "RAG engine not available"}
+		return &rpcError{Code: rpcErrServerError, Message: "RAG engine not available"}
 	}
 	return nil
 }

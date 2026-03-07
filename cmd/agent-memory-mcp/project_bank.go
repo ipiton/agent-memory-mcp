@@ -141,7 +141,7 @@ func formatProjectBankCLIView(result *memory.ProjectBankViewResult) string {
 				buf.WriteString("   Review: required\n")
 			}
 			if item.Trust != nil {
-				fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatMemoryTrust(item.Trust))
+				fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(item.Trust))
 			}
 			if !item.LastVerifiedAt.IsZero() {
 				fmt.Fprintf(&buf, "   Last verified: %s\n", item.LastVerifiedAt.UTC().Format(time.RFC3339))

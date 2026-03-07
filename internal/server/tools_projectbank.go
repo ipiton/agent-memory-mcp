@@ -15,7 +15,7 @@ func (s *MCPServer) callProjectBankView(args map[string]any) (any, *rpcError) {
 
 	view, err := memory.ValidateProjectBankView(mustString(args, "view"))
 	if err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	result, err := s.memoryStore.ProjectBankView(context.Background(), view, memory.ProjectBankOptions{
@@ -29,7 +29,7 @@ func (s *MCPServer) callProjectBankView(args map[string]any) (any, *rpcError) {
 		Limit:   boundedLimit(args, 10, 50),
 	})
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "failed to build project bank view", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to build project bank view", Data: err.Error()}
 	}
 
 	format, fmtErr := parseFormat(args)

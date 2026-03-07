@@ -1,11 +1,15 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ipiton/agent-memory-mcp/internal/review"
+)
 
 func TestNormalizeReviewResolutionValue(t *testing.T) {
-	got, err := normalizeReviewResolutionValue("dismissed")
+	got, err := review.NormalizeResolution("dismissed")
 	if err != nil {
-		t.Fatalf("normalizeReviewResolutionValue: %v", err)
+		t.Fatalf("NormalizeResolution: %v", err)
 	}
 	if got != "dismissed" {
 		t.Fatalf("resolution = %q, want dismissed", got)
@@ -13,7 +17,7 @@ func TestNormalizeReviewResolutionValue(t *testing.T) {
 }
 
 func TestResolvedReviewQueueTagsRemovesPendingMarkers(t *testing.T) {
-	got := resolvedReviewQueueTags([]string{"review:required", "status:review_required", "service:api", "review-queue"}, "resolved")
+	got := review.ResolvedTags([]string{"review:required", "status:review_required", "service:api", "review-queue"}, "resolved")
 
 	has := map[string]bool{}
 	for _, tag := range got {

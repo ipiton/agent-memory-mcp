@@ -24,11 +24,11 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 
 	query, ok := getString(args, "query")
 	if !ok {
-		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
 	}
 	query = strings.TrimSpace(query)
 	if err := userio.ValidateQuery(query); err != nil {
-		return nil, &rpcError{Code: -32602, Message: err.Error()}
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 
 	limit := boundedLimit(args, 10, 50)
@@ -37,7 +37,7 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 
 	results, err := s.ragEngine.Search(context.Background(), query, limit, sourceType, debug)
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: fmt.Sprintf("search failed: %v", err)}
+		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("search failed: %v", err)}
 	}
 
 	return toolResultText(s.formatSearchResults(results)), nil
@@ -50,7 +50,7 @@ func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
 
 	err := s.ragEngine.IndexDocuments(context.Background())
 	if err != nil {
-		return nil, &rpcError{Code: -32000, Message: "document indexing failed", Data: err.Error()}
+		return nil, &rpcError{Code: rpcErrServerError, Message: "document indexing failed", Data: err.Error()}
 	}
 
 	return toolResultText("Documents indexed successfully."), nil
@@ -83,7 +83,7 @@ func (s *MCPServer) formatSearchResults(results *rag.SearchResponse) string {
 			fmt.Fprintf(&buf, "   Source type: %s\n", result.SourceType)
 		}
 		if result.Trust != nil {
-			fmt.Fprintf(&buf, "   Trust: %s\n", formatDocTrust(result.Trust))
+			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(result.Trust))
 		}
 		if result.Debug != nil {
 			fmt.Fprintf(&buf,

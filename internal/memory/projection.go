@@ -115,8 +115,8 @@ func (ms *Store) ConflictsReport(ctx context.Context, filters Filters, limit int
 			SuggestedAction: suggestedAction(reason),
 			MemoryIDs:       ids,
 			Titles:          titles,
-			Statuses:        unionStrings(statuses),
-			Tags:            unionStrings(mapKeysToSlice(tagSet)),
+			Statuses:        UnionStrings(statuses),
+			Tags:            UnionStrings(mapKeysToSlice(tagSet)),
 		}
 		reports = append(reports, report)
 	}
