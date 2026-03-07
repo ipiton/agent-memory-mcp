@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -44,7 +45,7 @@ func runProjectBank(args []string) {
 		os.Exit(1)
 	}
 
-	result, err := store.ProjectBankView(parsedView, memory.ProjectBankOptions{
+	result, err := store.ProjectBankView(context.Background(), parsedView, memory.ProjectBankOptions{
 		Filters: memory.Filters{
 			Context: strings.TrimSpace(*ctx),
 		},

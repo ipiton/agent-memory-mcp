@@ -1,6 +1,7 @@
 package sessionclose
 
 import (
+	"context"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -54,12 +55,12 @@ func buildSessionDelta(summary memory.SessionSummary) (memory.SessionDelta, []*e
 	return delta, candidates
 }
 
-func (s *Service) planActions(summary memory.SessionSummary, candidates []*extractedCandidate) ([]CandidateAction, []string, error) {
+func (s *Service) planActions(ctx context.Context, summary memory.SessionSummary, candidates []*extractedCandidate) ([]CandidateAction, []string, error) {
 	if len(candidates) == 0 {
 		return nil, nil, nil
 	}
 
-	existing, err := s.store.List(memory.Filters{Context: summary.Context}, 0)
+	existing, err := s.store.List(ctx, memory.Filters{Context: summary.Context}, 0)
 	if err != nil {
 		return nil, nil, err
 	}

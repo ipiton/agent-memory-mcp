@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -34,7 +35,7 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 	sourceType, _ := getString(args, "source_type")
 	debug, _ := getBool(args, "debug")
 
-	results, err := s.ragEngine.Search(query, limit, sourceType, debug)
+	results, err := s.ragEngine.Search(context.Background(), query, limit, sourceType, debug)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: fmt.Sprintf("search failed: %v", err)}
 	}
@@ -47,7 +48,7 @@ func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	err := s.ragEngine.IndexDocuments()
+	err := s.ragEngine.IndexDocuments(context.Background())
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "document indexing failed", Data: err.Error()}
 	}

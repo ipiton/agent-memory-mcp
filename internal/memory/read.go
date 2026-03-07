@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -54,7 +55,7 @@ func (ms *Store) snapshotForContext(context string) []*Memory {
 }
 
 // Recall searches memories by semantic similarity, applying filters and importance weighting.
-func (ms *Store) Recall(query string, filters Filters, limit int) ([]*SearchResult, error) {
+func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limit int) ([]*SearchResult, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
 	if len(snapshot) == 0 {
 		return nil, nil
@@ -63,7 +64,7 @@ func (ms *Store) Recall(query string, filters Filters, limit int) ([]*SearchResu
 	var queryEmbedding []float32
 	var queryModelID string
 	if ms.embedder != nil {
-		result, err := ms.embedder.EmbedQueryDetailed(query)
+		result, err := ms.embedder.EmbedQueryDetailed(ctx, query)
 		if err != nil {
 			ms.logger.Warn("Failed to embed query, falling back to text search", zap.Error(err))
 		} else {
@@ -316,7 +317,7 @@ func (ms *Store) Get(id string) (*Memory, error) {
 }
 
 // List returns memories matching the given filters, sorted by update time descending.
-func (ms *Store) List(filters Filters, limit int) ([]*Memory, error) {
+func (ms *Store) List(ctx context.Context, filters Filters, limit int) ([]*Memory, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
 
 	var results []*Memory
@@ -343,7 +344,7 @@ func (ms *Store) List(filters Filters, limit int) ([]*Memory, error) {
 }
 
 // ExportAll returns all memories sorted by CreatedAt ascending.
-func (ms *Store) ExportAll() ([]*Memory, error) {
+func (ms *Store) ExportAll(ctx context.Context) ([]*Memory, error) {
 	result := ms.snapshotReadonlyMemories()
 
 	sort.Slice(result, func(i, j int) bool {

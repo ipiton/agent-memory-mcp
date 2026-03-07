@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -101,7 +102,7 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 	}
 
 	if *rawOnly {
-		rawID, err := serviceLayer.SaveRawSummary(sessionSummary)
+		rawID, err := serviceLayer.SaveRawSummary(context.Background(), sessionSummary)
 		if err != nil {
 			failSessionCommand(err)
 		}
@@ -117,7 +118,7 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 		return
 	}
 
-	result, err := serviceLayer.Analyze(sessionclose.AnalyzeRequest{
+	result, err := serviceLayer.Analyze(context.Background(), sessionclose.AnalyzeRequest{
 		Summary:          sessionSummary,
 		DryRun:           behavior.dryRun,
 		SaveRaw:          behavior.saveRaw,

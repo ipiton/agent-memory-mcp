@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
@@ -30,7 +31,7 @@ func benchStore(b *testing.B, n int) *Store {
 		if i%3 == 0 {
 			mem.Context = "project-alpha"
 		}
-		if err := store.Store(mem); err != nil {
+		if err := store.Store(context.Background(), mem); err != nil {
 			b.Fatalf("Store: %v", err)
 		}
 	}
@@ -43,7 +44,7 @@ func BenchmarkRecall(b *testing.B) {
 			store := benchStore(b, n)
 			b.ResetTimer()
 			for range b.N {
-				if _, err := store.Recall("deployment infrastructure monitoring", Filters{}, 10); err != nil {
+				if _, err := store.Recall(context.Background(), "deployment infrastructure monitoring", Filters{}, 10); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -55,7 +56,7 @@ func BenchmarkRecallWithContext(b *testing.B) {
 	store := benchStore(b, 5000)
 	b.ResetTimer()
 	for range b.N {
-		if _, err := store.Recall("deployment", Filters{Context: "project-alpha"}, 10); err != nil {
+		if _, err := store.Recall(context.Background(), "deployment", Filters{Context: "project-alpha"}, 10); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -67,7 +68,7 @@ func BenchmarkList(b *testing.B) {
 			store := benchStore(b, n)
 			b.ResetTimer()
 			for range b.N {
-				if _, err := store.List(Filters{}, 20); err != nil {
+				if _, err := store.List(context.Background(), Filters{}, 20); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -91,7 +92,7 @@ func BenchmarkStore(b *testing.B) {
 			Type:       TypeSemantic,
 			Importance: 0.5,
 		}
-		if err := store.Store(mem); err != nil {
+		if err := store.Store(context.Background(), mem); err != nil {
 			b.Fatal(err)
 		}
 	}

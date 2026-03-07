@@ -1,13 +1,14 @@
 package sessionclose
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
 
-func (s *Service) executeActions(result *AnalysisResult, req AnalyzeRequest) error {
+func (s *Service) executeActions(ctx context.Context, result *AnalysisResult, req AnalyzeRequest) error {
 	if result == nil {
 		return nil
 	}
@@ -16,7 +17,7 @@ func (s *Service) executeActions(result *AnalysisResult, req AnalyzeRequest) err
 		action := &result.Actions[i]
 		if action.Kind == ActionRawOnly {
 			if req.SaveRaw {
-				rawID, err := s.SaveRawSummary(result.Summary)
+				rawID, err := s.SaveRawSummary(ctx, result.Summary)
 				if err != nil {
 					return err
 				}
@@ -39,7 +40,7 @@ func (s *Service) executeActions(result *AnalysisResult, req AnalyzeRequest) err
 			continue
 		}
 
-		if err := s.applyAction(action); err != nil {
+		if err := s.applyAction(ctx, action); err != nil {
 			action.State = ActionStateReviewRequired
 			action.ExecutionNote = err.Error()
 		}
@@ -48,16 +49,16 @@ func (s *Service) executeActions(result *AnalysisResult, req AnalyzeRequest) err
 	return nil
 }
 
-func (s *Service) applyAction(action *CandidateAction) error {
+func (s *Service) applyAction(ctx context.Context, action *CandidateAction) error {
 	if action == nil {
 		return fmt.Errorf("action is required")
 	}
 
 	switch action.Kind {
 	case ActionUpdate:
-		return s.applyUpdateAction(action)
+		return s.applyUpdateAction(ctx, action)
 	case ActionMerge:
-		return s.applyMergeAction(action)
+		return s.applyMergeAction(ctx, action)
 	default:
 		action.State = ActionStateReviewRequired
 		action.ExecutionNote = "auto-apply policy does not support this action kind"
@@ -65,7 +66,7 @@ func (s *Service) applyAction(action *CandidateAction) error {
 	}
 }
 
-func (s *Service) applyUpdateAction(action *CandidateAction) error {
+func (s *Service) applyUpdateAction(ctx context.Context, action *CandidateAction) error {
 	if strings.TrimSpace(action.TargetMemoryID) == "" {
 		return fmt.Errorf("target memory id is required for update")
 	}
@@ -97,7 +98,7 @@ func (s *Service) applyUpdateAction(action *CandidateAction) error {
 		updates.Importance = &importance
 	}
 
-	if err := s.store.Update(action.TargetMemoryID, updates); err != nil {
+	if err := s.store.Update(ctx, action.TargetMemoryID, updates); err != nil {
 		return err
 	}
 
@@ -107,7 +108,7 @@ func (s *Service) applyUpdateAction(action *CandidateAction) error {
 	return nil
 }
 
-func (s *Service) applyMergeAction(action *CandidateAction) error {
+func (s *Service) applyMergeAction(ctx context.Context, action *CandidateAction) error {
 	if strings.TrimSpace(action.TargetMemoryID) == "" {
 		return fmt.Errorf("target memory id is required for merge")
 	}
@@ -117,13 +118,13 @@ func (s *Service) applyMergeAction(action *CandidateAction) error {
 
 	candidate := sanitizeKnowledgeCandidate(action.Candidate)
 	candidate.ID = ""
-	if err := s.store.Store(candidate); err != nil {
+	if err := s.store.Store(ctx, candidate); err != nil {
 		return err
 	}
 
-	result, err := s.store.MergeDuplicates(action.TargetMemoryID, []string{candidate.ID})
+	result, err := s.store.MergeDuplicates(ctx, action.TargetMemoryID, []string{candidate.ID})
 	if err != nil {
-		_ = s.store.Delete(candidate.ID)
+		_ = s.store.Delete(ctx, candidate.ID)
 		return err
 	}
 

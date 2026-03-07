@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -99,7 +100,7 @@ func runStore(args []string) {
 	}
 	m.Tags = userio.ParseCSVTags(*tags)
 
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -149,7 +150,7 @@ func runRecall(args []string) {
 	filters := memory.Filters{Type: parsedType}
 	filters.Tags = userio.ParseCSVTags(*tags)
 
-	results, err := store.Recall(query, filters, *limit)
+	results, err := store.Recall(context.Background(), query, filters, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -202,7 +203,7 @@ func runList(args []string) {
 		Context: strings.TrimSpace(*ctx),
 	}
 
-	results, err := store.List(filters, *limit)
+	results, err := store.List(context.Background(), filters, *limit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -246,7 +247,7 @@ func runDelete(args []string) {
 	}
 	defer cleanup()
 
-	if err := store.Delete(id); err != nil {
+	if err := store.Delete(context.Background(), id); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -287,7 +288,7 @@ func runSearch(args []string) {
 	}
 	defer engine.Stop()
 
-	resp, err := engine.Search(query, *limit, *sourceType, *debug)
+	resp, err := engine.Search(context.Background(), query, *limit, *sourceType, *debug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -364,7 +365,7 @@ func runIndex(args []string) {
 
 	fmt.Println("Indexing documents...")
 	start := time.Now()
-	if err := engine.IndexDocuments(); err != nil {
+	if err := engine.IndexDocuments(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -439,7 +440,7 @@ func runReembed(args []string) {
 	}
 	defer cleanup()
 
-	result, err := store.ReembedAll()
+	result, err := store.ReembedAll(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -484,7 +485,7 @@ func runExport(args []string) {
 	}
 	defer cleanup()
 
-	memories, err := store.ExportAll()
+	memories, err := store.ExportAll(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -560,7 +561,7 @@ func runImport(args []string) {
 		// Clear embedding to regenerate with current embedder
 		m.Embedding = nil
 		m.EmbeddingModel = ""
-		if err := store.Store(m); err != nil {
+		if err := store.Store(context.Background(), m); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to import memory %s: %v\n", m.ID, err)
 			continue
 		}

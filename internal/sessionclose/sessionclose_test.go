@@ -1,6 +1,7 @@
 package sessionclose
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func newTestService(t *testing.T) (*Service, *memory.Store) {
 func TestAnalyzeReturnsRawOnlyForWeakSignal(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "payments",
 			Summary: "Wrapped up the task and left a short note for tomorrow.",
@@ -69,11 +70,11 @@ func TestAnalyzeBuildsDeltaAndLinksExistingKnowledge(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Mode:    memory.SessionModeMigration,
 			Context: "payments",
@@ -132,7 +133,7 @@ func TestAnalyzeBuildsDeltaAndLinksExistingKnowledge(t *testing.T) {
 func TestSaveRawSummaryProtectsReservedMetadata(t *testing.T) {
 	svc, store := newTestService(t)
 
-	rawID, err := svc.SaveRawSummary(memory.SessionSummary{
+	rawID, err := svc.SaveRawSummary(context.Background(), memory.SessionSummary{
 		Context: "payments",
 		Service: "api",
 		Mode:    memory.SessionModeIncident,
@@ -180,11 +181,11 @@ func TestAnalyzeAutoAppliesNearExactUpdate(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Mode:    memory.SessionModeCoding,
 			Context: "payments",
@@ -249,11 +250,11 @@ func TestAnalyzeQueuesAutoApplyCandidateWhenPolicyDisabled(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "payments",
 			Service: "api",
@@ -305,11 +306,11 @@ func TestIncidentModePreventsAutoApplyForOperationalUpdate(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Mode:    memory.SessionModeIncident,
 			Context: "payments",
@@ -351,7 +352,7 @@ func TestIncidentModePreventsAutoApplyForOperationalUpdate(t *testing.T) {
 func TestAnalyzeInfersMigrationModeAndMigrationTypeFromSummary(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "payments",
 			Service: "payments-db",
@@ -388,7 +389,7 @@ func TestAnalyzeInfersMigrationModeAndMigrationTypeFromSummary(t *testing.T) {
 func TestFormatAnalysisIncludesSummaryReviewAndNextActions(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "payments",
 			Service: "api",
@@ -430,11 +431,11 @@ func TestAnalyzeSupersedeDetection(t *testing.T) {
 			memory.MetadataService: "auth",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "auth",
 			Service: "auth",
@@ -469,7 +470,7 @@ func TestAnalyzeSupersedeDetection(t *testing.T) {
 func TestAnalyzeCanonicalPromotion(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "platform",
 			Service: "api",
@@ -501,7 +502,7 @@ func TestAnalyzeCanonicalPromotion(t *testing.T) {
 func TestAnalyzeNewActionWhenNoExistingMatch(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "billing",
 			Service: "payments",
@@ -542,11 +543,11 @@ func TestAnalyzeMergeActionForHighOverlap(t *testing.T) {
 			memory.MetadataService: "payments",
 		},
 	}
-	if err := store.Store(existing); err != nil {
+	if err := store.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "billing",
 			Service: "payments",
@@ -581,7 +582,7 @@ func TestAnalyzeMergeActionForHighOverlap(t *testing.T) {
 func TestAnalyzeLowConfidenceGetsHardReview(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	result, err := svc.Analyze(AnalyzeRequest{
+	result, err := svc.Analyze(context.Background(), AnalyzeRequest{
 		Summary: memory.SessionSummary{
 			Context: "infra",
 			Service: "worker",

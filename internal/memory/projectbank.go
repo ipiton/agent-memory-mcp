@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -95,14 +96,14 @@ func ValidateProjectBankView(value string) (ProjectBankView, error) {
 	}
 }
 
-func (ms *Store) ProjectBankView(view ProjectBankView, options ProjectBankOptions) (*ProjectBankViewResult, error) {
+func (ms *Store) ProjectBankView(ctx context.Context, view ProjectBankView, options ProjectBankOptions) (*ProjectBankViewResult, error) {
 	normalizedView, err := ValidateProjectBankView(string(view))
 	if err != nil {
 		return nil, err
 	}
 	options = normalizeProjectBankOptions(options)
 
-	memories, err := ms.List(options.Filters, 0)
+	memories, err := ms.List(ctx, options.Filters, 0)
 	if err != nil {
 		return nil, err
 	}

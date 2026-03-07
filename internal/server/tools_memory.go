@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 
@@ -54,7 +55,7 @@ func (s *MCPServer) callStoreMemory(args map[string]any) (any, *rpcError) {
 		mem.Importance = normalizedImportance
 	}
 
-	err := s.memoryStore.Store(mem)
+	err := s.memoryStore.Store(context.Background(), mem)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to store memory", Data: err.Error()}
 	}
@@ -94,7 +95,7 @@ func (s *MCPServer) callRecallMemory(args map[string]any) (any, *rpcError) {
 	}
 	filters.Tags = userio.NormalizeTags(getStringSlice(args, "tags"))
 
-	results, err := s.memoryStore.Recall(query, filters, limit)
+	results, err := s.memoryStore.Recall(context.Background(), query, filters, limit)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "memory recall failed", Data: err.Error()}
 	}
@@ -135,7 +136,7 @@ func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {
 		updates.Importance = &normalizedImportance
 	}
 
-	err := s.memoryStore.Update(id, updates)
+	err := s.memoryStore.Update(context.Background(), id, updates)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to update memory", Data: err.Error()}
 	}
@@ -153,7 +154,7 @@ func (s *MCPServer) callDeleteMemory(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: -32602, Message: "id parameter is required"}
 	}
 
-	err := s.memoryStore.Delete(id)
+	err := s.memoryStore.Delete(context.Background(), id)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to delete memory", Data: err.Error()}
 	}
@@ -182,7 +183,7 @@ func (s *MCPServer) callListMemories(args map[string]any) (any, *rpcError) {
 		filters.Context = strings.TrimSpace(context)
 	}
 
-	memories, err := s.memoryStore.List(filters, limit)
+	memories, err := s.memoryStore.List(context.Background(), filters, limit)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to list memories", Data: err.Error()}
 	}
@@ -243,7 +244,7 @@ func (s *MCPServer) callMergeDuplicates(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: -32602, Message: "duplicate_ids parameter is required"}
 	}
 
-	result, err := s.memoryStore.MergeDuplicates(primaryID, duplicateIDs)
+	result, err := s.memoryStore.MergeDuplicates(context.Background(), primaryID, duplicateIDs)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to merge duplicates", Data: err.Error()}
 	}
@@ -268,7 +269,7 @@ func (s *MCPServer) callMarkOutdated(args map[string]any) (any, *rpcError) {
 	reason, _ := getString(args, "reason")
 	supersededBy, _ := getString(args, "superseded_by")
 
-	result, err := s.memoryStore.MarkOutdated(id, reason, supersededBy)
+	result, err := s.memoryStore.MarkOutdated(context.Background(), id, reason, supersededBy)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to mark memory outdated", Data: err.Error()}
 	}
@@ -293,7 +294,7 @@ func (s *MCPServer) callPromoteToCanonical(args map[string]any) (any, *rpcError)
 	}
 	owner, _ := getString(args, "owner")
 
-	result, err := s.memoryStore.PromoteToCanonical(id, owner)
+	result, err := s.memoryStore.PromoteToCanonical(context.Background(), id, owner)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to promote memory to canonical", Data: err.Error()}
 	}
@@ -313,6 +314,7 @@ func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
+	ctx := context.Background()
 	limit := boundedLimit(args, 10, 50)
 	context, _ := getString(args, "context")
 	service, _ := getString(args, "service")
@@ -327,7 +329,7 @@ func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 		filters.Type = parsedType
 	}
 
-	report, err := s.memoryStore.ConflictsReport(filters, limit*3)
+	report, err := s.memoryStore.ConflictsReport(ctx, filters, limit*3)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to build conflicts report", Data: err.Error()}
 	}
@@ -354,6 +356,7 @@ func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcEr
 		return nil, err
 	}
 
+	ctx := context.Background()
 	limit := boundedLimit(args, 10, 50)
 	context, _ := getString(args, "context")
 	service, _ := getString(args, "service")
@@ -368,7 +371,7 @@ func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcEr
 		filters.Type = parsedType
 	}
 
-	entries, err := s.memoryStore.ListCanonical(filters, limit*3)
+	entries, err := s.memoryStore.ListCanonical(ctx, filters, limit*3)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to list canonical knowledge", Data: err.Error()}
 	}
@@ -382,6 +385,7 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 		return nil, err
 	}
 
+	ctx := context.Background()
 	query, ok := getString(args, "query")
 	if !ok {
 		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
@@ -404,7 +408,7 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 		filters.Type = parsedType
 	}
 
-	results, err := s.memoryStore.RecallCanonical(query, filters, limit*3)
+	results, err := s.memoryStore.RecallCanonical(ctx, query, filters, limit*3)
 	if err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to recall canonical knowledge", Data: err.Error()}
 	}

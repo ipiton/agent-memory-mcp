@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -273,7 +274,7 @@ func TestConsoleAPIMemoryQuery(t *testing.T) {
 		Tags:       []string{"runbook", "service:api"},
 		Metadata:   map[string]string{"entity": "runbook", "service": "api"},
 	}
-	if err := s.memoryStore.Store(mem); err != nil {
+	if err := s.memoryStore.Store(context.Background(),mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -470,7 +471,7 @@ func TestCallStoreDecisionStoresWorkflowMemory(t *testing.T) {
 		t.Fatalf("unexpected result text: %s", toolRes.Content[0].Text)
 	}
 
-	memories, err := s.memoryStore.List(memory.Filters{}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -513,7 +514,7 @@ func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -581,7 +582,7 @@ func TestCallAnalyzeSessionSaveRawPersistsSessionSummary(t *testing.T) {
 		t.Fatalf("expected json output with raw_summary_saved, got:\n%s", toolRes.Content[0].Text)
 	}
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -618,7 +619,7 @@ func TestCallAnalyzeSessionAutoApplyLowRiskReturnsAppliedState(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -701,7 +702,7 @@ func TestCallAcceptSessionChangesUsesWriteEnabledDefaults(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -792,7 +793,7 @@ func TestCallStoreMemoryNormalizesTagsFromString(t *testing.T) {
 		t.Fatalf("callStoreMemory error = %v", rErr)
 	}
 
-	memories, err := s.memoryStore.List(memory.Filters{}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -866,11 +867,11 @@ func TestSummarizeProjectContextIncludesWorkflowSections(t *testing.T) {
 			Tags:       []string{"incident", "service:api"},
 		},
 	} {
-		if err := s.memoryStore.Store(mem); err != nil {
+		if err := s.memoryStore.Store(context.Background(),mem); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -884,7 +885,7 @@ func TestSummarizeProjectContextIncludesWorkflowSections(t *testing.T) {
 	if canonicalID == "" {
 		t.Fatal("failed to find decision memory to promote")
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(canonicalID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),canonicalID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -935,10 +936,10 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataStatus:  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(decision); err != nil {
+	if err := s.memoryStore.Store(context.Background(),decision); err != nil {
 		t.Fatalf("Store decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(decision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),decision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -955,7 +956,7 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataSessionMode: string(memory.SessionModeMigration),
 		},
 	}
-	if err := s.memoryStore.Store(session); err != nil {
+	if err := s.memoryStore.Store(context.Background(),session); err != nil {
 		t.Fatalf("Store session summary: %v", err)
 	}
 
@@ -973,7 +974,7 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataReviewRequired:  "true",
 		},
 	}
-	if err := s.memoryStore.Store(stale); err != nil {
+	if err := s.memoryStore.Store(context.Background(),stale); err != nil {
 		t.Fatalf("Store stale caveat: %v", err)
 	}
 
@@ -1023,10 +1024,10 @@ func TestCallProjectBankViewJSONAppliesStatusOwnerAndServiceFilters(t *testing.T
 			memory.MetadataStatus:  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(canonicalDecision); err != nil {
+	if err := s.memoryStore.Store(context.Background(),canonicalDecision); err != nil {
 		t.Fatalf("Store canonical decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(canonicalDecision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),canonicalDecision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -1043,7 +1044,7 @@ func TestCallProjectBankViewJSONAppliesStatusOwnerAndServiceFilters(t *testing.T
 			memory.MetadataStatus:  "draft",
 		},
 	}
-	if err := s.memoryStore.Store(rawDecision); err != nil {
+	if err := s.memoryStore.Store(context.Background(),rawDecision); err != nil {
 		t.Fatalf("Store raw decision: %v", err)
 	}
 
@@ -1103,7 +1104,7 @@ func TestBackgroundSessionTrackerFlushesOnIdle(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1138,7 +1139,7 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 20)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 20)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1156,7 +1157,7 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 		t.Fatalf("expected review queue item, memories = %d", len(memories))
 	}
 
-	view, err := s.memoryStore.ProjectBankView(memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
+	view, err := s.memoryStore.ProjectBankView(context.Background(),memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
 		Filters: memory.Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,
@@ -1196,7 +1197,7 @@ func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing
 		t.Fatalf("second handleToolsCall returned error: %+v", rErr)
 	}
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1238,7 +1239,7 @@ func TestBackgroundSessionTrackerFlushesOnTaskDoneNotification(t *testing.T) {
 		}`),
 	})
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 20)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 20)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1278,7 +1279,7 @@ func TestBackgroundSessionTrackerCheckpointNotificationPersistsCheckpoint(t *tes
 		}`),
 	})
 
-	memories, err := s.memoryStore.List(memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1311,7 +1312,7 @@ func TestCallResolveReviewItemRemovesItemFromActiveQueue(t *testing.T) {
 			memory.MetadataStatus:         "review_required",
 		},
 	}
-	if err := s.memoryStore.Store(item); err != nil {
+	if err := s.memoryStore.Store(context.Background(),item); err != nil {
 		t.Fatalf("Store review item: %v", err)
 	}
 
@@ -1344,7 +1345,7 @@ func TestCallResolveReviewItemRemovesItemFromActiveQueue(t *testing.T) {
 		t.Fatalf("review_resolved_by = %q, want platform", updated.Metadata["review_resolved_by"])
 	}
 
-	view, err := s.memoryStore.ProjectBankView(memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
+	view, err := s.memoryStore.ProjectBankView(context.Background(),memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
 		Filters: memory.Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,
@@ -1372,10 +1373,10 @@ func TestCanonicalKnowledgeTools(t *testing.T) {
 			"service": "api",
 		},
 	}
-	if err := s.memoryStore.Store(mem); err != nil {
+	if err := s.memoryStore.Store(context.Background(),mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(mem.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),mem.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -1446,10 +1447,10 @@ func TestConsolidationToolsWorkflow(t *testing.T) {
 			"status":  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(primary); err != nil {
+	if err := s.memoryStore.Store(context.Background(),primary); err != nil {
 		t.Fatalf("Store primary: %v", err)
 	}
-	if err := s.memoryStore.Store(duplicate); err != nil {
+	if err := s.memoryStore.Store(context.Background(),duplicate); err != nil {
 		t.Fatalf("Store duplicate: %v", err)
 	}
 
@@ -1508,7 +1509,7 @@ func TestConsolidationToolsWorkflow(t *testing.T) {
 		t.Fatalf("knowledge_layer = %q, want canonical", storedPrimary.Metadata["knowledge_layer"])
 	}
 
-	finalReport, err := s.memoryStore.ConflictsReport(memory.Filters{Context: "payments"}, 10)
+	finalReport, err := s.memoryStore.ConflictsReport(context.Background(),memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("ConflictsReport: %v", err)
 	}

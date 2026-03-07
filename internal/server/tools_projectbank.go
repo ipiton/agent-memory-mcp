@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -17,7 +18,7 @@ func (s *MCPServer) callProjectBankView(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: -32602, Message: err.Error()}
 	}
 
-	result, err := s.memoryStore.ProjectBankView(view, memory.ProjectBankOptions{
+	result, err := s.memoryStore.ProjectBankView(context.Background(), view, memory.ProjectBankOptions{
 		Filters: memory.Filters{
 			Context: strings.TrimSpace(mustString(args, "context")),
 		},

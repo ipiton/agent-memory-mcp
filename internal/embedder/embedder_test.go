@@ -1,6 +1,7 @@
 package embedder
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +43,7 @@ func TestEmbedLocalOnlySkipsHostedProviders(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	embedding, err := e.Embed("hello")
+	embedding, err := e.Embed(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestEmbedLocalOnlyReturnsSpecificError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, err = e.Embed("hello")
+	_, err = e.Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -109,7 +110,7 @@ func TestEmbedQueryDetailedUsesOpenAIAdapter(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	result, err := e.EmbedQueryDetailed("hello adapters")
+	result, err := e.EmbedQueryDetailed(context.Background(), "hello adapters")
 	if err != nil {
 		t.Fatalf("EmbedQueryDetailed: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestBatchEmbedDetailedUsesOllamaAdapter(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	result, err := e.BatchEmbedDetailed([]string{"first", "second"})
+	result, err := e.BatchEmbedDetailed(context.Background(), []string{"first", "second"})
 	if err != nil {
 		t.Fatalf("BatchEmbedDetailed: %v", err)
 	}
@@ -232,7 +233,7 @@ func TestBatchEmbedDetailedFallsBackAfterHostedDimensionMismatch(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	result, err := e.BatchEmbedDetailed([]string{"first", "second"})
+	result, err := e.BatchEmbedDetailed(context.Background(), []string{"first", "second"})
 	if err != nil {
 		t.Fatalf("BatchEmbedDetailed: %v", err)
 	}

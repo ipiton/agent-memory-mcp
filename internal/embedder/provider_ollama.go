@@ -1,6 +1,7 @@
 package embedder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ func (a ollamaAdapter) modelID() string {
 	return a.embedder.ollamaModelID(a.model)
 }
 
-func (a ollamaAdapter) embed(text, _ string) ([]float32, error) {
+func (a ollamaAdapter) embed(ctx context.Context, text, _ string) ([]float32, error) {
 	payload := map[string]any{
 		"model":  a.model,
 		"prompt": text,
@@ -33,7 +34,7 @@ func (a ollamaAdapter) embed(text, _ string) ([]float32, error) {
 		}
 
 		var response ollamaEmbeddingResponse
-		err := a.embedder.postJSON(a.singleEndpoint(), nil, payload, &response)
+		err := a.embedder.postJSON(ctx, a.singleEndpoint(), nil, payload, &response)
 		if err != nil {
 			if attempt < a.embedder.config.MaxRetries {
 				continue
@@ -53,7 +54,7 @@ func (a ollamaAdapter) embed(text, _ string) ([]float32, error) {
 	return nil, fmt.Errorf("ollama %s: all retries exhausted", a.model)
 }
 
-func (a ollamaAdapter) batchEmbed(texts []string, _ string) ([][]float32, error) {
+func (a ollamaAdapter) batchEmbed(ctx context.Context, texts []string, _ string) ([][]float32, error) {
 	const subBatchSize = 10
 
 	allEmbeddings := make([][]float32, len(texts))
@@ -62,7 +63,7 @@ func (a ollamaAdapter) batchEmbed(texts []string, _ string) ([][]float32, error)
 		if end > len(texts) {
 			end = len(texts)
 		}
-		embeddings, err := a.embedSubBatch(texts[start:end])
+		embeddings, err := a.embedSubBatch(ctx, texts[start:end])
 		if err != nil {
 			return nil, err
 		}
@@ -71,7 +72,7 @@ func (a ollamaAdapter) batchEmbed(texts []string, _ string) ([][]float32, error)
 	return allEmbeddings, nil
 }
 
-func (a ollamaAdapter) embedSubBatch(texts []string) ([][]float32, error) {
+func (a ollamaAdapter) embedSubBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	payload := map[string]any{
 		"model": a.model,
 		"input": texts,
@@ -83,7 +84,7 @@ func (a ollamaAdapter) embedSubBatch(texts []string) ([][]float32, error) {
 		}
 
 		var response ollamaBatchEmbeddingResponse
-		err := a.embedder.postJSON(a.batchEndpoint(), nil, payload, &response)
+		err := a.embedder.postJSON(ctx, a.batchEndpoint(), nil, payload, &response)
 		if err != nil {
 			if attempt < a.embedder.config.MaxRetries {
 				continue

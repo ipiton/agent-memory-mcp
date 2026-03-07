@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -44,8 +45,8 @@ func suggestedAction(reason string) string {
 	}
 }
 
-func (ms *Store) ConflictsReport(filters Filters, limit int) ([]ConflictReportItem, error) {
-	memories, err := ms.List(filters, 0)
+func (ms *Store) ConflictsReport(ctx context.Context, filters Filters, limit int) ([]ConflictReportItem, error) {
+	memories, err := ms.List(ctx, filters, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -173,8 +174,8 @@ func ToCanonicalKnowledge(m *Memory, tm *trust.Metadata) *CanonicalKnowledge {
 }
 
 // ListCanonical returns canonical knowledge entries projected from canonical memories.
-func (ms *Store) ListCanonical(filters Filters, limit int) ([]*CanonicalKnowledge, error) {
-	memories, err := ms.List(filters, 0)
+func (ms *Store) ListCanonical(ctx context.Context, filters Filters, limit int) ([]*CanonicalKnowledge, error) {
+	memories, err := ms.List(ctx, filters, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +195,8 @@ func (ms *Store) ListCanonical(filters Filters, limit int) ([]*CanonicalKnowledg
 }
 
 // RecallCanonical returns only canonical knowledge entries for a query.
-func (ms *Store) RecallCanonical(query string, filters Filters, limit int) ([]*CanonicalSearchResult, error) {
-	results, err := ms.Recall(query, filters, 0)
+func (ms *Store) RecallCanonical(ctx context.Context, query string, filters Filters, limit int) ([]*CanonicalSearchResult, error) {
+	results, err := ms.Recall(ctx, query, filters, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -67,7 +68,7 @@ func runResolveReviewItem(args []string) {
 		metadata["review_resolved_by"] = trimmed
 	}
 
-	if err := store.Update(itemID, memory.Update{
+	if err := store.Update(context.Background(), itemID, memory.Update{
 		Tags:     resolvedReviewQueueTags(mem.Tags, resolutionValue),
 		Metadata: metadata,
 	}); err != nil {

@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -138,7 +139,7 @@ func TestIndexDocumentsRecoversAfterDirtyCommitFailure(t *testing.T) {
 		stopWatcher: make(chan struct{}),
 	}
 
-	err = engine.IndexDocuments()
+	err = engine.IndexDocuments(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "failed to commit index state") {
 		t.Fatalf("first IndexDocuments error = %v, want final commit failure", err)
 	}
@@ -154,7 +155,7 @@ func TestIndexDocumentsRecoversAfterDirtyCommitFailure(t *testing.T) {
 		t.Fatal("expected chunks to remain after failed final commit")
 	}
 
-	if err := engine.IndexDocuments(); err != nil {
+	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatalf("second IndexDocuments: %v", err)
 	}
 

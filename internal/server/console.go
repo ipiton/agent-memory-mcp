@@ -146,7 +146,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.ragEngine.Search(req.Query, req.Limit, req.SourceType, req.Debug)
+			results, err := server.ragEngine.Search(r.Context(), req.Query, req.Limit, req.SourceType, req.Debug)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return
@@ -167,7 +167,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.memoryStore.Recall(req.Query, filters, req.Limit)
+			results, err := server.memoryStore.Recall(r.Context(), req.Query, filters, req.Limit)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return
@@ -189,7 +189,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.memoryStore.RecallCanonical(req.Query, filters, req.Limit)
+			results, err := server.memoryStore.RecallCanonical(r.Context(), req.Query, filters, req.Limit)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return

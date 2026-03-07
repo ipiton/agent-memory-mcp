@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestValidateProjectBankViewAcceptsOverviewAlias(t *testing.T) {
 	got, err := ValidateProjectBankView("overview")
@@ -28,10 +31,10 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 			MetadataStatus:  "accepted",
 		},
 	}
-	if err := store.Store(decision); err != nil {
+	if err := store.Store(context.Background(), decision); err != nil {
 		t.Fatalf("Store decision: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(decision.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), decision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -48,7 +51,7 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 			MetadataStatus:  "accepted",
 		},
 	}
-	if err := store.Store(runbook); err != nil {
+	if err := store.Store(context.Background(), runbook); err != nil {
 		t.Fatalf("Store runbook: %v", err)
 	}
 
@@ -65,7 +68,7 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 			MetadataSessionMode: string(SessionModeMigration),
 		},
 	}
-	if err := store.Store(session); err != nil {
+	if err := store.Store(context.Background(), session); err != nil {
 		t.Fatalf("Store session summary: %v", err)
 	}
 
@@ -83,7 +86,7 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 			MetadataReviewRequired:  "true",
 		},
 	}
-	if err := store.Store(caveat); err != nil {
+	if err := store.Store(context.Background(), caveat); err != nil {
 		t.Fatalf("Store caveat: %v", err)
 	}
 
@@ -103,11 +106,11 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 			MetadataSessionMode:    string(SessionModeIncident),
 		},
 	}
-	if err := store.Store(reviewItem); err != nil {
+	if err := store.Store(context.Background(), reviewItem); err != nil {
 		t.Fatalf("Store review queue item: %v", err)
 	}
 
-	view, err := store.ProjectBankView(ProjectBankViewCanonicalOverview, ProjectBankOptions{
+	view, err := store.ProjectBankView(context.Background(), ProjectBankViewCanonicalOverview, ProjectBankOptions{
 		Filters: Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,
@@ -158,10 +161,10 @@ func TestProjectBankViewFiltersByOwnerStatusAndService(t *testing.T) {
 			MetadataStatus:  "accepted",
 		},
 	}
-	if err := store.Store(canonicalDecision); err != nil {
+	if err := store.Store(context.Background(), canonicalDecision); err != nil {
 		t.Fatalf("Store canonical decision: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(canonicalDecision.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -178,7 +181,7 @@ func TestProjectBankViewFiltersByOwnerStatusAndService(t *testing.T) {
 			MetadataStatus:  "draft",
 		},
 	}
-	if err := store.Store(rawDecision); err != nil {
+	if err := store.Store(context.Background(), rawDecision); err != nil {
 		t.Fatalf("Store raw decision: %v", err)
 	}
 
@@ -195,11 +198,11 @@ func TestProjectBankViewFiltersByOwnerStatusAndService(t *testing.T) {
 			MetadataStatus:  "accepted",
 		},
 	}
-	if err := store.Store(otherService); err != nil {
+	if err := store.Store(context.Background(), otherService); err != nil {
 		t.Fatalf("Store other service decision: %v", err)
 	}
 
-	view, err := store.ProjectBankView(ProjectBankViewDecisions, ProjectBankOptions{
+	view, err := store.ProjectBankView(context.Background(), ProjectBankViewDecisions, ProjectBankOptions{
 		Filters: Filters{Context: "payments"},
 		Service: "payments-db",
 		Status:  "canonical",
@@ -247,7 +250,7 @@ func TestProjectBankViewReviewQueueShowsOnlyPendingReviewItems(t *testing.T) {
 			MetadataSessionMode:    string(SessionModeIncident),
 		},
 	}
-	if err := store.Store(reviewItem); err != nil {
+	if err := store.Store(context.Background(), reviewItem); err != nil {
 		t.Fatalf("Store review queue item: %v", err)
 	}
 
@@ -263,11 +266,11 @@ func TestProjectBankViewReviewQueueShowsOnlyPendingReviewItems(t *testing.T) {
 			MetadataService:    "api",
 		},
 	}
-	if err := store.Store(checkpoint); err != nil {
+	if err := store.Store(context.Background(), checkpoint); err != nil {
 		t.Fatalf("Store checkpoint: %v", err)
 	}
 
-	view, err := store.ProjectBankView(ProjectBankViewReviewQueue, ProjectBankOptions{
+	view, err := store.ProjectBankView(context.Background(), ProjectBankViewReviewQueue, ProjectBankOptions{
 		Filters: Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,

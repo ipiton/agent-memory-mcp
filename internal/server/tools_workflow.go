@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -227,7 +228,7 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 		AutoApplyLowRisk: autoApplyLowRisk,
 	}
 
-	result, analyzeErr := sessionclose.New(s.memoryStore).Analyze(request)
+	result, analyzeErr := sessionclose.New(s.memoryStore).Analyze(context.Background(), request)
 	if analyzeErr != nil {
 		return nil, &rpcError{Code: -32000, Message: "session analysis failed", Data: analyzeErr.Error()}
 	}
@@ -358,15 +359,15 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
 	}
 
+	ctx := context.Background()
 	context, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
 	limit := boundedLimit(args, 5, 20)
 	debug, _ := getBool(args, "debug")
-
 	var memoryResults []*memory.SearchResult
 	if s.memoryStore != nil {
-		results, err := s.memoryStore.Recall(query, memory.Filters{
+		results, err := s.memoryStore.Recall(ctx, query, memory.Filters{
 			Type:    memory.TypeProcedural,
 			Context: context,
 			Tags:    []string{"runbook"},
@@ -380,7 +381,7 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 	var docResults *rag.SearchResponse
 	if s.ragEngine != nil {
 		searchQuery := mergeQueryWithService(query, service)
-		results, err := s.ragEngine.Search(searchQuery, limit, "runbook", debug)
+		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "runbook", debug)
 		if err != nil {
 			return nil, &rpcError{Code: -32000, Message: "runbook document search failed", Data: err.Error()}
 		}
@@ -396,6 +397,7 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 		return nil, &rpcError{Code: -32602, Message: "query parameter is required"}
 	}
 
+	ctx := context.Background()
 	context, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	requiredTags := getStringSlice(args, "tags")
@@ -404,7 +406,7 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 
 	var memoryResults []*memory.SearchResult
 	if s.memoryStore != nil {
-		results, err := s.memoryStore.Recall(query, memory.Filters{
+		results, err := s.memoryStore.Recall(ctx, query, memory.Filters{
 			Type:    memory.TypeEpisodic,
 			Context: context,
 			Tags:    []string{"incident", "postmortem"},
@@ -418,7 +420,7 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 	var docResults *rag.SearchResponse
 	if s.ragEngine != nil {
 		searchQuery := mergeQueryWithService(query, service)
-		results, err := s.ragEngine.Search(searchQuery, limit, "postmortem", debug)
+		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "postmortem", debug)
 		if err != nil {
 			return nil, &rpcError{Code: -32000, Message: "postmortem document search failed", Data: err.Error()}
 		}
@@ -433,6 +435,7 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 		return nil, &rpcError{Code: -32000, Message: "no memory or RAG backend available"}
 	}
 
+	ctx := context.Background()
 	context, _ := getString(args, "context")
 	focus, _ := getString(args, "focus")
 	service, _ := getString(args, "service")
@@ -449,9 +452,9 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 
 		var allMemories []*memory.Memory
 		if strings.TrimSpace(focus) != "" {
-			allMemories = toMemories(s.recallMemories(focus, filters, fetchLimit))
+			allMemories = toMemories(s.recallMemories(ctx, focus, filters, fetchLimit))
 		} else {
-			allMemories = s.listMemories(filters, fetchLimit)
+			allMemories = s.listMemories(ctx, filters, fetchLimit)
 		}
 
 		serviceTag := ""
@@ -486,7 +489,7 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 	var relatedDocs *rag.SearchResponse
 	if focus != "" && s.ragEngine != nil {
 		searchQuery := mergeQueryWithService(focus, service)
-		results, err := s.ragEngine.Search(searchQuery, limit, "", false)
+		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "", false)
 		if err != nil {
 			return nil, &rpcError{Code: -32000, Message: "project context search failed", Data: err.Error()}
 		}
@@ -507,7 +510,7 @@ func (s *MCPServer) storeWorkflowMemory(entityLabel string, mem *memory.Memory) 
 	if err := userio.ValidateMemoryContent(mem.Content); err != nil {
 		return nil, &rpcError{Code: -32602, Message: err.Error()}
 	}
-	if err := s.memoryStore.Store(mem); err != nil {
+	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
 		return nil, &rpcError{Code: -32000, Message: "failed to store memory", Data: err.Error()}
 	}
 
@@ -591,7 +594,7 @@ func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memo
 		return normalizedIDs, nil
 	}
 
-	view, err := store.ProjectBankView(memory.ProjectBankViewReviewQueue, options)
+	view, err := store.ProjectBankView(context.Background(), memory.ProjectBankViewReviewQueue, options)
 	if err != nil {
 		return nil, err
 	}
@@ -672,7 +675,7 @@ func resolveReviewItemInStore(store *memory.Store, id string, resolution string,
 		metadata["review_resolved_by"] = owner
 	}
 
-	if err := store.Update(item.ID, memory.Update{
+	if err := store.Update(context.Background(), item.ID, memory.Update{
 		Tags:     resolvedReviewTags(item.Tags, resolution),
 		Metadata: metadata,
 	}); err != nil {
@@ -858,22 +861,22 @@ func filterCanonicalSearchResults(results []*memory.CanonicalSearchResult, servi
 	}, service, tags, limit)
 }
 
-func (s *MCPServer) listMemories(filters memory.Filters, limit int) []*memory.Memory {
+func (s *MCPServer) listMemories(ctx context.Context, filters memory.Filters, limit int) []*memory.Memory {
 	if s.memoryStore == nil {
 		return nil
 	}
-	memories, err := s.memoryStore.List(filters, limit)
+	memories, err := s.memoryStore.List(ctx, filters, limit)
 	if err != nil {
 		return nil
 	}
 	return memories
 }
 
-func (s *MCPServer) recallMemories(query string, filters memory.Filters, limit int) []*memory.SearchResult {
+func (s *MCPServer) recallMemories(ctx context.Context, query string, filters memory.Filters, limit int) []*memory.SearchResult {
 	if s.memoryStore == nil {
 		return nil
 	}
-	results, err := s.memoryStore.Recall(query, filters, limit)
+	results, err := s.memoryStore.Recall(ctx, query, filters, limit)
 	if err != nil {
 		return nil
 	}

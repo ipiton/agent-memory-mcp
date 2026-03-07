@@ -1,6 +1,7 @@
 package sessionclose
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -141,7 +142,7 @@ func New(store *memory.Store) *Service {
 	}
 }
 
-func (s *Service) Analyze(req AnalyzeRequest) (*AnalysisResult, error) {
+func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalysisResult, error) {
 	if s == nil || s.store == nil {
 		return nil, fmt.Errorf("memory store is required")
 	}
@@ -152,7 +153,7 @@ func (s *Service) Analyze(req AnalyzeRequest) (*AnalysisResult, error) {
 	}
 
 	delta, candidates := buildSessionDelta(summary)
-	actions, linked, err := s.planActions(summary, candidates)
+	actions, linked, err := s.planActions(ctx, summary, candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +179,7 @@ func (s *Service) Analyze(req AnalyzeRequest) (*AnalysisResult, error) {
 	}
 
 	if !req.DryRun {
-		if err := s.executeActions(result, req); err != nil {
+		if err := s.executeActions(ctx, result, req); err != nil {
 			return nil, err
 		}
 	}
@@ -190,11 +191,11 @@ func (s *Service) Analyze(req AnalyzeRequest) (*AnalysisResult, error) {
 	return result, nil
 }
 
-func (s *Service) SaveRawSummary(summary memory.SessionSummary) (string, error) {
-	return s.SaveRawSummaryWithOptions(summary, RawSaveOptions{})
+func (s *Service) SaveRawSummary(ctx context.Context, summary memory.SessionSummary) (string, error) {
+	return s.SaveRawSummaryWithOptions(ctx, summary, RawSaveOptions{})
 }
 
-func (s *Service) SaveRawSummaryWithOptions(summary memory.SessionSummary, opts RawSaveOptions) (string, error) {
+func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.SessionSummary, opts RawSaveOptions) (string, error) {
 	if s == nil || s.store == nil {
 		return "", fmt.Errorf("memory store is required")
 	}
@@ -239,7 +240,7 @@ func (s *Service) SaveRawSummaryWithOptions(summary memory.SessionSummary, opts 
 		mem.Metadata[key] = value
 	}
 
-	if err := s.store.Store(mem); err != nil {
+	if err := s.store.Store(ctx, mem); err != nil {
 		return "", err
 	}
 	return mem.ID, nil

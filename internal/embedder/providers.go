@@ -2,6 +2,7 @@ package embedder
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,13 +29,13 @@ type ollamaBatchEmbeddingResponse struct {
 	Embeddings [][]float64 `json:"embeddings"`
 }
 
-func (e *Embedder) postJSON(url string, headers map[string]string, payload any, out any) error {
+func (e *Embedder) postJSON(ctx context.Context, url string, headers map[string]string, payload any, out any) error {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}

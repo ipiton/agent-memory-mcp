@@ -2,6 +2,7 @@
 package rag
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -234,7 +235,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 }
 
 // Search performs a hybrid search query across indexed documents.
-func (re *Engine) Search(query string, limit int, sourceType string, debug bool) (*SearchResponse, error) {
+func (re *Engine) Search(ctx context.Context, query string, limit int, sourceType string, debug bool) (*SearchResponse, error) {
 	if re == nil || re.vecService == nil {
 		return nil, fmt.Errorf("RAG engine not available")
 	}
@@ -246,7 +247,7 @@ func (re *Engine) Search(query string, limit int, sourceType string, debug bool)
 		limit = re.config.RAGMaxResults
 	}
 
-	result, err := re.vecService.search(searchQuery{
+	result, err := re.vecService.search(ctx, searchQuery{
 		Query:      query,
 		Limit:      limit,
 		SourceType: sourceType,
@@ -271,7 +272,7 @@ func (re *Engine) Search(query string, limit int, sourceType string, debug bool)
 }
 
 // IndexDocuments performs incremental indexing of documents in configured directories.
-func (re *Engine) IndexDocuments() error {
+func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if re == nil || re.docService == nil || re.vecService == nil {
 		return fmt.Errorf("RAG engine not available")
 	}
@@ -295,7 +296,7 @@ func (re *Engine) IndexDocuments() error {
 		needsRebuild = true
 	}
 	if oldModel != "" && len(allDocs) > 0 {
-		currentModel, err := re.vecService.detectModelID(allDocs[0].Content)
+		currentModel, err := re.vecService.detectModelID(ctx, allDocs[0].Content)
 		if err != nil {
 			return fmt.Errorf("failed to detect current embedding model: %w", err)
 		}
@@ -379,7 +380,7 @@ func (re *Engine) IndexDocuments() error {
 				zap.Int("batch", batchNum+1),
 				zap.Int("total", totalBatches))
 
-			result, err := re.vecService.indexDocuments(batch)
+			result, err := re.vecService.indexDocuments(ctx, batch)
 			if err != nil {
 				return fmt.Errorf("failed to index: %w", err)
 			}
@@ -625,7 +626,7 @@ func (re *Engine) indexWithLock(trigger string) {
 	}()
 
 	re.logger.Info("Starting indexing", zap.String("trigger", trigger))
-	err := re.IndexDocuments()
+	err := re.IndexDocuments(context.Background())
 	if err != nil {
 		re.logger.Error("Indexing failed", zap.Error(err), zap.String("trigger", trigger))
 	} else {
@@ -721,10 +722,10 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 	}, nil
 }
 
-func (vs *vectorService) search(query searchQuery) (*SearchResponse, error) {
+func (vs *vectorService) search(ctx context.Context, query searchQuery) (*SearchResponse, error) {
 	startTime := time.Now()
 
-	queryResult, err := vs.config.Embedder.EmbedQueryDetailed(query.Query)
+	queryResult, err := vs.config.Embedder.EmbedQueryDetailed(ctx, query.Query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
@@ -758,7 +759,7 @@ func (vs *vectorService) search(query searchQuery) (*SearchResponse, error) {
 	}, nil
 }
 
-func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
+func (vs *vectorService) indexDocuments(ctx context.Context, docs []document) (*indexResult, error) {
 	result := &indexResult{
 		SuccessIDs: make([]string, 0, len(docs)),
 		FailedIDs:  make([]string, 0),
@@ -772,7 +773,7 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 	}
 
 	// Batch embed all texts at once
-	batchResult, err := vs.config.Embedder.BatchEmbedDetailed(texts)
+	batchResult, err := vs.config.Embedder.BatchEmbedDetailed(ctx, texts)
 	if err != nil {
 		// Batch failed entirely — mark all as failed
 		for _, doc := range docs {
@@ -816,8 +817,8 @@ func (vs *vectorService) indexDocuments(docs []document) (*indexResult, error) {
 	return result, nil
 }
 
-func (vs *vectorService) detectModelID(text string) (string, error) {
-	result, err := vs.config.Embedder.EmbedDetailed(text)
+func (vs *vectorService) detectModelID(ctx context.Context, text string) (string, error) {
+	result, err := vs.config.Embedder.EmbedDetailed(ctx, text)
 	if err != nil {
 		return "", err
 	}

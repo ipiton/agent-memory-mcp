@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +11,7 @@ import (
 )
 
 // Store saves a new memory, generating an ID and embedding if not provided.
-func (ms *Store) Store(m *Memory) error {
+func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
@@ -28,7 +29,7 @@ func (ms *Store) Store(m *Memory) error {
 	m.AccessedAt = now
 
 	if ms.embedder != nil && len(m.Embedding) == 0 {
-		result, err := ms.embedder.EmbedDetailed(m.Content)
+		result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
 		if err != nil {
 			ms.logger.Warn("Failed to generate embedding for memory", zap.String("id", m.ID), zap.Error(err))
 		} else {
@@ -54,7 +55,7 @@ func (ms *Store) Store(m *Memory) error {
 }
 
 // Update modifies an existing memory identified by id with the provided field updates.
-func (ms *Store) Update(id string, updates Update) error {
+func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
@@ -72,7 +73,7 @@ func (ms *Store) Update(id string, updates Update) error {
 		m.Embedding = nil
 		m.EmbeddingModel = ""
 		if ms.embedder != nil {
-			result, err := ms.embedder.EmbedDetailed(m.Content)
+			result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
 			if err == nil {
 				m.Embedding = result.Embedding
 				m.EmbeddingModel = result.ModelID
@@ -140,7 +141,7 @@ type Update struct {
 }
 
 // Delete removes a memory by ID from both the database and cache.
-func (ms *Store) Delete(id string) error {
+func (ms *Store) Delete(ctx context.Context, id string) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
@@ -164,7 +165,7 @@ func (ms *Store) Delete(id string) error {
 }
 
 // MarkOutdated archives a memory from normal operational use while keeping it queryable.
-func (ms *Store) MarkOutdated(id string, reason string, supersededBy string) (*MarkOutdatedResult, error) {
+func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*MarkOutdatedResult, error) {
 	mem, err := ms.Get(id)
 	if err != nil {
 		return nil, err
@@ -188,7 +189,7 @@ func (ms *Store) MarkOutdated(id string, reason string, supersededBy string) (*M
 		importance = 0.25
 	}
 
-	if err := ms.Update(id, Update{
+	if err := ms.Update(ctx, id, Update{
 		Importance: &importance,
 		Metadata:   metadata,
 	}); err != nil {
@@ -204,7 +205,7 @@ func (ms *Store) MarkOutdated(id string, reason string, supersededBy string) (*M
 }
 
 // PromoteToCanonical marks a memory as the current canonical entry.
-func (ms *Store) PromoteToCanonical(id string, owner string) (*PromoteToCanonicalResult, error) {
+func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string) (*PromoteToCanonicalResult, error) {
 	mem, err := ms.Get(id)
 	if err != nil {
 		return nil, err
@@ -228,7 +229,7 @@ func (ms *Store) PromoteToCanonical(id string, owner string) (*PromoteToCanonica
 		importance = 0.95
 	}
 
-	if err := ms.Update(id, Update{
+	if err := ms.Update(ctx, id, Update{
 		Importance: &importance,
 		Metadata:   metadata,
 	}); err != nil {
@@ -253,7 +254,7 @@ func (ms *Store) PromoteToCanonical(id string, owner string) (*PromoteToCanonica
 }
 
 // MergeDuplicates consolidates duplicate memories into a primary entry and archives the rest.
-func (ms *Store) MergeDuplicates(primaryID string, duplicateIDs []string) (*MergeDuplicatesResult, error) {
+func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicateIDs []string) (*MergeDuplicatesResult, error) {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
@@ -324,7 +325,7 @@ func (ms *Store) MergeDuplicates(primaryID string, duplicateIDs []string) (*Merg
 		updatedPrimary.Embedding = nil
 		updatedPrimary.EmbeddingModel = ""
 		if ms.embedder != nil {
-			result, err := ms.embedder.EmbedDetailed(updatedPrimary.Content)
+			result, err := ms.embedder.EmbedDetailed(ctx, updatedPrimary.Content)
 			if err != nil {
 				ms.logger.Warn("Failed to re-generate embedding for merged memory", zap.String("id", primaryID), zap.Error(err))
 			} else {
@@ -409,7 +410,7 @@ type ReembedResult struct {
 }
 
 // ReembedAll regenerates embeddings with the currently available embedding model.
-func (ms *Store) ReembedAll() (*ReembedResult, error) {
+func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 	if ms.embedder == nil {
 		return nil, fmt.Errorf("embedder not available")
 	}
@@ -423,7 +424,7 @@ func (ms *Store) ReembedAll() (*ReembedResult, error) {
 	}
 
 	for _, m := range snapshot {
-		embedResult, err := ms.embedder.EmbedDetailed(m.Content)
+		embedResult, err := ms.embedder.EmbedDetailed(ctx, m.Content)
 		if err != nil {
 			result.Failed++
 			result.FailedByID[m.ID] = err.Error()

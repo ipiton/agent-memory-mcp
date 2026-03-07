@@ -2,6 +2,7 @@
 package embedder
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -50,8 +51,8 @@ type BatchEmbeddingResult struct {
 type providerAdapter interface {
 	name() string
 	modelID() string
-	embed(text, task string) ([]float32, error)
-	batchEmbed(texts []string, task string) ([][]float32, error)
+	embed(ctx context.Context, text, task string) ([]float32, error)
+	batchEmbed(ctx context.Context, texts []string, task string) ([][]float32, error)
 }
 
 type providerCandidate struct {
@@ -115,8 +116,8 @@ func (e *Embedder) localOnlyMode() bool {
 }
 
 // Embed generates a vector embedding for the given text, optimized for document passages.
-func (e *Embedder) Embed(text string) ([]float32, error) {
-	result, err := e.EmbedDetailed(text)
+func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	result, err := e.EmbedDetailed(ctx, text)
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +125,8 @@ func (e *Embedder) Embed(text string) ([]float32, error) {
 }
 
 // EmbedQuery generates a vector embedding for a search query, optimized for retrieval.
-func (e *Embedder) EmbedQuery(text string) ([]float32, error) {
-	result, err := e.EmbedQueryDetailed(text)
+func (e *Embedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	result, err := e.EmbedQueryDetailed(ctx, text)
 	if err != nil {
 		return nil, err
 	}
@@ -133,29 +134,29 @@ func (e *Embedder) EmbedQuery(text string) ([]float32, error) {
 }
 
 // EmbedWithTask generates a vector embedding with the specified Jina task type.
-func (e *Embedder) EmbedWithTask(text string, task string) ([]float32, error) {
-	result, err := e.embedWithTaskDetailed(text, task)
+func (e *Embedder) EmbedWithTask(ctx context.Context, text string, task string) ([]float32, error) {
+	result, err := e.embedWithTaskDetailed(ctx, text, task)
 	if err != nil {
 		return nil, err
 	}
 	return result.Embedding, nil
 }
 
-func (e *Embedder) EmbedDetailed(text string) (*EmbeddingResult, error) {
-	return e.embedWithTaskDetailed(text, "retrieval.passage")
+func (e *Embedder) EmbedDetailed(ctx context.Context, text string) (*EmbeddingResult, error) {
+	return e.embedWithTaskDetailed(ctx, text, "retrieval.passage")
 }
 
-func (e *Embedder) EmbedQueryDetailed(text string) (*EmbeddingResult, error) {
-	return e.embedWithTaskDetailed(text, "retrieval.query")
+func (e *Embedder) EmbedQueryDetailed(ctx context.Context, text string) (*EmbeddingResult, error) {
+	return e.embedWithTaskDetailed(ctx, text, "retrieval.query")
 }
 
-func (e *Embedder) embedWithTaskDetailed(text string, task string) (*EmbeddingResult, error) {
+func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task string) (*EmbeddingResult, error) {
 	if err := e.ensureReady(); err != nil {
 		return nil, err
 	}
 
 	for _, candidate := range e.singleCandidates(task) {
-		embedding, err := candidate.provider.embed(text, task)
+		embedding, err := candidate.provider.embed(ctx, text, task)
 		if err != nil {
 			e.logger.Warn("Embedding provider failed", zap.String("provider", candidate.provider.name()), zap.Error(err))
 			if candidate.onFailure != nil {
@@ -184,8 +185,8 @@ func (e *Embedder) embedWithTaskDetailed(text string, task string) (*EmbeddingRe
 }
 
 // BatchEmbed generates vector embeddings for multiple texts using native batch APIs.
-func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
-	result, err := e.BatchEmbedDetailed(texts)
+func (e *Embedder) BatchEmbed(ctx context.Context, texts []string) ([][]float32, error) {
+	result, err := e.BatchEmbedDetailed(ctx, texts)
 	if err != nil {
 		return nil, err
 	}
@@ -194,19 +195,19 @@ func (e *Embedder) BatchEmbed(texts []string) ([][]float32, error) {
 
 // BatchEmbedWithTask generates batch embeddings with the specified task type.
 // Uses native batch APIs for each provider (Jina, OpenAI, Ollama).
-func (e *Embedder) BatchEmbedWithTask(texts []string, task string) ([][]float32, error) {
-	result, err := e.batchEmbedWithTaskDetailed(texts, task)
+func (e *Embedder) BatchEmbedWithTask(ctx context.Context, texts []string, task string) ([][]float32, error) {
+	result, err := e.batchEmbedWithTaskDetailed(ctx, texts, task)
 	if err != nil {
 		return nil, err
 	}
 	return result.Embeddings, nil
 }
 
-func (e *Embedder) BatchEmbedDetailed(texts []string) (*BatchEmbeddingResult, error) {
-	return e.batchEmbedWithTaskDetailed(texts, "retrieval.passage")
+func (e *Embedder) BatchEmbedDetailed(ctx context.Context, texts []string) (*BatchEmbeddingResult, error) {
+	return e.batchEmbedWithTaskDetailed(ctx, texts, "retrieval.passage")
 }
 
-func (e *Embedder) batchEmbedWithTaskDetailed(texts []string, task string) (*BatchEmbeddingResult, error) {
+func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []string, task string) (*BatchEmbeddingResult, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
@@ -215,7 +216,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(texts []string, task string) (*Bat
 	}
 
 	for _, candidate := range e.batchCandidates(task) {
-		embeddings, err := candidate.provider.batchEmbed(texts, task)
+		embeddings, err := candidate.provider.batchEmbed(ctx, texts, task)
 		if err != nil {
 			e.logger.Warn("Batch embedding provider failed", zap.String("provider", candidate.provider.name()), zap.Error(err))
 			if candidate.onFailure != nil {

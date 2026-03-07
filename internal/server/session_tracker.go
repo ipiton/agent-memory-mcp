@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -296,7 +297,7 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 	}
 
 	summary := session.summary(boundary)
-	result, err := st.closeService.Analyze(sessionclose.AnalyzeRequest{
+	result, err := st.closeService.Analyze(context.Background(), sessionclose.AnalyzeRequest{
 		Summary:          summary,
 		DryRun:           false,
 		SaveRaw:          true,
@@ -327,7 +328,7 @@ func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
 	}
 
 	summary := session.summary("checkpoint")
-	if _, err := st.closeService.SaveRawSummaryWithOptions(summary, sessionclose.RawSaveOptions{
+	if _, err := st.closeService.SaveRawSummaryWithOptions(context.Background(), summary, sessionclose.RawSaveOptions{
 		RecordKind: memory.RecordKindSessionCheckpoint,
 		ExtraTags:  []string{"session-checkpoint"},
 		Metadata: map[string]string{
@@ -387,7 +388,7 @@ func (st *sessionTracker) persistReviewQueue(boundary string, result *sessionclo
 			Tags:       tags,
 			Metadata:   metadata,
 		}
-		if err := st.store.Store(mem); err != nil {
+		if err := st.store.Store(context.Background(), mem); err != nil {
 			return err
 		}
 	}

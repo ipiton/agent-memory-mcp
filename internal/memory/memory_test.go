@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -87,7 +88,7 @@ func TestGetReturnsCopy(t *testing.T) {
 		Tags:     []string{"tag1"},
 		Metadata: map[string]string{"key": "val"},
 	}
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -120,7 +121,7 @@ func TestStoreCopiesCallerOwnedFields(t *testing.T) {
 		Metadata:  map[string]string{"owner": "platform"},
 		Embedding: []float32{0.1, 0.2},
 	}
-	if err := store.Store(input); err != nil {
+	if err := store.Store(context.Background(), input); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -146,14 +147,14 @@ func TestStoreCopiesCallerOwnedFields(t *testing.T) {
 func TestListReturnsCopies(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{Content: "one", Type: TypeSemantic, Tags: []string{"t1"}}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "one", Type: TypeSemantic, Tags: []string{"t1"}}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := store.Store(&Memory{Content: "two", Type: TypeSemantic, Tags: []string{"t2"}}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "two", Type: TypeSemantic, Tags: []string{"t2"}}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
-	list, err := store.List(Filters{}, 0)
+	list, err := store.List(context.Background(), Filters{}, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -167,7 +168,7 @@ func TestListReturnsCopies(t *testing.T) {
 	}
 
 	// Verify cache is untouched
-	list2, _ := store.List(Filters{}, 0)
+	list2, _ := store.List(context.Background(), Filters{}, 0)
 	for _, m := range list2 {
 		if m.Tags[0] == "MUTATED" {
 			t.Fatal("List returned shared slice")
@@ -178,11 +179,11 @@ func TestListReturnsCopies(t *testing.T) {
 func TestExportAllReturnsCopies(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{Content: "mem", Type: TypeEpisodic, Tags: []string{"x"}}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "mem", Type: TypeEpisodic, Tags: []string{"x"}}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
-	all, err := store.ExportAll()
+	all, err := store.ExportAll(context.Background())
 	if err != nil {
 		t.Fatalf("ExportAll: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestExportAllReturnsCopies(t *testing.T) {
 
 	all[0].Tags[0] = "MUTATED"
 
-	all2, _ := store.ExportAll()
+	all2, _ := store.ExportAll(context.Background())
 	if all2[0].Tags[0] == "MUTATED" {
 		t.Fatal("ExportAll returned shared slice")
 	}
@@ -201,7 +202,7 @@ func TestExportAllReturnsCopies(t *testing.T) {
 func TestRecallTextSearch(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "golang concurrency patterns with goroutines",
 		Type:       TypeProcedural,
 		Title:      "Go concurrency",
@@ -209,7 +210,7 @@ func TestRecallTextSearch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "python decorators and metaclasses",
 		Type:       TypeSemantic,
 		Title:      "Python patterns",
@@ -218,7 +219,7 @@ func TestRecallTextSearch(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 
-	results, err := store.Recall("golang goroutines", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "golang goroutines", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestStorePreservesExplicitZeroImportance(t *testing.T) {
 		Type:       TypeSemantic,
 		Importance: 0,
 	}
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -254,7 +255,7 @@ func TestStorePreservesExplicitZeroImportance(t *testing.T) {
 func TestRecallScoreThreshold(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "abcdefg unique content",
 		Type:       TypeSemantic,
 		Importance: 0.01, // very low importance
@@ -263,7 +264,7 @@ func TestRecallScoreThreshold(t *testing.T) {
 	}
 
 	// Query with totally unrelated content — text match score should be 0
-	results, err := store.Recall("zzzzzzz completely different", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "zzzzzzz completely different", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -276,7 +277,7 @@ func TestRecallScoreThreshold(t *testing.T) {
 func TestRecallReturnsCopies(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "test recall copy safety",
 		Type:       TypeSemantic,
 		Title:      "Recall Copy Test",
@@ -286,7 +287,7 @@ func TestRecallReturnsCopies(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 
-	results, err := store.Recall("recall copy", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "recall copy", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestRecallReturnsCopies(t *testing.T) {
 func TestRecallWithFilters(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "important golang design",
 		Type:       TypeProcedural,
 		Importance: 0.9,
@@ -315,7 +316,7 @@ func TestRecallWithFilters(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "important python design",
 		Type:       TypeSemantic,
 		Importance: 0.9,
@@ -325,7 +326,7 @@ func TestRecallWithFilters(t *testing.T) {
 	}
 
 	// Filter by type
-	results, err := store.Recall("design", Filters{Type: TypeProcedural}, 10)
+	results, err := store.Recall(context.Background(), "design", Filters{Type: TypeProcedural}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -336,7 +337,7 @@ func TestRecallWithFilters(t *testing.T) {
 	}
 
 	// Filter by tag
-	results, err = store.Recall("design", Filters{Tags: []string{"python"}}, 10)
+	results, err = store.Recall(context.Background(), "design", Filters{Tags: []string{"python"}}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -357,7 +358,7 @@ func TestConcurrentGetRecall(t *testing.T) {
 	store := newTestStore(t)
 
 	for i := 0; i < 10; i++ {
-		if err := store.Store(&Memory{
+		if err := store.Store(context.Background(), &Memory{
 			Content:    "concurrent memory test item",
 			Type:       TypeSemantic,
 			Importance: 0.5,
@@ -371,7 +372,7 @@ func TestConcurrentGetRecall(t *testing.T) {
 	errs := make(chan error, 100)
 
 	// Concurrent Get
-	list, _ := store.List(Filters{}, 0)
+	list, _ := store.List(context.Background(), Filters{}, 0)
 	for _, m := range list {
 		wg.Add(1)
 		go func(id string) {
@@ -391,7 +392,7 @@ func TestConcurrentGetRecall(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, err := store.Recall("concurrent", Filters{}, 5)
+			results, err := store.Recall(context.Background(), "concurrent", Filters{}, 5)
 			if err != nil {
 				errs <- err
 				return
@@ -414,14 +415,14 @@ func TestStoreAndDelete(t *testing.T) {
 	store := newTestStore(t)
 
 	m := &Memory{Content: "to delete", Type: TypeWorking}
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if store.Count() != 1 {
 		t.Fatalf("expected 1, got %d", store.Count())
 	}
 
-	if err := store.Delete(m.ID); err != nil {
+	if err := store.Delete(context.Background(), m.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if store.Count() != 0 {
@@ -438,12 +439,12 @@ func TestUpdateMemory(t *testing.T) {
 	store := newTestStore(t)
 
 	m := &Memory{Content: "original", Type: TypeSemantic, Tags: []string{"v1"}}
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	imp := 0.9
-	if err := store.Update(m.ID, Update{
+	if err := store.Update(context.Background(), m.ID, Update{
 		Content:    "updated",
 		Title:      "New Title",
 		Tags:       []string{"v2"},
@@ -467,13 +468,13 @@ func TestUpdateMemory(t *testing.T) {
 func TestCountByType(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{Content: "a", Type: TypeSemantic}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "a", Type: TypeSemantic}); err != nil {
 		t.Fatalf("Store a: %v", err)
 	}
-	if err := store.Store(&Memory{Content: "b", Type: TypeSemantic}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "b", Type: TypeSemantic}); err != nil {
 		t.Fatalf("Store b: %v", err)
 	}
-	if err := store.Store(&Memory{Content: "c", Type: TypeEpisodic}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "c", Type: TypeEpisodic}); err != nil {
 		t.Fatalf("Store c: %v", err)
 	}
 
@@ -489,17 +490,17 @@ func TestCountByType(t *testing.T) {
 func TestListWithSinceFilter(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{Content: "old", Type: TypeSemantic}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "old", Type: TypeSemantic}); err != nil {
 		t.Fatalf("Store old: %v", err)
 	}
 	time.Sleep(10 * time.Millisecond)
 	cutoff := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	if err := store.Store(&Memory{Content: "new", Type: TypeSemantic}); err != nil {
+	if err := store.Store(context.Background(), &Memory{Content: "new", Type: TypeSemantic}); err != nil {
 		t.Fatalf("Store new: %v", err)
 	}
 
-	list, err := store.List(Filters{Since: cutoff}, 0)
+	list, err := store.List(context.Background(), Filters{Since: cutoff}, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -532,7 +533,7 @@ func TestRecallFallsBackToTextForMismatchedEmbeddingModel(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:        "completely unrelated content",
 		Type:           TypeSemantic,
 		Importance:     1.0,
@@ -541,7 +542,7 @@ func TestRecallFallsBackToTextForMismatchedEmbeddingModel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Store mismatched: %v", err)
 	}
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "deploy rollback guide and checklist",
 		Type:       TypeProcedural,
 		Importance: 0.8,
@@ -549,7 +550,7 @@ func TestRecallFallsBackToTextForMismatchedEmbeddingModel(t *testing.T) {
 		t.Fatalf("Store text match: %v", err)
 	}
 
-	results, err := store.Recall("deploy rollback", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "deploy rollback", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -597,7 +598,7 @@ func TestRecallDoesNotBlockStoreDuringQueryEmbedding(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:        "existing memory",
 		Type:           TypeSemantic,
 		Embedding:      []float32{1, 0, 0, 0},
@@ -608,7 +609,7 @@ func TestRecallDoesNotBlockStoreDuringQueryEmbedding(t *testing.T) {
 
 	recallDone := make(chan error, 1)
 	go func() {
-		_, err := store.Recall("existing", Filters{}, 10)
+		_, err := store.Recall(context.Background(), "existing", Filters{}, 10)
 		recallDone <- err
 	}()
 
@@ -622,7 +623,7 @@ func TestRecallDoesNotBlockStoreDuringQueryEmbedding(t *testing.T) {
 
 	storeDone := make(chan error, 1)
 	go func() {
-		storeDone <- store.Store(&Memory{
+		storeDone <- store.Store(context.Background(), &Memory{
 			Content:        "new memory while recall is embedding",
 			Type:           TypeSemantic,
 			Embedding:      []float32{0, 1, 0, 0},
@@ -654,7 +655,7 @@ func TestRecallDoesNotBlockStoreDuringQueryEmbedding(t *testing.T) {
 func TestRecallUsesTrustMetadataForRanking(t *testing.T) {
 	store := newTestStore(t)
 
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Title:      "Accepted scaling decision",
 		Content:    "disable hpa for api during migration",
 		Type:       TypeSemantic,
@@ -668,7 +669,7 @@ func TestRecallUsesTrustMetadataForRanking(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Store accepted: %v", err)
 	}
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Title:      "Draft working note",
 		Content:    "disable hpa for api during migration",
 		Type:       TypeWorking,
@@ -681,7 +682,7 @@ func TestRecallUsesTrustMetadataForRanking(t *testing.T) {
 		t.Fatalf("Store draft: %v", err)
 	}
 
-	results, err := store.Recall("disable hpa migration", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "disable hpa migration", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -722,17 +723,17 @@ func TestPromoteToCanonicalBoostsTrustRanking(t *testing.T) {
 		Importance: 0.7,
 		Metadata:   map[string]string{"entity": "runbook", "status": "draft"},
 	}
-	if err := store.Store(canonical); err != nil {
+	if err := store.Store(context.Background(), canonical); err != nil {
 		t.Fatalf("Store canonical candidate: %v", err)
 	}
-	if err := store.Store(raw); err != nil {
+	if err := store.Store(context.Background(), raw); err != nil {
 		t.Fatalf("Store raw: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(canonical.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
-	results, err := store.Recall("rollback ingress controller", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "rollback ingress controller", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -777,17 +778,17 @@ func TestListAndRecallCanonicalKnowledge(t *testing.T) {
 			"service": "api",
 		},
 	}
-	if err := store.Store(canonical); err != nil {
+	if err := store.Store(context.Background(), canonical); err != nil {
 		t.Fatalf("Store canonical: %v", err)
 	}
-	if err := store.Store(raw); err != nil {
+	if err := store.Store(context.Background(), raw); err != nil {
 		t.Fatalf("Store raw: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(canonical.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
-	listed, err := store.ListCanonical(Filters{Context: "payments"}, 10)
+	listed, err := store.ListCanonical(context.Background(), Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("ListCanonical: %v", err)
 	}
@@ -801,7 +802,7 @@ func TestListAndRecallCanonicalKnowledge(t *testing.T) {
 		t.Fatalf("unexpected trust on canonical entry: %#v", listed[0].Trust)
 	}
 
-	recalled, err := store.RecallCanonical("rollback ingress deployment", Filters{Context: "payments"}, 10)
+	recalled, err := store.RecallCanonical(context.Background(), "rollback ingress deployment", Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("RecallCanonical: %v", err)
 	}
@@ -842,14 +843,14 @@ func TestMergeDuplicatesAndConflictsReport(t *testing.T) {
 			"status":  "accepted",
 		},
 	}
-	if err := store.Store(primary); err != nil {
+	if err := store.Store(context.Background(), primary); err != nil {
 		t.Fatalf("Store primary: %v", err)
 	}
-	if err := store.Store(duplicate); err != nil {
+	if err := store.Store(context.Background(), duplicate); err != nil {
 		t.Fatalf("Store duplicate: %v", err)
 	}
 
-	report, err := store.ConflictsReport(Filters{Context: "payments"}, 10)
+	report, err := store.ConflictsReport(context.Background(), Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("ConflictsReport: %v", err)
 	}
@@ -857,7 +858,7 @@ func TestMergeDuplicatesAndConflictsReport(t *testing.T) {
 		t.Fatalf("unexpected conflicts report: %#v", report)
 	}
 
-	result, err := store.MergeDuplicates(primary.ID, []string{duplicate.ID})
+	result, err := store.MergeDuplicates(context.Background(), primary.ID, []string{duplicate.ID})
 	if err != nil {
 		t.Fatalf("MergeDuplicates: %v", err)
 	}
@@ -887,7 +888,7 @@ func TestMergeDuplicatesAndConflictsReport(t *testing.T) {
 		t.Fatalf("expected merged content on primary, got %q", gotPrimary.Content)
 	}
 
-	report, err = store.ConflictsReport(Filters{Context: "payments"}, 10)
+	report, err = store.ConflictsReport(context.Background(), Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("ConflictsReport after merge: %v", err)
 	}
@@ -913,17 +914,17 @@ func TestMarkOutdatedDownranksMemory(t *testing.T) {
 		Importance: 0.8,
 		Metadata:   map[string]string{"entity": "runbook", "status": "confirmed"},
 	}
-	if err := store.Store(current); err != nil {
+	if err := store.Store(context.Background(), current); err != nil {
 		t.Fatalf("Store current: %v", err)
 	}
-	if err := store.Store(old); err != nil {
+	if err := store.Store(context.Background(), old); err != nil {
 		t.Fatalf("Store old: %v", err)
 	}
-	if _, err := store.MarkOutdated(old.ID, "replaced by newer runbook", current.ID); err != nil {
+	if _, err := store.MarkOutdated(context.Background(), old.ID, "replaced by newer runbook", current.ID); err != nil {
 		t.Fatalf("MarkOutdated: %v", err)
 	}
 
-	results, err := store.Recall("rollback ingress deployment", Filters{}, 10)
+	results, err := store.Recall(context.Background(), "rollback ingress deployment", Filters{}, 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -972,11 +973,11 @@ func TestReembedAllUpdatesEmbeddingModel(t *testing.T) {
 		Embedding:      []float32{1, 0, 0, 0},
 		EmbeddingModel: "legacy:model:4",
 	}
-	if err := store.Store(m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
-	result, err := store.ReembedAll()
+	result, err := store.ReembedAll(context.Background())
 	if err != nil {
 		t.Fatalf("ReembedAll: %v", err)
 	}
@@ -1037,7 +1038,7 @@ func TestNewStoreMigratesEmbeddingModelColumn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = migrated.Close() })
 
-	if err := migrated.Store(&Memory{Content: "post-migration", Type: TypeSemantic}); err != nil {
+	if err := migrated.Store(context.Background(), &Memory{Content: "post-migration", Type: TypeSemantic}); err != nil {
 		t.Fatalf("Store after migration: %v", err)
 	}
 }
@@ -1067,7 +1068,7 @@ func TestConcurrentStress(t *testing.T) {
 
 	// Seed initial data.
 	for i := 0; i < 20; i++ {
-		if err := store.Store(&Memory{
+		if err := store.Store(context.Background(), &Memory{
 			Content:    "stress test memory content for concurrent access",
 			Type:       TypeSemantic,
 			Importance: 0.5,
@@ -1094,12 +1095,12 @@ func TestConcurrentStress(t *testing.T) {
 					Importance: 0.3,
 					Tags:       []string{"stress", "write"},
 				}
-				if err := store.Store(mem); err != nil {
+				if err := store.Store(context.Background(), mem); err != nil {
 					errCount.Add(1)
 					continue
 				}
-				_ = store.Update(mem.ID, Update{Content: "updated content"})
-				_ = store.Delete(mem.ID)
+				_ = store.Update(context.Background(), mem.ID, Update{Content: "updated content"})
+				_ = store.Delete(context.Background(), mem.ID)
 			}
 		}(g)
 	}
@@ -1110,12 +1111,12 @@ func TestConcurrentStress(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < opsPerGoroutine; i++ {
-				results, _ := store.Recall("stress concurrent", Filters{}, 5)
+				results, _ := store.Recall(context.Background(), "stress concurrent", Filters{}, 5)
 				for _, r := range results {
 					r.Memory.Content = "mutated safely"
 				}
 
-				list, _ := store.List(Filters{Tags: []string{"stress"}}, 10)
+				list, _ := store.List(context.Background(), Filters{Tags: []string{"stress"}}, 10)
 				for _, m := range list {
 					_, _ = store.Get(m.ID)
 				}
@@ -1130,7 +1131,7 @@ func TestConcurrentStress(t *testing.T) {
 	}
 
 	// Verify store is still functional after stress.
-	if err := store.Store(&Memory{
+	if err := store.Store(context.Background(), &Memory{
 		Content:    "post-stress check",
 		Type:       TypeSemantic,
 		Importance: 0.5,
