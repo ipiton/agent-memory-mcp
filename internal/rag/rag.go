@@ -513,6 +513,13 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		return fmt.Errorf("failed to commit index state: %w", err)
 	}
 
+	// Remove orphan chunks that survived a failed removeDocument during re-indexing.
+	if orphans, err := store.CleanOrphans(); err != nil {
+		re.logger.Warn("Post-indexing orphan cleanup failed", zap.Error(err))
+	} else if orphans > 0 {
+		re.logger.Info("Post-indexing orphan cleanup", zap.Int("removed", orphans))
+	}
+
 	duration := time.Since(startTime)
 	re.logger.Info("Indexing completed", zap.Duration("duration", duration))
 
