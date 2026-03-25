@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
@@ -62,6 +63,7 @@ type MCPServer struct {
 	outputMode       string
 	stats            *stats.Logger
 	ragEngine        *rag.Engine
+	ragMu            sync.RWMutex // protects ragEngine during hot-reload
 	memoryStore      *memory.Store
 	embedder         *embedder.Embedder
 	fileLogger       *logger.FileLogger
@@ -369,6 +371,50 @@ func (s *MCPServer) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 			"version": Version,
 		},
 	}, nil
+}
+
+// getRagEngine returns the current RAG engine under read lock.
+func (s *MCPServer) getRagEngine() *rag.Engine {
+	s.ragMu.RLock()
+	defer s.ragMu.RUnlock()
+	return s.ragEngine
+}
+
+// ReloadRAG stops the current RAG engine and creates a new one from newCfg.
+// If RAG is disabled in newCfg, the engine is stopped and set to nil.
+func (s *MCPServer) ReloadRAG(newCfg config.Config) {
+	s.ragMu.Lock()
+	defer s.ragMu.Unlock()
+
+	if s.ragEngine != nil {
+		s.ragEngine.Stop()
+		s.ragEngine = nil
+	}
+
+	if !newCfg.RAGEnabled {
+		if s.fileLogger != nil {
+			s.fileLogger.Info("Config reload: RAG disabled")
+		}
+		return
+	}
+
+	engine := rag.NewEngine(newCfg, s.fileLogger)
+	if engine == nil {
+		if s.fileLogger != nil {
+			s.fileLogger.Warn("Config reload: RAG engine initialization failed")
+		}
+		return
+	}
+
+	s.ragEngine = engine
+	s.config = newCfg
+	if s.fileLogger != nil {
+		s.fileLogger.Info("Config reload: RAG engine restarted",
+			zap.String("root_path", newCfg.RootPath),
+			zap.Bool("rag_enabled", newCfg.RAGEnabled),
+			zap.Strings("index_dirs", newCfg.IndexDirs),
+		)
+	}
 }
 
 // Shutdown gracefully shuts down the server, closing all resources.

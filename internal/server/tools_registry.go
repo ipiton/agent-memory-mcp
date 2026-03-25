@@ -1051,15 +1051,16 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		)
 	}
 
+	re := s.getRagEngine()
 	filtered := make([]tool, 0, len(tools))
 	for _, t := range tools {
-		if s.ragEngine == nil && ragTools[t.Name] {
+		if re == nil && ragTools[t.Name] {
 			continue
 		}
 		if s.memoryStore == nil && memoryTools[t.Name] {
 			continue
 		}
-		if s.memoryStore == nil && s.ragEngine == nil && hybridTools[t.Name] {
+		if s.memoryStore == nil && re == nil && hybridTools[t.Name] {
 			continue
 		}
 		filtered = append(filtered, t)
@@ -1351,7 +1352,7 @@ func (s *MCPServer) requireMemoryStore() *rpcError {
 }
 
 func (s *MCPServer) requireRAGEngine() *rpcError {
-	if s.ragEngine == nil {
+	if s.getRagEngine() == nil {
 		return &rpcError{Code: rpcErrServerError, Message: "RAG engine not available"}
 	}
 	return nil

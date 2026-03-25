@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/paths"
@@ -67,6 +68,9 @@ func main() {
 }
 
 func runServe(args []string) {
+	// Extract --config before flag.Parse() so dotenv chain uses it.
+	args = extractConfigFlag(args)
+
 	// Restore os.Args so flag.Parse() in config.Load() works correctly
 	os.Args = append([]string{os.Args[0]}, args...)
 
@@ -85,6 +89,36 @@ func runServe(args []string) {
 	srv := server.New(cfg, guard)
 	defer srv.Shutdown()
 
+	// Start config file watcher for hot-reload (if config file is known).
+	if cfgPath := config.ConfigFilePath(); cfgPath != "" {
+		watcher := config.NewWatcher(cfgPath, 30*time.Second, func(oldCfg, newCfg config.Config) {
+			fmt.Fprintf(os.Stderr, "Config changed, reloading RAG engine...\n")
+			srv.ReloadRAG(newCfg)
+		})
+		watcher.Start()
+		defer watcher.Stop()
+	}
+
+	// SIGHUP triggers immediate config reload.
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	go func() {
+		for range sighup {
+			cfgPath := config.ConfigFilePath()
+			if cfgPath == "" {
+				fmt.Fprintf(os.Stderr, "SIGHUP received but no config file path known, skipping reload\n")
+				continue
+			}
+			newCfg, err := config.LoadFromFile(cfgPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "SIGHUP reload failed: %v\n", err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "SIGHUP received, reloading RAG engine...\n")
+			srv.ReloadRAG(newCfg)
+		}
+	}()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -101,6 +135,33 @@ func runServe(args []string) {
 			os.Exit(1)
 		}
 	}
+}
+
+// extractConfigFlag scans args for --config or --config=value, sets the
+// explicit config path, and returns args with the flag removed (so flag.Parse
+// in config.Load() doesn't choke on it).
+func extractConfigFlag(args []string) []string {
+	var filtered []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--config" || arg == "-config" {
+			if i+1 < len(args) {
+				config.SetExplicitConfigPath(args[i+1])
+				i++ // skip value
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--config=") {
+			config.SetExplicitConfigPath(strings.TrimPrefix(arg, "--config="))
+			continue
+		}
+		if strings.HasPrefix(arg, "-config=") {
+			config.SetExplicitConfigPath(strings.TrimPrefix(arg, "-config="))
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 func printUsage() {

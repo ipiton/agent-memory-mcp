@@ -89,6 +89,15 @@ type Config struct {
 	StewardCanonicalMinConf    float64 // Minimum confidence for canonical promotion (default: 0.80)
 }
 
+// explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
+var explicitConfigPath string
+
+// SetExplicitConfigPath sets an explicit config file path (e.g., from --config flag).
+// When set, only this file is loaded instead of the default config search chain.
+func SetExplicitConfigPath(path string) {
+	explicitConfigPath = path
+}
+
 // envValues holds raw values read from environment variables before path resolution.
 type envValues struct {
 	root                             string
@@ -141,12 +150,16 @@ type envValues struct {
 	stewardCanonicalMinConf          float64
 }
 
-// loadEnv reads all configuration from environment variables.
+// loadEnv loads dotenv files and reads all configuration from environment variables.
 func loadEnv() (envValues, error) {
-	if err := loadDotEnvFromCurrentDir(); err != nil {
+	if err := loadDotEnvFiles(explicitConfigPath); err != nil {
 		return envValues{}, err
 	}
+	return readEnvValues()
+}
 
+// readEnvValues reads all configuration from current environment variables.
+func readEnvValues() (envValues, error) {
 	return envValues{
 		root:                             EnvOrDefault("MCP_ROOT", ""),
 		allow:                            EnvOrDefault("MCP_ALLOW_DIRS", ""),

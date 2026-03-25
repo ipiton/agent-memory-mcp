@@ -28,6 +28,80 @@ changelog:
       - "^ci:"
       - "^chore:"
 
+brews:
+  - name: agent-memory-mcp
+    repository:
+      owner: ipiton
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/ipiton/agent-memory-mcp"
+    description: "MCP server with persistent agent memory and RAG semantic search"
+    license: "MIT"
+    install: |
+      bin.install "agent-memory-mcp"
+    post_install: |
+      (etc/"agent-memory-mcp").mkpath
+      config_file = etc/"agent-memory-mcp/config.env"
+      unless config_file.exist?
+        config_file.write <<~EOS
+          # agent-memory-mcp service configuration
+          # Edit this file and the service will auto-reload within ~30 seconds.
+          # Or send SIGHUP: kill -HUP $(pgrep agent-memory-mcp)
+
+          # HTTP daemon mode (required for brew services)
+          MCP_HTTP_MODE=http
+          MCP_HTTP_HOST=127.0.0.1
+          MCP_HTTP_PORT=18080
+
+          # Data storage
+          MCP_DATA_PATH=#{var}/agent-memory-mcp
+          MCP_MEMORY_DB_PATH=#{var}/agent-memory-mcp/memory-store/memories.db
+          MCP_RAG_INDEX_PATH=#{var}/agent-memory-mcp/rag-index
+          MCP_LOG_PATH=#{var}/log/agent-memory-mcp/mcp-diagnostics.log
+
+          # Memory (enabled by default)
+          MCP_MEMORY_ENABLED=true
+
+          # RAG document search (disabled by default — enable after setting MCP_ROOT)
+          MCP_RAG_ENABLED=false
+          # MCP_ROOT=/path/to/your/project
+          # MCP_INDEX_DIRS=docs,README.md,CHANGELOG.md
+
+          # Embeddings
+          MCP_EMBEDDING_MODE=auto
+          OLLAMA_BASE_URL=http://localhost:11434
+          # JINA_API_KEY=
+          # OPENAI_API_KEY=
+        EOS
+      end
+      (var/"agent-memory-mcp/memory-store").mkpath
+      (var/"agent-memory-mcp/rag-index").mkpath
+      (var/"log/agent-memory-mcp").mkpath
+    service: |
+      run [opt_bin/"agent-memory-mcp", "serve", "--config", etc/"agent-memory-mcp/config.env"]
+      keep_alive true
+      log_path var/"log/agent-memory-mcp/service.log"
+      error_log_path var/"log/agent-memory-mcp/service.err.log"
+      working_dir var/"agent-memory-mcp"
+    caveats: |
+      agent-memory-mcp is ready to run as a background service.
+
+      To start:
+        brew services start agent-memory-mcp
+
+      Config: #{etc}/agent-memory-mcp/config.env
+      Logs:   #{var}/log/agent-memory-mcp/
+      Data:   #{var}/agent-memory-mcp/
+
+      To enable RAG document search, edit config.env and set:
+        MCP_RAG_ENABLED=true
+        MCP_ROOT=/path/to/your/project
+        MCP_INDEX_DIRS=docs,README.md
+      Changes are picked up automatically within ~30 seconds.
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/agent-memory-mcp 2>&1", 1)
+
 homebrew_casks:
   - name: agent-memory-mcp
     binaries:
