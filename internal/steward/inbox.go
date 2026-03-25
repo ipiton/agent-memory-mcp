@@ -16,7 +16,6 @@ type InboxItemKind string
 const (
 	InboxDuplicateCandidate    InboxItemKind = "duplicate_candidate"
 	InboxContradictionCandidate InboxItemKind = "contradiction_candidate"
-	InboxStaleCanonical        InboxItemKind = "stale_canonical"
 	InboxStaleEntry            InboxItemKind = "stale_entry"
 	InboxOutdatedProcedural    InboxItemKind = "outdated_procedural"
 	InboxUnverifiedRunbook     InboxItemKind = "unverified_runbook"

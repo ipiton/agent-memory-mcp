@@ -86,7 +86,7 @@ type RunParams struct {
 
 // Run executes a stewardship cycle: scan → plan → (optionally) apply → report.
 func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
-	if s.policy.Mode == PolicyModeOff {
+	if s.Policy().Mode == PolicyModeOff {
 		return nil, fmt.Errorf("steward: stewardship is disabled (mode=off)")
 	}
 
@@ -270,7 +270,7 @@ func (s *Service) Status() (*Status, error) {
 	}
 
 	status := &Status{
-		PolicyMode:    s.policy.Mode,
+		PolicyMode:    s.Policy().Mode,
 		PendingReview: pendingReview,
 	}
 

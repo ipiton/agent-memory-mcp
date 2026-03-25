@@ -69,6 +69,7 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 	staleThreshold := now.AddDate(0, 0, -staleDays)
 
 	result := &DriftResult{}
+	cleanRoot := filepath.Clean(params.RootPath)
 
 	for _, m := range active {
 		entity := memory.EngineeringTypeOf(m)
@@ -85,7 +86,6 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 		// Check referenced file paths.
 		if params.RootPath != "" {
 			refs := extractPathRefs(m.Content)
-			cleanRoot := filepath.Clean(params.RootPath)
 			for _, ref := range refs {
 				absPath := ref
 				if !filepath.IsAbs(ref) {

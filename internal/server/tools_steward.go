@@ -408,15 +408,7 @@ func formatRecallAsOf(results []*memory.SearchResult, asOf time.Time) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Knowledge valid at %s: %d results\n", asOf.Format("2006-01-02 15:04"), len(results))
 	for i, r := range results {
-		title := r.Memory.Title
-		if title == "" {
-			runes := []rune(r.Memory.Content)
-			if len(runes) > 60 {
-				title = string(runes[:60]) + "..."
-			} else {
-				title = r.Memory.Content
-			}
-		}
+		title := memory.DisplayTitle(r.Memory, 60)
 		fmt.Fprintf(&sb, "\n%d. %s (score: %.2f)\n", i+1, title, r.Score)
 		fmt.Fprintf(&sb, "   ID: %s | Type: %s\n", r.Memory.ID, r.Memory.Type)
 		if r.Memory.ValidFrom != nil {

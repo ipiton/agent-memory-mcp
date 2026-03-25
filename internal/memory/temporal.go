@@ -63,8 +63,8 @@ type TimelineEntry struct {
 // KnowledgeTimeline returns the chronological evolution of knowledge matching the query.
 // It finds related memories and orders them by valid_from (or created_at as fallback).
 func (ms *Store) KnowledgeTimeline(ctx context.Context, query string, memContext string, service string) ([]TimelineEntry, error) {
-	// Recall all matching memories (including archived/superseded).
-	results, err := ms.Recall(ctx, query, Filters{Context: memContext}, 0)
+	// Recall matching memories (including archived/superseded) with a safety cap.
+	results, err := ms.Recall(ctx, query, Filters{Context: memContext}, 500)
 	if err != nil {
 		return nil, err
 	}
@@ -78,15 +78,7 @@ func (ms *Store) KnowledgeTimeline(ctx context.Context, query string, memContext
 			continue
 		}
 
-		title := m.Title
-		if title == "" {
-			runes := []rune(m.Content)
-			if len(runes) > 60 {
-				title = string(runes[:60]) + "..."
-			} else {
-				title = m.Content
-			}
-		}
+		title := DisplayTitle(m, 60)
 
 		entry := TimelineEntry{
 			MemoryID:     m.ID,

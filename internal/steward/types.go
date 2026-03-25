@@ -34,7 +34,6 @@ type ActionKind string
 
 const (
 	ActionMergeDuplicates    ActionKind = "merge_duplicates"
-	ActionMarkOutdated       ActionKind = "mark_outdated"
 	ActionMarkStale          ActionKind = "mark_stale"
 	ActionPromoteCanonical   ActionKind = "promote_canonical"
 	ActionRefreshFreshness   ActionKind = "refresh_freshness"
@@ -59,16 +58,6 @@ const (
 	StateSkipped        ActionState = "skipped"
 )
 
-// JobState tracks the lifecycle of a background steward job.
-type JobState string
-
-const (
-	JobQueued    JobState = "queued"
-	JobRunning   JobState = "running"
-	JobCompleted JobState = "completed"
-	JobFailed    JobState = "failed"
-)
-
 // Policy configures stewardship behavior and thresholds.
 type Policy struct {
 	Mode             PolicyMode `json:"mode"`
@@ -78,7 +67,7 @@ type Policy struct {
 	EventTriggers []string `json:"event_triggers,omitempty"`
 
 	// Detection thresholds.
-	DuplicateSimilarity    float64 `json:"duplicate_similarity"`     // default 0.85
+	DuplicateSimilarity    float64 `json:"duplicate_similarity"`     // default 0.85; reserved for future semantic similarity detection
 	StaleDays              int     `json:"stale_days"`               // default 30
 	CanonicalMinConfidence float64 `json:"canonical_min_confidence"` // default 0.80
 	CanonicalMinEvidence   int     `json:"canonical_min_evidence"`   // default 2
