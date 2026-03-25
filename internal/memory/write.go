@@ -164,9 +164,10 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 
 	metadata := copyMetadata(mem.Metadata)
 	status := "outdated"
-	if strings.TrimSpace(supersededBy) != "" {
+	supersededBy = strings.TrimSpace(supersededBy)
+	if supersededBy != "" {
 		status = "superseded"
-		metadata["superseded_by"] = strings.TrimSpace(supersededBy)
+		metadata["superseded_by"] = supersededBy
 	}
 	if strings.TrimSpace(reason) != "" {
 		metadata["outdated_reason"] = strings.TrimSpace(reason)
@@ -187,10 +188,24 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 		return nil, err
 	}
 
+	// Build supersession chain: set temporal fields on old entry.
+	now := time.Now().UTC()
+	if err := ms.SetTemporalFields(ctx, id, nil, &now, supersededBy, ""); err != nil {
+		// Non-fatal: temporal fields are supplementary.
+		ms.logger.Warn("Failed to set temporal fields on outdated entry", zap.String("id", id), zap.Error(err))
+	}
+
+	// If superseding entry exists, link it back.
+	if supersededBy != "" {
+		if err := ms.SetTemporalFields(ctx, supersededBy, &now, nil, "", id); err != nil {
+			ms.logger.Warn("Failed to set temporal fields on superseding entry", zap.String("id", supersededBy), zap.Error(err))
+		}
+	}
+
 	return &MarkOutdatedResult{
 		ID:           id,
 		Status:       status,
-		SupersededBy: strings.TrimSpace(supersededBy),
+		SupersededBy: supersededBy,
 		Importance:   importance,
 	}, nil
 }

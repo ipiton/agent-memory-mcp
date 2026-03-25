@@ -43,7 +43,7 @@ func NormalizeTags(tags []string) []string {
 	return result
 }
 
-func DisplayTitle(m *Memory, maxLen int) string {
+func DisplayTitle(m *Memory, maxRunes int) string {
 	if m == nil {
 		return ""
 	}
@@ -53,13 +53,9 @@ func DisplayTitle(m *Memory, maxLen int) string {
 
 	value := strings.TrimSpace(m.Content)
 	if idx := strings.IndexByte(value, '\n'); idx >= 0 {
-		value = value[:idx]
+		value = strings.TrimSpace(value[:idx])
 	}
-	value = strings.TrimSpace(value)
-	if maxLen > 0 && len(value) > maxLen {
-		return value[:maxLen] + "..."
-	}
-	return value
+	return TruncateRunes(value, maxRunes)
 }
 
 // NormalizeMetadata trims keys/values and drops empty entries.

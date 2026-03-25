@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"time"
 )
 
 type sqlExecutor interface {
@@ -69,12 +70,14 @@ func insertMemoryRow(exec sqlExecutor, m *Memory) error {
 
 	if _, err := exec.Exec(`
 		INSERT INTO memories (id, content, type, title, tags, context, importance, metadata,
-		                      embedding_model, embedding, created_at, updated_at, accessed_at, access_count)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
+		                      valid_from, valid_until, superseded_by, replaces, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.ID, m.Content, m.Type, m.Title, tagsJSON, m.Context,
 		m.Importance, metadataJSON, m.EmbeddingModel, embeddingBlob,
 		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
+		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
 	); err != nil {
 		return fmt.Errorf("failed to store memory: %w", err)
 	}
@@ -91,15 +94,32 @@ func updateMemoryRow(exec sqlExecutor, m *Memory) error {
 	if _, err := exec.Exec(`
 		UPDATE memories SET content = ?, type = ?, title = ?, tags = ?, context = ?,
 		                    importance = ?, metadata = ?, embedding_model = ?, embedding = ?,
-		                    created_at = ?, updated_at = ?, accessed_at = ?, access_count = ?
+		                    created_at = ?, updated_at = ?, accessed_at = ?, access_count = ?,
+		                    valid_from = ?, valid_until = ?, superseded_by = ?, replaces = ?, observed_at = ?
 		WHERE id = ?
 	`,
 		m.Content, m.Type, m.Title, tagsJSON, m.Context,
 		m.Importance, metadataJSON, m.EmbeddingModel, embeddingBlob,
-		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount, m.ID,
+		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
+		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
+		m.ID,
 	); err != nil {
 		return fmt.Errorf("failed to update memory: %w", err)
 	}
 
 	return nil
+}
+
+func nullTime(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return *t
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

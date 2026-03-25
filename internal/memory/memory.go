@@ -42,6 +42,13 @@ type Memory struct {
 	UpdatedAt      time.Time         `json:"updated_at"`
 	AccessedAt     time.Time         `json:"accessed_at"`  // Last retrieval time
 	AccessCount    int               `json:"access_count"` // How many times retrieved
+
+	// Temporal fields — when this knowledge was valid and supersession chain.
+	ValidFrom    *time.Time `json:"valid_from,omitempty"`    // when this knowledge became true
+	ValidUntil   *time.Time `json:"valid_until,omitempty"`   // when this knowledge stopped being true
+	SupersededBy string     `json:"superseded_by,omitempty"` // ID of the entry that replaced this one
+	Replaces     string     `json:"replaces,omitempty"`      // ID of the entry this one replaced
+	ObservedAt   *time.Time `json:"observed_at,omitempty"`   // when first observed (may differ from created_at)
 }
 
 // Validate ensures the memory entry is consistent and ready for storage.
@@ -99,6 +106,9 @@ type cachedMemory struct {
 	UpdatedAt      time.Time
 	AccessedAt     time.Time
 	AccessCount    int
+	ValidFrom      *time.Time
+	ValidUntil     *time.Time
+	SupersededBy   string
 }
 
 // Store provides persistent memory storage backed by SQLite with in-memory vector search.
@@ -199,7 +209,8 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 func (ms *Store) loadMemoriesToCache() error {
 	rows, err := ms.db.Query(`
 		SELECT id, content, type, title, tags, context, importance, metadata,
-		       embedding_model, embedding, created_at, updated_at, accessed_at, access_count
+		       embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
+		       valid_from, valid_until, superseded_by
 		FROM memories
 	`)
 	if err != nil {
@@ -219,11 +230,14 @@ func (ms *Store) loadMemoriesToCache() error {
 		var tagsJSON, metadataJSON, embeddingModel sql.NullString
 		var embeddingBlob []byte
 		var createdAt, updatedAt, accessedAt sql.NullTime
+		var validFrom, validUntil sql.NullTime
+		var supersededBy sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+			&validFrom, &validUntil, &supersededBy,
 		)
 		if err != nil {
 			ms.logger.Warn("Failed to scan memory", zap.Error(err))
@@ -244,18 +258,7 @@ func (ms *Store) loadMemoriesToCache() error {
 		if metadataJSON.Valid && metadataJSON.String != "" {
 			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
 		}
-		m.Lifecycle = LifecycleStatusOf(&Memory{Type: m.Type, Metadata: metadata})
-		m.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
-		m.Owner = strings.TrimSpace(metadata[MetadataOwner])
-		if m.KnowledgeLayer == "" && m.Lifecycle == LifecycleCanonical {
-			m.KnowledgeLayer = "canonical"
-		}
-		if m.KnowledgeLayer == "" {
-			m.KnowledgeLayer = "raw"
-		}
-		if m.Owner == "" {
-			m.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(&m))
-		}
+		deriveCachedFields(&m, metadata, m.Type)
 
 		// Parse embedding (binary format)
 		if len(embeddingBlob) > 0 {
@@ -280,6 +283,15 @@ func (ms *Store) loadMemoriesToCache() error {
 		}
 		if accessedAt.Valid {
 			m.AccessedAt = accessedAt.Time
+		}
+		if validFrom.Valid {
+			m.ValidFrom = &validFrom.Time
+		}
+		if validUntil.Valid {
+			m.ValidUntil = &validUntil.Time
+		}
+		if supersededBy.Valid {
+			m.SupersededBy = supersededBy.String
 		}
 
 		ms.cacheSetLocked(&m)
@@ -323,10 +335,20 @@ func toCachedMemory(m *Memory) *cachedMemory {
 		UpdatedAt:      m.UpdatedAt,
 		AccessedAt:     m.AccessedAt,
 		AccessCount:    m.AccessCount,
+		ValidFrom:      m.ValidFrom,
+		ValidUntil:     m.ValidUntil,
+		SupersededBy:   m.SupersededBy,
 	}
-	cm.Lifecycle = LifecycleStatusOf(m)
-	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]))
-	cm.Owner = strings.TrimSpace(m.Metadata[MetadataOwner])
+	deriveCachedFields(cm, m.Metadata, m.Type)
+	return cm
+}
+
+// deriveCachedFields computes Lifecycle, KnowledgeLayer, and Owner from metadata.
+// Called from both toCachedMemory and loadMemoriesToCache.
+func deriveCachedFields(cm *cachedMemory, metadata map[string]string, memType Type) {
+	cm.Lifecycle = LifecycleStatusOf(&Memory{Type: memType, Metadata: metadata})
+	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
+	cm.Owner = strings.TrimSpace(metadata[MetadataOwner])
 	if cm.KnowledgeLayer == "" && cm.Lifecycle == LifecycleCanonical {
 		cm.KnowledgeLayer = "canonical"
 	}
@@ -336,7 +358,6 @@ func toCachedMemory(m *Memory) *cachedMemory {
 	if cm.Owner == "" {
 		cm.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(cm))
 	}
-	return cm
 }
 
 // cacheDeleteLocked removes a memory from the cache and context index.
@@ -449,6 +470,39 @@ func ensureMemorySchema(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_embedding_model ON memories(embedding_model)`); err != nil {
 		return err
 	}
+
+	// Temporal columns migration.
+	temporalCols := []struct {
+		name string
+		ddl  string
+	}{
+		{"valid_from", "ALTER TABLE memories ADD COLUMN valid_from DATETIME"},
+		{"valid_until", "ALTER TABLE memories ADD COLUMN valid_until DATETIME"},
+		{"superseded_by", "ALTER TABLE memories ADD COLUMN superseded_by TEXT"},
+		{"replaces", "ALTER TABLE memories ADD COLUMN replaces TEXT"},
+		{"observed_at", "ALTER TABLE memories ADD COLUMN observed_at DATETIME"},
+	}
+	for _, col := range temporalCols {
+		exists, err := memoryColumnExists(db, col.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_valid_from ON memories(valid_from)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_valid_until ON memories(valid_until)`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by)`); err != nil {
+		return err
+	}
+
 	return nil
 }
 

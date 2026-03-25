@@ -53,7 +53,7 @@ func deriveTrustMetadataFromCached(m *cachedMemory, now time.Time) *trust.Metada
 	owner := m.Owner
 	layer := m.KnowledgeLayer
 	lifecycle := m.Lifecycle
-	reviewRequired := m.Lifecycle == "review_required" || strings.Contains(strings.Join(m.Tags, ","), "review:required")
+	reviewRequired := m.Lifecycle == "review_required" || hasTag(m.Tags, "review:required")
 
 	lastVerifiedAt := m.UpdatedAt
 	if lastVerifiedAt.IsZero() {
@@ -68,6 +68,15 @@ func deriveTrustMetadataFromCached(m *cachedMemory, now time.Time) *trust.Metada
 		Owner:          owner,
 		FreshnessScore: scoring.FreshnessScore(lastVerifiedAt, now),
 	}
+}
+
+func hasTag(tags []string, target string) bool {
+	for _, t := range tags {
+		if t == target {
+			return true
+		}
+	}
+	return false
 }
 
 func cachedMemoryEntity(m *cachedMemory) string {
@@ -203,6 +212,38 @@ func clampConfidence(value float64) float64 {
 
 func normalizeStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+// TruncateRunes truncates a string to maxRunes runes, appending "..." if truncated.
+func TruncateRunes(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+// MemoryEntity returns the entity type (engineering type or memory type) for external consumers.
+func MemoryEntity(m *Memory) string { return memoryEntity(m) }
+
+// MemoryService returns the service name extracted from metadata or tags.
+func MemoryService(m *Memory) string { return memoryService(m) }
+
+// IsArchivedMemory returns true if the memory is superseded or explicitly archived.
+func IsArchivedMemory(m *Memory) bool { return isArchivedMemory(m) }
+
+// LastVerifiedAt returns the last verification timestamp for a memory.
+func LastVerifiedAt(m *Memory) time.Time {
+	if m == nil {
+		return time.Time{}
+	}
+	if len(m.Metadata) > 0 {
+		if t := parseMetadataTime(m.Metadata[MetadataLastVerifiedAt]); !t.IsZero() {
+			return t
+		}
+	}
+	return m.UpdatedAt
 }
 
 func memoryEntity(m *Memory) string {

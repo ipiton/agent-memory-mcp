@@ -27,6 +27,7 @@ type sessionTracker struct {
 	now                func() time.Time
 	ctx                context.Context
 	cancel             context.CancelFunc
+	onSessionClose     func() // optional callback after session close
 
 	mu      sync.Mutex
 	timer   *time.Timer
@@ -331,6 +332,11 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 		zap.Int("activities", len(session.activities)),
 		zap.Int("review_items", result.Review.PendingCount),
 	)
+
+	// Notify steward scheduler about session close event.
+	if st.onSessionClose != nil {
+		go st.onSessionClose()
+	}
 }
 
 func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
