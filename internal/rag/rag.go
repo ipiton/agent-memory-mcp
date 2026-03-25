@@ -373,6 +373,21 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			docsByID[doc.ID] = doc
 		}
 
+		// Delete old chunks before re-indexing to prevent stale data.
+		// Upsert (INSERT OR REPLACE) only replaces by chunk ID; if chunk
+		// count changes, orphaned chunks with higher indices would remain.
+		cleanedPaths := make(map[string]struct{})
+		for _, doc := range toAdd {
+			if _, done := cleanedPaths[doc.Path]; done {
+				continue
+			}
+			cleanedPaths[doc.Path] = struct{}{}
+			if err := re.vecService.removeDocument(doc.Path); err != nil {
+				re.logger.Warn("Failed to clean old chunks before re-index",
+					zap.String("path", doc.Path), zap.Error(err))
+			}
+		}
+
 		batchSize := 50
 		totalBatches := (len(toAdd) + batchSize - 1) / batchSize
 		currentBatchModel := ""
