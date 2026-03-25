@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-03-25
+
+### Fixed
+
+- RAG re-indexing now deletes old chunks by document path before upserting, preventing stale chunks from remaining when chunk count changes
+- MCP `resources/templates/list` returns empty list instead of "method not found" error
+
 ## [0.3.0] - 2026-03-07
 
 ### Added

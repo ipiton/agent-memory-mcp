@@ -342,6 +342,8 @@ func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 		return s.handleResourcesList(req.Params)
 	case "resources/read":
 		return s.handleResourcesRead(req.Params)
+	case "resources/templates/list":
+		return map[string]any{"resourceTemplates": []any{}}, nil
 	case "tools/list":
 		return s.handleToolsList(req.Params)
 	case "tools/call":
