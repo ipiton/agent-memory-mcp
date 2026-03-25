@@ -21,6 +21,7 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/paths"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
 	"github.com/ipiton/agent-memory-mcp/internal/stats"
+	"github.com/ipiton/agent-memory-mcp/internal/steward"
 	"go.uber.org/zap"
 )
 
@@ -56,16 +57,18 @@ type rpcError struct {
 
 // MCPServer implements the MCP protocol server with RAG and memory capabilities.
 type MCPServer struct {
-	config         config.Config
-	pathGuard      *paths.Guard
-	outputMode     string
-	stats          *stats.Logger
-	ragEngine      *rag.Engine
-	memoryStore    *memory.Store
-	embedder       *embedder.Embedder
-	fileLogger     *logger.FileLogger
-	sessionTracker *sessionTracker
-	toolHandlers   map[string]toolHandler
+	config           config.Config
+	pathGuard        *paths.Guard
+	outputMode       string
+	stats            *stats.Logger
+	ragEngine        *rag.Engine
+	memoryStore      *memory.Store
+	embedder         *embedder.Embedder
+	fileLogger       *logger.FileLogger
+	sessionTracker   *sessionTracker
+	stewardService   *steward.Service
+	stewardScheduler *steward.Scheduler
+	toolHandlers     map[string]toolHandler
 }
 
 // New creates a new MCPServer with the given configuration and path guard.
@@ -157,16 +160,60 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		)
 	}
 
+	var stewardSvc *steward.Service
+	var stewardSched *steward.Scheduler
+	if cfg.StewardEnabled && memoryStore != nil {
+		var sLogger *zap.Logger
+		if fileLogger != nil {
+			sLogger = fileLogger.Logger
+		}
+		var err error
+		stewardSvc, err = steward.NewService(memoryStore, sLogger)
+		if err != nil {
+			if fileLogger != nil {
+				fileLogger.Warn("Steward service initialization failed", zap.Error(err))
+			}
+		} else {
+			// Override policy from config if mode differs.
+			p := stewardSvc.Policy()
+			p.Mode = steward.PolicyMode(cfg.StewardMode)
+			p.ScheduleInterval = cfg.StewardScheduleInterval
+			p.DuplicateSimilarity = cfg.StewardDuplicateThreshold
+			p.StaleDays = cfg.StewardStaleDays
+			p.CanonicalMinConfidence = cfg.StewardCanonicalMinConf
+			if err := stewardSvc.SetPolicy(p); err != nil && fileLogger != nil {
+				fileLogger.Warn("Failed to set steward policy from config", zap.Error(err))
+			}
+
+			stewardSched = steward.NewScheduler(stewardSvc, sLogger)
+			stewardSched.Start()
+
+			if fileLogger != nil {
+				fileLogger.Info("Steward service initialized",
+					zap.String("mode", cfg.StewardMode),
+				)
+			}
+		}
+	}
+
 	srv := &MCPServer{
-		config:         cfg,
-		pathGuard:      guard,
-		outputMode:     cfg.OutputMode,
-		stats:          stats.NewLogger(cfg),
-		ragEngine:      ragEngine,
-		memoryStore:    memoryStore,
-		embedder:       emb,
-		fileLogger:     fileLogger,
-		sessionTracker: newSessionTracker(cfg, memoryStore, fileLogger),
+		config:           cfg,
+		pathGuard:        guard,
+		outputMode:       cfg.OutputMode,
+		stats:            stats.NewLogger(cfg),
+		ragEngine:        ragEngine,
+		memoryStore:      memoryStore,
+		embedder:         emb,
+		fileLogger:       fileLogger,
+		sessionTracker:   newSessionTracker(cfg, memoryStore, fileLogger),
+		stewardService:   stewardSvc,
+		stewardScheduler: stewardSched,
+	}
+	// Wire session close event to steward scheduler.
+	if srv.sessionTracker != nil && stewardSched != nil {
+		srv.sessionTracker.onSessionClose = func() {
+			stewardSched.TriggerEvent("session_close")
+		}
 	}
 	srv.toolHandlers = srv.buildToolHandlers()
 	return srv
@@ -324,6 +371,9 @@ func (s *MCPServer) handleInitialize(_ json.RawMessage) (any, *rpcError) {
 
 // Shutdown gracefully shuts down the server, closing all resources.
 func (s *MCPServer) Shutdown() {
+	if s.stewardScheduler != nil {
+		s.stewardScheduler.Stop()
+	}
 	if s.sessionTracker != nil {
 		s.sessionTracker.Close()
 	}

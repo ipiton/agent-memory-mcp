@@ -329,7 +329,8 @@ func (ms *Store) flushAccessStats(ids []string) {
 func (ms *Store) Get(id string) (*Memory, error) {
 	row := ms.db.QueryRow(`
 		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
-		       embedding, created_at, updated_at, accessed_at, access_count
+		       embedding, created_at, updated_at, accessed_at, access_count,
+		       valid_from, valid_until, superseded_by, replaces, observed_at
 		FROM memories WHERE id = ?
 	`, id)
 
@@ -337,11 +338,14 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	var tagsJSON, metadataJSON, embeddingModel sql.NullString
 	var embeddingBlob []byte
 	var createdAt, updatedAt, accessedAt sql.NullTime
+	var validFrom, validUntil, observedAt sql.NullTime
+	var supersededBy, replaces sql.NullString
 
 	err := row.Scan(
 		&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 		&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 		&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+		&validFrom, &validUntil, &supersededBy, &replaces, &observedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, &ErrNotFound{ID: id}
@@ -371,6 +375,21 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	if accessedAt.Valid {
 		m.AccessedAt = accessedAt.Time
 	}
+	if validFrom.Valid {
+		m.ValidFrom = &validFrom.Time
+	}
+	if validUntil.Valid {
+		m.ValidUntil = &validUntil.Time
+	}
+	if supersededBy.Valid {
+		m.SupersededBy = supersededBy.String
+	}
+	if replaces.Valid {
+		m.Replaces = replaces.String
+	}
+	if observedAt.Valid {
+		m.ObservedAt = &observedAt.Time
+	}
 
 	return &m, nil
 }
@@ -387,7 +406,8 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 	}
 	query := fmt.Sprintf(`
 		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
-		       embedding, created_at, updated_at, accessed_at, access_count
+		       embedding, created_at, updated_at, accessed_at, access_count,
+		       valid_from, valid_until, superseded_by, replaces, observed_at
 		FROM memories WHERE id IN (%s)
 	`, strings.Join(placeholders, ","))
 
@@ -403,11 +423,14 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		var tagsJSON, metadataJSON, embeddingModel sql.NullString
 		var embeddingBlob []byte
 		var createdAt, updatedAt, accessedAt sql.NullTime
+		var validFrom, validUntil, observedAt sql.NullTime
+		var supersededBy, replaces sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+			&validFrom, &validUntil, &supersededBy, &replaces, &observedAt,
 		)
 		if err != nil {
 			continue
@@ -432,6 +455,21 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		}
 		if accessedAt.Valid {
 			m.AccessedAt = accessedAt.Time
+		}
+		if validFrom.Valid {
+			m.ValidFrom = &validFrom.Time
+		}
+		if validUntil.Valid {
+			m.ValidUntil = &validUntil.Time
+		}
+		if supersededBy.Valid {
+			m.SupersededBy = supersededBy.String
+		}
+		if replaces.Valid {
+			m.Replaces = replaces.String
+		}
+		if observedAt.Valid {
+			m.ObservedAt = &observedAt.Time
 		}
 		result[m.ID] = &m
 	}
@@ -536,6 +574,13 @@ func (ms *Store) CountByEmbeddingModel() map[string]int {
 		counts[model]++
 	}
 	return counts
+}
+
+// DB returns the underlying *sql.DB for use by subsystems that need to manage
+// their own tables within the same database (e.g. steward policy, audit trail).
+// Callers must not close the returned connection.
+func (ms *Store) DB() *sql.DB {
+	return ms.db
 }
 
 // Close shuts down the access stats worker and closes the database connection.

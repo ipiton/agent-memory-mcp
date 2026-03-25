@@ -40,6 +40,8 @@ This makes it a better fit when the agent needs to answer questions like:
 - **Hybrid retrieval** that combines embeddings with keyword/BM25-like ranking
 - **RAG indexing** for project docs, changelogs, and knowledge archives
 - **Repo-aware file tools** for listing, reading, and searching allowlisted paths
+- **Knowledge stewardship** — automated maintenance: duplicate detection, conflict resolution, stale detection, drift scanning, and a review inbox
+- **Temporal knowledge model** — track when knowledge was valid, build supersession chains, and query "what was true at time T"
 - **Dual transport**: stdio for MCP clients, HTTP/JSON-RPC for APIs and shared setups
 - **SQLite storage** for both memory and vector index -- no external databases needed
 - **Auto-indexing** with file watcher for long-running local or service mode
@@ -71,6 +73,15 @@ This makes it a better fit when the agent needs to answer questions like:
 - **Built-in retrieval console**: inspect hybrid ranking, trust, and normal-vs-debug retrieval in a lightweight HTTP UI at `/console`
 - **Safer HTTP defaults**: HTTP mode binds to `127.0.0.1` by default; non-loopback binds require auth unless you explicitly opt into unsafe unauthenticated access
 - **Consistent CLI and MCP behavior**: memory type validation, tag normalization, query/content limits, and trust summaries now follow the same policy across both interfaces
+- **Knowledge stewardship**: `steward_run` executes a full maintenance cycle — duplicate detection, conflict resolution, stale entry scanning, and canonical promotion candidates — with a single command
+- **Stewardship inbox**: review-required actions from maintenance runs, drift scans, and session consolidation land in one actionable queue instead of being silently applied or lost
+- **Drift detection**: `drift_scan` compares memory entries against live repo files and docs to find stale, missing, or changed references
+- **Verification model**: `verify_entry` and `verification_candidates` let agents and users track when knowledge was last verified and what needs attention
+- **Canonical health diagnostics**: steward runs now include a health summary for canonical entries — stale, unverified, conflicting, and low-support
+- **Policy-governed automation**: stewardship thresholds, auto-apply rules, and scheduling are configurable via `steward_policy` and environment variables
+- **Temporal knowledge**: memories can carry `valid_from` / `valid_until` timestamps, and `recall_as_of` retrieves knowledge that was valid at a specific point in time
+- **Supersession chains**: `mark_outdated` with a superseding entry automatically builds bidirectional links (`superseded_by` / `replaces`) and sets temporal boundaries
+- **Knowledge timeline**: `knowledge_timeline` shows the chronological evolution of knowledge on a topic
 
 ## Start Local In 3 Minutes
 
@@ -470,6 +481,24 @@ Search for runbooks, postmortems, changelog notes, and recent project context re
 Summarize blast radius, rollback options, and operational risks before editing files.
 ```
 
+### Stewardship run
+
+```text
+When memory has grown or a session just ended, run `steward_run` with `dry_run=true` to see what needs attention.
+Review the report for duplicates, conflicts, stale entries, and canonical promotion candidates.
+Check `steward_inbox` for pending review items and resolve them with `steward_inbox_resolve`.
+Use `drift_scan` periodically to catch memories that reference files or docs that have changed.
+Use `verification_candidates` to find knowledge that has not been verified recently.
+```
+
+### Temporal recall
+
+```text
+When you need to understand what was true at a specific point in time, use `recall_as_of` with an RFC3339 timestamp.
+To trace how knowledge about a topic evolved over time, use `knowledge_timeline`.
+When superseding an old decision or runbook, use `mark_outdated` with the superseding entry ID to build a proper chain.
+```
+
 ### HTTP mode (Docker, remote server, shared instance)
 
 Start the server in HTTP mode:
@@ -593,6 +622,27 @@ For shared HTTP mode:
 | `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
 | `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue |
 
+### Stewardship tools
+
+| Tool | Description |
+|------|-------------|
+| `steward_run` | Run a knowledge stewardship cycle: scan for duplicates, conflicts, stale entries, and canonical promotion candidates |
+| `steward_report` | Retrieve the latest stewardship report or a specific one by run ID |
+| `steward_policy` | Get or update the stewardship policy that controls detection thresholds, auto-apply rules, and scheduling |
+| `steward_status` | Show current stewardship status: policy mode, last run summary, pending review count, next scheduled run |
+| `drift_scan` | Compare memory entries against live sources (repo files, docs) to detect drift, missing references, and stale unverified knowledge |
+| `verification_candidates` | List memories that need verification, ranked by urgency |
+| `verify_entry` | Mark a memory as verified, updating its verification metadata |
+| `steward_inbox` | List stewardship inbox items — review-required actions from maintenance runs, drift scans, and session consolidation |
+| `steward_inbox_resolve` | Resolve a steward inbox item by applying an action: merge, mark_outdated, promote, verify, suppress, or defer |
+
+### Temporal knowledge tools
+
+| Tool | Description |
+|------|-------------|
+| `recall_as_of` | Retrieve knowledge that was valid at a specific point in time, filtering by temporal validity |
+| `knowledge_timeline` | Show the chronological evolution of knowledge on a topic — how entries were created, superseded, and replaced over time |
+
 ## Configuration
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full list.
@@ -627,6 +677,12 @@ For solo local mode, the recommended preset is the checked-in `.env.example` cop
 | `MCP_SESSION_CHECKPOINT_INTERVAL` | `30m` | Interval for periodic raw checkpoint snapshots during active sessions |
 | `MCP_SESSION_MIN_EVENTS` | `2` | Minimum tracked MCP tool calls before background auto-close runs |
 | `MCP_DATA_PATH` | `data` | Base path for data storage |
+| `MCP_STEWARD_ENABLED` | auto | Enable knowledge stewardship (auto-enabled in HTTP mode with memory) |
+| `MCP_STEWARD_MODE` | `manual` | Stewardship mode: `off`, `manual`, `scheduled`, `event_driven` |
+| `MCP_STEWARD_SCHEDULE_INTERVAL` | `24h` | Interval between scheduled stewardship runs |
+| `MCP_STEWARD_DUPLICATE_THRESHOLD` | `0.85` | Similarity threshold for duplicate detection |
+| `MCP_STEWARD_STALE_DAYS` | `30` | Days before a memory is considered stale |
+| `MCP_STEWARD_CANONICAL_MIN_CONFIDENCE` | `0.80` | Minimum confidence for canonical promotion candidates |
 
 ### Data paths
 
@@ -856,6 +912,51 @@ Migration story:
 - promote any high-value existing memory with `promote_to_canonical`
 - legacy workflow memories that only have tags like `decision` or `service:api` are still recognized by the canonical layer
 
+### Knowledge stewardship
+
+The stewardship layer provides automated and manual knowledge maintenance.
+
+`steward_run` executes a full maintenance cycle in one call:
+
+- scans for duplicate candidates (memories with matching entity/service/context/subject)
+- detects conflicting entries (multiple canonical, status disagreements)
+- flags stale entries (not verified within the configured threshold)
+- suggests canonical promotion candidates (high-importance, active, recognized engineering type)
+- generates a structured report with per-action rationale
+- with `dry_run=false`, applies safe actions and sends the rest to the stewardship inbox
+
+`drift_scan` compares memory entries against live repo files:
+
+- detects `source_changed` when a referenced file was modified after the memory was last verified
+- detects `source_missing` when a referenced file path no longer exists
+- flags `stale_unverified` when entries exceed the stale threshold
+
+`verification_candidates` ranks memories that need verification:
+
+- never-verified canonical entries: high urgency
+- entries with `verification_failed` or `needs_update` status: high urgency
+- stale entries beyond threshold: medium urgency
+
+`steward_inbox` is the single place for all review-required actions. Resolve items with `steward_inbox_resolve` using actions like merge, mark_outdated, promote, verify, suppress, or defer.
+
+Stewardship is auto-enabled in HTTP mode when memory is available. Configure thresholds and mode via `MCP_STEWARD_*` environment variables. See `steward_policy` for runtime configuration.
+
+For a detailed guide, see [Stewardship Guide](docs/STEWARDSHIP.md).
+
+### Temporal knowledge
+
+Memories can carry temporal metadata that tracks when knowledge was valid and how it evolved:
+
+- `valid_from` / `valid_until` — the time window during which this knowledge was true
+- `superseded_by` / `replaces` — bidirectional links forming supersession chains
+- `observed_at` — when knowledge was first observed (may differ from `created_at`)
+
+`recall_as_of` retrieves knowledge that was valid at a specific timestamp. This is useful for questions like "what was our database strategy in January?" or "what changed between these two dates?"
+
+`knowledge_timeline` shows the chronological evolution of entries matching a query, ordered by `valid_from`.
+
+When `mark_outdated` is called with a superseding entry, the system automatically sets `valid_until` on the old entry and `valid_from` + `replaces` on the new entry, building a navigable chain.
+
 ## Security And Operations
 
 Core deployment guidance:
@@ -867,6 +968,7 @@ Core deployment guidance:
 
 Reference docs:
 
+- [Stewardship Guide](docs/STEWARDSHIP.md)
 - [Security Policy](docs/SECURITY.md)
 - [Threat Model](docs/THREAT_MODEL.md)
 - [Backup And Restore](docs/BACKUP_RESTORE.md)
@@ -875,20 +977,20 @@ Reference docs:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│           MCP Protocol Layer            │
-│         (stdio or HTTP/JSON-RPC)        │
-├─────────────┬───────────┬───────────────┤
-│ Memory Tools│ RAG Tools │  File Tools   │
-├─────────────┼───────────┼───────────────┤
-│MemoryStore  │ RAGEngine │  PathGuard    │
-│  (SQLite)   │           │               │
-│             │┌─────────┐│               │
-│  Embedder◄──┤│DocService││               │
-│             ││VecService││               │
-│             │└─────────┘│               │
-│             │  (SQLite)  │               │
-└─────────────┴───────────┴───────────────┘
+┌──────────────────────────────────────────────────┐
+│              MCP Protocol Layer                   │
+│            (stdio or HTTP/JSON-RPC)               │
+├────────────┬──────────┬───────────┬───────────────┤
+│Memory Tools│RAG Tools │File Tools │Steward Tools  │
+├────────────┼──────────┼───────────┼───────────────┤
+│MemoryStore │RAGEngine │ PathGuard │ Steward       │
+│  (SQLite)  │          │           │  Service      │
+│            │┌────────┐│           │  Scheduler    │
+│ Embedder◄──┤│DocSvc  ││           │  Inbox        │
+│            ││VecSvc  ││           │  Drift/Verify │
+│            │└────────┘│           │  Policy       │
+│            │ (SQLite)  │           │  (SQLite)     │
+└────────────┴──────────┴───────────┴───────────────┘
 ```
 
 ### Embedding providers

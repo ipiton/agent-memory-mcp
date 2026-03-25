@@ -205,6 +205,28 @@ func normalizeStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+// MemoryEntity returns the entity type (engineering type or memory type) for external consumers.
+func MemoryEntity(m *Memory) string { return memoryEntity(m) }
+
+// MemoryService returns the service name extracted from metadata or tags.
+func MemoryService(m *Memory) string { return memoryService(m) }
+
+// IsArchivedMemory returns true if the memory is superseded or explicitly archived.
+func IsArchivedMemory(m *Memory) bool { return isArchivedMemory(m) }
+
+// LastVerifiedAt returns the last verification timestamp for a memory.
+func LastVerifiedAt(m *Memory) time.Time {
+	if m == nil {
+		return time.Time{}
+	}
+	if len(m.Metadata) > 0 {
+		if t := parseMetadataTime(m.Metadata[MetadataLastVerifiedAt]); !t.IsZero() {
+			return t
+		}
+	}
+	return m.UpdatedAt
+}
+
 func memoryEntity(m *Memory) string {
 	if m == nil {
 		return ""

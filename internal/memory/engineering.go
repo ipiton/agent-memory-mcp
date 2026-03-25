@@ -23,8 +23,11 @@ const (
 	MetadataSessionBoundary = "session_boundary"
 	MetadataSessionOrigin   = "session_origin"
 	MetadataSourceSessionID = "source_session_id"
-	MetadataActionKind      = "action_kind"
-	MetadataActionHandling  = "action_handling"
+	MetadataActionKind          = "action_kind"
+	MetadataActionHandling      = "action_handling"
+	MetadataVerifiedBy          = "verified_by"
+	MetadataVerificationMethod  = "verification_method"
+	MetadataVerificationStatus  = "verification_status"
 )
 
 const (

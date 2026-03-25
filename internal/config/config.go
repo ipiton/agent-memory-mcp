@@ -79,6 +79,14 @@ type Config struct {
 	SessionIdleTimeout        time.Duration // Idle timeout before auto-close
 	SessionCheckpointInterval time.Duration // Periodic raw checkpoint interval during active sessions
 	SessionMinEvents          int           // Minimum observed tool events before auto-close
+
+	// Stewardship configuration
+	StewardEnabled             bool    // Enable knowledge stewardship service
+	StewardMode                string  // Policy mode: off, manual, scheduled, event_driven
+	StewardScheduleInterval    string  // Schedule interval (e.g. "24h")
+	StewardDuplicateThreshold  float64 // Similarity threshold for duplicate detection (default: 0.85)
+	StewardStaleDays           int     // Days before a memory is considered stale (default: 30)
+	StewardCanonicalMinConf    float64 // Minimum confidence for canonical promotion (default: 0.80)
 }
 
 // envValues holds raw values read from environment variables before path resolution.
@@ -125,6 +133,12 @@ type envValues struct {
 	sessionIdleTimeout               string
 	sessionCheckpointInterval        string
 	sessionMinEvents                 int
+	stewardEnabled                   bool
+	stewardMode                      string
+	stewardScheduleInterval          string
+	stewardDuplicateThreshold        float64
+	stewardStaleDays                 int
+	stewardCanonicalMinConf          float64
 }
 
 // loadEnv reads all configuration from environment variables.
@@ -176,6 +190,12 @@ func loadEnv() (envValues, error) {
 		sessionIdleTimeout:               EnvOrDefault("MCP_SESSION_IDLE_TIMEOUT", "10m"),
 		sessionCheckpointInterval:        EnvOrDefault("MCP_SESSION_CHECKPOINT_INTERVAL", "30m"),
 		sessionMinEvents:                 EnvInt("MCP_SESSION_MIN_EVENTS", 2),
+		stewardEnabled:                   EnvBool("MCP_STEWARD_ENABLED", false),
+		stewardMode:                      EnvOrDefault("MCP_STEWARD_MODE", "manual"),
+		stewardScheduleInterval:          EnvOrDefault("MCP_STEWARD_SCHEDULE_INTERVAL", "24h"),
+		stewardDuplicateThreshold:        EnvFloat("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
+		stewardStaleDays:                 EnvInt("MCP_STEWARD_STALE_DAYS", 30),
+		stewardCanonicalMinConf:          EnvFloat("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
 	}, nil
 }
 
@@ -288,6 +308,13 @@ func resolvePaths(ev envValues) (Config, error) {
 		SessionIdleTimeout:               parseDurationOrDefault(ev.sessionIdleTimeout, 10*time.Minute),
 		SessionCheckpointInterval:        parseDurationOrDefault(ev.sessionCheckpointInterval, 30*time.Minute),
 		SessionMinEvents:                 sessionMinEvents,
+
+		StewardEnabled:            resolveStewardEnabled(ev),
+		StewardMode:               ev.stewardMode,
+		StewardScheduleInterval:   ev.stewardScheduleInterval,
+		StewardDuplicateThreshold: ev.stewardDuplicateThreshold,
+		StewardStaleDays:          ev.stewardStaleDays,
+		StewardCanonicalMinConf:   ev.stewardCanonicalMinConf,
 	}
 	if err := validateResolvedConfig(cfg); err != nil {
 		return Config{}, err
@@ -447,6 +474,20 @@ func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// resolveStewardEnabled determines if steward should be enabled.
+// Auto-enables in HTTP mode with memory, unless explicitly disabled via env var.
+func resolveStewardEnabled(ev envValues) bool {
+	// If user explicitly set the env var, respect it.
+	if raw := os.Getenv("MCP_STEWARD_ENABLED"); raw != "" {
+		return ev.stewardEnabled
+	}
+	// Auto-enable in HTTP mode when memory is also enabled.
+	if strings.EqualFold(ev.httpMode, "http") && ev.memoryEnabled {
+		return true
+	}
+	return ev.stewardEnabled
 }
 
 // EmbedderConfig returns the embedder.Config derived from this server config.

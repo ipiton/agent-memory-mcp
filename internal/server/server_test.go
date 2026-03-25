@@ -362,6 +362,17 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"recall_similar_incidents",
 		"summarize_project_context",
 		"project_bank_view",
+		"steward_run",
+		"steward_report",
+		"steward_policy",
+		"steward_status",
+		"drift_scan",
+		"verification_candidates",
+		"verify_entry",
+		"steward_inbox",
+		"steward_inbox_resolve",
+		"recall_as_of",
+		"knowledge_timeline",
 	}
 
 	for _, tool := range expectedTools {

@@ -857,7 +857,200 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 				},
 			},
 		},
+		// Temporal knowledge tools.
+		{
+			Name:        "recall_as_of",
+			Description: "Retrieve knowledge that was valid at a specific point in time, filtering by temporal validity (valid_from/valid_until)",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":   map[string]any{"type": "string", "description": "Search query"},
+					"as_of":   map[string]any{"type": "string", "description": "RFC3339 timestamp — retrieve knowledge valid at this time"},
+					"context": map[string]any{"type": "string", "description": "Optional context filter"},
+					"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
+					"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
+				"required": []string{"query", "as_of"},
+			},
+		},
+		{
+			Name:        "knowledge_timeline",
+			Description: "Show the chronological evolution of knowledge on a topic — how entries were created, superseded, and replaced over time",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":   map[string]any{"type": "string", "description": "Topic to trace"},
+					"context": map[string]any{"type": "string", "description": "Optional context filter"},
+					"service": map[string]any{"type": "string", "description": "Optional service filter"},
+					"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
+				"required": []string{"query"},
+			},
+		},
 	}
+
+	// Steward tools — only registered when steward service is enabled.
+	if s.stewardService != nil {
+		tools = append(tools,
+			tool{
+				Name:        "steward_run",
+				Description: "Run a knowledge stewardship cycle: scan for duplicates, conflicts, stale entries, and canonical promotion candidates",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"scope": map[string]any{
+							"type":        "string",
+							"enum":        []string{"full", "duplicates", "conflicts", "stale", "canonical"},
+							"default":     "full",
+							"description": "Which scanners to run",
+						},
+						"dry_run": map[string]any{
+							"type":        "boolean",
+							"default":     true,
+							"description": "If true, only report findings without applying any changes",
+						},
+						"context": map[string]any{
+							"type":        "string",
+							"description": "Optional context filter to limit the scan scope",
+						},
+						"service": map[string]any{
+							"type":        "string",
+							"description": "Optional service filter to limit the scan scope",
+						},
+						"format": map[string]any{
+							"type":        "string",
+							"enum":        []string{"text", "json"},
+							"default":     "text",
+							"description": "Return a human-readable report or structured JSON",
+						},
+					},
+				},
+			},
+			tool{
+				Name:        "steward_report",
+				Description: "Retrieve the latest stewardship report or a specific one by run ID",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"run_id": map[string]any{
+							"type":        "string",
+							"description": "Optional run ID; defaults to the latest report",
+						},
+						"format": map[string]any{
+							"type":        "string",
+							"enum":        []string{"text", "json"},
+							"default":     "text",
+							"description": "Return a human-readable report or structured JSON",
+						},
+					},
+				},
+			},
+			tool{
+				Name:        "steward_policy",
+				Description: "Get or update the stewardship policy that controls detection thresholds, auto-apply rules, and scheduling",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"action": map[string]any{
+							"type":        "string",
+							"enum":        []string{"get", "set"},
+							"default":     "get",
+							"description": "Get the current policy or set a new one",
+						},
+						"policy": map[string]any{
+							"type":        "object",
+							"description": "The new policy object (required when action=set)",
+						},
+					},
+				},
+			},
+			tool{
+				Name:        "steward_status",
+				Description: "Show current stewardship status: policy mode, last run summary, pending review count, next scheduled run",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"format": map[string]any{
+							"type":        "string",
+							"enum":        []string{"text", "json"},
+							"default":     "text",
+							"description": "Return a human-readable summary or structured JSON",
+						},
+					},
+				},
+			},
+			tool{
+				Name:        "drift_scan",
+				Description: "Compare memory entries against live sources (repo files, docs) to detect drift, missing references, and stale unverified knowledge",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"scope":   map[string]any{"type": "string", "enum": []string{"all", "canonical", "decisions", "runbooks"}, "default": "all", "description": "Which memories to scan"},
+						"context": map[string]any{"type": "string", "description": "Optional context filter"},
+						"service": map[string]any{"type": "string", "description": "Optional service filter"},
+						"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+					},
+				},
+			},
+			tool{
+				Name:        "verification_candidates",
+				Description: "List memories that need verification, ranked by urgency — never verified, stale, low confidence, or verification failed",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+						"scope":        map[string]any{"type": "string", "enum": []string{"all", "canonical", "decisions", "runbooks"}, "default": "all"},
+						"min_age_days": map[string]any{"type": "integer", "description": "Only entries older than N days"},
+						"context":      map[string]any{"type": "string", "description": "Optional context filter"},
+						"service":      map[string]any{"type": "string", "description": "Optional service filter"},
+						"format":       map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+					},
+				},
+			},
+			tool{
+				Name:        "verify_entry",
+				Description: "Mark a memory as verified, updating its verification metadata (timestamp, method, status)",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"memory_id": map[string]any{"type": "string", "description": "ID of the memory to verify"},
+						"method":    map[string]any{"type": "string", "enum": []string{"manual", "source_check", "repo_scan", "agent_verified"}, "default": "manual"},
+						"status":    map[string]any{"type": "string", "enum": []string{"verified", "verification_failed", "needs_update"}, "default": "verified"},
+						"note":      map[string]any{"type": "string", "description": "Optional note about what was checked"},
+					},
+					"required": []string{"memory_id"},
+				},
+			},
+			tool{
+				Name:        "steward_inbox",
+				Description: "List stewardship inbox items — review-required actions from maintenance runs, drift scans, and session consolidation",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"status":  map[string]any{"type": "string", "enum": []string{"pending", "resolved", "deferred", "all"}, "default": "pending"},
+						"kind":    map[string]any{"type": "string", "description": "Filter by item kind (duplicate_candidate, drift_detected, etc.)"},
+						"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+						"sort_by": map[string]any{"type": "string", "enum": []string{"urgency", "created_at", "confidence"}, "default": "urgency"},
+						"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+					},
+				},
+			},
+			tool{
+				Name:        "steward_inbox_resolve",
+				Description: "Resolve a steward inbox item by applying an action: merge, mark_outdated, promote, verify, suppress, or defer",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"item_id": map[string]any{"type": "string", "description": "ID of the inbox item to resolve"},
+						"action":  map[string]any{"type": "string", "enum": []string{"merge", "mark_outdated", "mark_superseded", "promote", "verify", "suppress", "defer"}, "description": "Resolution action"},
+						"note":    map[string]any{"type": "string", "description": "Optional note explaining the resolution"},
+					},
+					"required": []string{"item_id", "action"},
+				},
+			},
+		)
+	}
+
 	filtered := make([]tool, 0, len(tools))
 	for _, t := range tools {
 		if s.ragEngine == nil && ragTools[t.Name] {
@@ -903,6 +1096,8 @@ var memoryTools = map[string]bool{
 	"store_runbook":              true,
 	"store_postmortem":           true,
 	"project_bank_view":          true,
+	"recall_as_of":               true,
+	"knowledge_timeline":         true,
 }
 
 // hybridTools require at least one of memoryStore or ragEngine.
@@ -947,6 +1142,17 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"recall_similar_incidents":   s.callRecallSimilarIncidents,
 		"summarize_project_context":  s.callSummarizeProjectContext,
 		"project_bank_view":          s.callProjectBankView,
+		"steward_run":                s.callStewardRun,
+		"steward_report":             s.callStewardReport,
+		"steward_policy":             s.callStewardPolicy,
+		"steward_status":             s.callStewardStatus,
+		"drift_scan":                 s.callDriftScan,
+		"verification_candidates":    s.callVerificationCandidates,
+		"verify_entry":               s.callVerifyEntry,
+		"steward_inbox":              s.callStewardInbox,
+		"steward_inbox_resolve":      s.callStewardInboxResolve,
+		"recall_as_of":               s.callRecallAsOf,
+		"knowledge_timeline":         s.callKnowledgeTimeline,
 	}
 }
 
