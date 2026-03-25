@@ -339,9 +339,9 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 	}
 
 	var docResults *rag.SearchResponse
-	if s.ragEngine != nil {
+	if re := s.getRagEngine(); re != nil {
 		searchQuery := mergeQueryWithService(query, service)
-		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "runbook", debug)
+		results, err := re.Search(ctx, searchQuery, limit, "runbook", debug)
 		if err != nil {
 			return nil, &rpcError{Code: rpcErrServerError, Message: "runbook document search failed", Data: err.Error()}
 		}
@@ -378,9 +378,9 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 	}
 
 	var docResults *rag.SearchResponse
-	if s.ragEngine != nil {
+	if re := s.getRagEngine(); re != nil {
 		searchQuery := mergeQueryWithService(query, service)
-		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "postmortem", debug)
+		results, err := re.Search(ctx, searchQuery, limit, "postmortem", debug)
 		if err != nil {
 			return nil, &rpcError{Code: rpcErrServerError, Message: "postmortem document search failed", Data: err.Error()}
 		}
@@ -391,7 +391,7 @@ func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcEr
 }
 
 func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcError) {
-	if s.memoryStore == nil && s.ragEngine == nil {
+	if s.memoryStore == nil && s.getRagEngine() == nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "no memory or RAG backend available"}
 	}
 
@@ -447,9 +447,9 @@ func (s *MCPServer) callSummarizeProjectContext(args map[string]any) (any, *rpcE
 	}
 
 	var relatedDocs *rag.SearchResponse
-	if focus != "" && s.ragEngine != nil {
+	if re := s.getRagEngine(); focus != "" && re != nil {
 		searchQuery := mergeQueryWithService(focus, service)
-		results, err := s.ragEngine.Search(ctx, searchQuery, limit, "", false)
+		results, err := re.Search(ctx, searchQuery, limit, "", false)
 		if err != nil {
 			return nil, &rpcError{Code: rpcErrServerError, Message: "project context search failed", Data: err.Error()}
 		}

@@ -230,6 +230,38 @@ Reference docs:
 
 ## Installation Options
 
+### Homebrew (recommended for macOS)
+
+```bash
+brew tap ipiton/tap
+brew install agent-memory-mcp
+brew services start agent-memory-mcp
+```
+
+This installs the binary, creates a default config, and starts the service on `127.0.0.1:18080` with memory enabled. RAG document search is disabled by default — enable it by editing the config:
+
+```bash
+# Edit config
+nano $(brew --prefix)/etc/agent-memory-mcp/config.env
+```
+
+Set `MCP_RAG_ENABLED=true`, `MCP_ROOT=/path/to/your/project`, and `MCP_INDEX_DIRS=docs,README.md`. Changes are picked up automatically within ~30 seconds, or force reload with `kill -HUP $(pgrep agent-memory-mcp)`.
+
+Manage the service:
+
+```bash
+brew services restart agent-memory-mcp
+brew services stop agent-memory-mcp
+brew services info agent-memory-mcp
+```
+
+If you previously installed via Cask and want `brew services`:
+
+```bash
+brew uninstall --cask agent-memory-mcp
+brew install ipiton/tap/agent-memory-mcp
+```
+
 ### Download a binary
 
 Download a prebuilt archive from the [Releases](https://github.com/ipiton/agent-memory-mcp/releases) page.
@@ -647,7 +679,24 @@ For shared HTTP mode:
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full list.
 
-For solo local mode, the recommended preset is the checked-in `.env.example` copied to `.env`.
+Config files are loaded in this order (each file only fills in values not already set):
+
+1. `--config /path/to/file` (explicit path, skips chain)
+2. `.env` in the current directory
+3. `~/.config/agent-memory-mcp/config.env` (XDG)
+4. `$(brew --prefix)/etc/agent-memory-mcp/config.env` (Homebrew)
+
+For solo local mode, copy `.env.example` to `.env` in your project root. For `brew services`, the config is auto-created at `$(brew --prefix)/etc/agent-memory-mcp/config.env`.
+
+### Hot-reload
+
+When running as a service (HTTP mode), the config file is watched for changes every 30 seconds. RAG-related settings (index dirs, embedding keys, enabled/disabled) are applied without restart. HTTP settings (port, host) require a full restart.
+
+You can also force an immediate reload:
+
+```bash
+kill -HUP $(pgrep agent-memory-mcp)
+```
 
 ### Key variables
 
@@ -1037,6 +1086,17 @@ If you set `MCP_EMBEDDING_MODE=local-only`, hosted providers are skipped entirel
 - you can prefer local-only operation without worrying about fallback to hosted providers
 
 ## macOS service installation
+
+### Homebrew (recommended)
+
+```bash
+brew install ipiton/tap/agent-memory-mcp
+brew services start agent-memory-mcp
+```
+
+See [Installation Options](#installation-options) for details and config location.
+
+### Manual (legacy)
 
 ```bash
 ./scripts/install-macos.sh
