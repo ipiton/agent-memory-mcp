@@ -537,6 +537,180 @@ func TestCommitIndexStateRollsBackOnError(t *testing.T) {
 	}
 }
 
+func TestCleanOrphans_RemovesExcessChunks(t *testing.T) {
+	store := newTestStore(t)
+
+	// Simulate old index: file had 4 chunks.
+	oldChunks := []Chunk{
+		{ID: "docs/readme.md-0", DocPath: "docs/readme.md", Content: "a", Embedding: []float32{1, 0, 0}},
+		{ID: "docs/readme.md-1", DocPath: "docs/readme.md", Content: "b", Embedding: []float32{0, 1, 0}},
+		{ID: "docs/readme.md-2", DocPath: "docs/readme.md", Content: "c", Embedding: []float32{0, 0, 1}},
+		{ID: "docs/readme.md-3", DocPath: "docs/readme.md", Content: "old stale", Embedding: []float32{1, 1, 0}},
+	}
+	if err := store.Upsert(oldChunks); err != nil {
+		t.Fatalf("Upsert old: %v", err)
+	}
+
+	// Re-index produced only 2 chunks (replace 0,1; orphan 2,3).
+	newChunks := []Chunk{
+		{ID: "docs/readme.md-0", DocPath: "docs/readme.md", Content: "A", Embedding: []float32{1, 0, 0}},
+		{ID: "docs/readme.md-1", DocPath: "docs/readme.md", Content: "B", Embedding: []float32{0, 1, 0}},
+	}
+	if err := store.Upsert(newChunks); err != nil {
+		t.Fatalf("Upsert new: %v", err)
+	}
+
+	// indexed_files says chunk_count=2.
+	if err := store.SetIndexedFile(&IndexedFileInfo{
+		FilePath:   "docs/readme.md",
+		Hash:       "new-hash",
+		ChunkCount: 2,
+	}); err != nil {
+		t.Fatalf("SetIndexedFile: %v", err)
+	}
+
+	if got := store.Count(); got != 4 {
+		t.Fatalf("before cleanup: expected 4 chunks, got %d", got)
+	}
+
+	removed, err := store.CleanOrphans()
+	if err != nil {
+		t.Fatalf("CleanOrphans: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("expected 2 orphans removed, got %d", removed)
+	}
+	if got := store.Count(); got != 2 {
+		t.Fatalf("after cleanup: expected 2 chunks, got %d", got)
+	}
+}
+
+func TestCleanOrphans_RemovesUntrackedPaths(t *testing.T) {
+	store := newTestStore(t)
+
+	// Chunks for two files.
+	chunks := []Chunk{
+		{ID: "tracked.md-0", DocPath: "tracked.md", Content: "ok", Embedding: []float32{1, 0, 0}},
+		{ID: "ghost.md-0", DocPath: "ghost.md", Content: "stale", Embedding: []float32{0, 1, 0}},
+	}
+	if err := store.Upsert(chunks); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Only tracked.md is in indexed_files; ghost.md is untracked.
+	if err := store.SetIndexedFile(&IndexedFileInfo{
+		FilePath:   "tracked.md",
+		Hash:       "h1",
+		ChunkCount: 1,
+	}); err != nil {
+		t.Fatalf("SetIndexedFile: %v", err)
+	}
+
+	removed, err := store.CleanOrphans()
+	if err != nil {
+		t.Fatalf("CleanOrphans: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 orphan, got %d", removed)
+	}
+	if got := store.Count(); got != 1 {
+		t.Fatalf("expected 1 chunk remaining, got %d", got)
+	}
+}
+
+func TestCleanOrphans_NoFalsePositives(t *testing.T) {
+	store := newTestStore(t)
+
+	chunks := []Chunk{
+		{ID: "a.md-0", DocPath: "a.md", Content: "x", Embedding: []float32{1, 0, 0}},
+		{ID: "b.md-0", DocPath: "b.md", Content: "y", Embedding: []float32{0, 1, 0}},
+		{ID: "b.md-1", DocPath: "b.md", Content: "z", Embedding: []float32{0, 0, 1}},
+	}
+	if err := store.Upsert(chunks); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// Tracking matches reality exactly.
+	for _, info := range []*IndexedFileInfo{
+		{FilePath: "a.md", Hash: "h1", ChunkCount: 1},
+		{FilePath: "b.md", Hash: "h2", ChunkCount: 2},
+	} {
+		if err := store.SetIndexedFile(info); err != nil {
+			t.Fatalf("SetIndexedFile(%s): %v", info.FilePath, err)
+		}
+	}
+
+	removed, err := store.CleanOrphans()
+	if err != nil {
+		t.Fatalf("CleanOrphans: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("expected 0 orphans, got %d", removed)
+	}
+	if got := store.Count(); got != 3 {
+		t.Fatalf("expected 3 chunks, got %d", got)
+	}
+}
+
+func TestCleanOrphans_EmptyIndexedFilesSkips(t *testing.T) {
+	store := newTestStore(t)
+
+	// Chunks exist but indexed_files is empty — should NOT delete anything.
+	if err := store.Upsert([]Chunk{
+		{ID: "x.md-0", DocPath: "x.md", Content: "data", Embedding: []float32{1, 0, 0}},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	removed, err := store.CleanOrphans()
+	if err != nil {
+		t.Fatalf("CleanOrphans: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("expected 0 (empty indexed_files = skip), got %d", removed)
+	}
+	if got := store.Count(); got != 1 {
+		t.Fatalf("expected 1 chunk preserved, got %d", got)
+	}
+}
+
+func TestCleanOrphans_KeywordIndexUpdated(t *testing.T) {
+	store := newTestStore(t)
+
+	// Insert chunk with distinctive keyword.
+	if err := store.Upsert([]Chunk{
+		{ID: "doc.md-0", DocPath: "doc.md", Content: "keep this", Embedding: []float32{1, 0, 0}},
+		{ID: "doc.md-1", DocPath: "doc.md", Content: "uniqueorphanterm", Embedding: []float32{0, 1, 0}},
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := store.SetIndexedFile(&IndexedFileInfo{FilePath: "doc.md", Hash: "h", ChunkCount: 1}); err != nil {
+		t.Fatalf("SetIndexedFile: %v", err)
+	}
+
+	// Keyword search should find the orphan term before cleanup.
+	results, err := store.KeywordSearch("uniqueorphanterm", 5)
+	if err != nil {
+		t.Fatalf("KeywordSearch before cleanup: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected keyword hit before cleanup")
+	}
+
+	if _, err := store.CleanOrphans(); err != nil {
+		t.Fatalf("CleanOrphans: %v", err)
+	}
+
+	// Keyword search should NOT find the orphan term after cleanup.
+	results, err = store.KeywordSearch("uniqueorphanterm", 5)
+	if err != nil {
+		t.Fatalf("KeywordSearch after cleanup: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 keyword hits after cleanup, got %d", len(results))
+	}
+}
+
 func TestStoreInterfaceCompliance(t *testing.T) {
 	// Verify that SQLiteStore implements the Store interface
 	var _ Store = (*SQLiteStore)(nil)
