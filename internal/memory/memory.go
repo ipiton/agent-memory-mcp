@@ -258,18 +258,7 @@ func (ms *Store) loadMemoriesToCache() error {
 		if metadataJSON.Valid && metadataJSON.String != "" {
 			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
 		}
-		m.Lifecycle = LifecycleStatusOf(&Memory{Type: m.Type, Metadata: metadata})
-		m.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
-		m.Owner = strings.TrimSpace(metadata[MetadataOwner])
-		if m.KnowledgeLayer == "" && m.Lifecycle == LifecycleCanonical {
-			m.KnowledgeLayer = "canonical"
-		}
-		if m.KnowledgeLayer == "" {
-			m.KnowledgeLayer = "raw"
-		}
-		if m.Owner == "" {
-			m.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(&m))
-		}
+		deriveCachedFields(&m, metadata, m.Type)
 
 		// Parse embedding (binary format)
 		if len(embeddingBlob) > 0 {
@@ -350,9 +339,16 @@ func toCachedMemory(m *Memory) *cachedMemory {
 		ValidUntil:     m.ValidUntil,
 		SupersededBy:   m.SupersededBy,
 	}
-	cm.Lifecycle = LifecycleStatusOf(m)
-	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]))
-	cm.Owner = strings.TrimSpace(m.Metadata[MetadataOwner])
+	deriveCachedFields(cm, m.Metadata, m.Type)
+	return cm
+}
+
+// deriveCachedFields computes Lifecycle, KnowledgeLayer, and Owner from metadata.
+// Called from both toCachedMemory and loadMemoriesToCache.
+func deriveCachedFields(cm *cachedMemory, metadata map[string]string, memType Type) {
+	cm.Lifecycle = LifecycleStatusOf(&Memory{Type: memType, Metadata: metadata})
+	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
+	cm.Owner = strings.TrimSpace(metadata[MetadataOwner])
 	if cm.KnowledgeLayer == "" && cm.Lifecycle == LifecycleCanonical {
 		cm.KnowledgeLayer = "canonical"
 	}
@@ -362,7 +358,6 @@ func toCachedMemory(m *Memory) *cachedMemory {
 	if cm.Owner == "" {
 		cm.Owner = defaultOwnerForMemorySource(cachedMemoryEntity(cm))
 	}
-	return cm
 }
 
 // cacheDeleteLocked removes a memory from the cache and context index.

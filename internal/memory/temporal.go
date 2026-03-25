@@ -43,17 +43,6 @@ func isValidAt(m *Memory, asOf time.Time) bool {
 	return true
 }
 
-// IsValidAtCached checks temporal validity using cached memory fields.
-func isValidAtCached(m *cachedMemory, asOf time.Time) bool {
-	if m.ValidFrom != nil && m.ValidFrom.After(asOf) {
-		return false
-	}
-	if m.ValidUntil != nil && !m.ValidUntil.After(asOf) {
-		return false
-	}
-	return true
-}
-
 // TimelineEntry represents one entry in a knowledge timeline.
 type TimelineEntry struct {
 	MemoryID     string     `json:"memory_id"`
@@ -86,10 +75,13 @@ func (ms *Store) KnowledgeTimeline(ctx context.Context, query string, memContext
 		}
 
 		title := m.Title
-		if title == "" && len(m.Content) > 60 {
-			title = m.Content[:60] + "..."
-		} else if title == "" {
-			title = m.Content
+		if title == "" {
+			runes := []rune(m.Content)
+			if len(runes) > 60 {
+				title = string(runes[:60]) + "..."
+			} else {
+				title = m.Content
+			}
 		}
 
 		entry := TimelineEntry{

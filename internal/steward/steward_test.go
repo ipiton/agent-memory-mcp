@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -377,7 +378,7 @@ func TestFormatReport(t *testing.T) {
 
 	// Check key elements are present.
 	for _, want := range []string{"DRY RUN", "test-id-", "Scanned: 100", "Duplicate: chi router", "Same subject"} {
-		if !contains(text, want) {
+		if !containsStr(text, want) {
 			t.Errorf("expected report to contain %q", want)
 		}
 	}
@@ -557,14 +558,15 @@ func TestCanonicalHealth(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a canonical entry.
-	_ = store.Store(ctx, &memory.Memory{
+	m := &memory.Memory{
 		Content:    "Use PostgreSQL for all persistent storage",
 		Type:       memory.TypeSemantic,
 		Title:      "Database decision",
 		Importance: 0.9,
 		Metadata:   map[string]string{"entity": "decision", "knowledge_layer": "canonical"},
-	})
-	_, _ = store.PromoteToCanonical(ctx, "", "")
+	}
+	_ = store.Store(ctx, m)
+	_, _ = store.PromoteToCanonical(ctx, m.ID, "test")
 
 	report, err := svc.Run(ctx, RunParams{Scope: ScopeCanonical, DryRun: true})
 	if err != nil {
@@ -666,17 +668,8 @@ func TestRunCreatesInboxItems(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+func containsStr(s, substr string) bool {
+	return strings.Contains(s, substr)
 }
 
 func TestMain(m *testing.M) {

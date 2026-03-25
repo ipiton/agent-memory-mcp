@@ -94,27 +94,17 @@ func (s *Service) VerificationCandidates(ctx context.Context, params Verificatio
 		params.Limit = 20
 	}
 
-	memories, err := s.store.List(ctx, memory.Filters{Context: params.Context}, 0)
+	active, _, err := loadActiveMemories(ctx, s.store, params.Context, params.Service)
 	if err != nil {
 		return nil, fmt.Errorf("steward: list memories: %w", err)
 	}
 
 	now := time.Now().UTC()
-	staleDays := s.policy.StaleDays
-	if staleDays <= 0 {
-		staleDays = 30
-	}
+	staleDays := s.policy.EffectiveStaleDays()
 
 	var candidates []VerificationCandidate
 
-	for _, m := range memories {
-		if memory.IsArchivedMemory(m) {
-			continue
-		}
-		if params.Service != "" && memory.MemoryService(m) != params.Service {
-			continue
-		}
-
+	for _, m := range active {
 		// Scope filter.
 		entity := memory.EngineeringTypeOf(m)
 		isCanonical := memory.IsCanonicalMemory(m)
@@ -146,10 +136,7 @@ func (s *Service) VerificationCandidates(ctx context.Context, params Verificatio
 			continue
 		}
 
-		title := m.Title
-		if title == "" {
-			title = truncate(m.Content, 60)
-		}
+		title := displayTitle(m, 60)
 
 		candidates = append(candidates, VerificationCandidate{
 			MemoryID:        m.ID,

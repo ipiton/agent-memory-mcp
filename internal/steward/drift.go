@@ -59,28 +59,18 @@ type DriftScanParams struct {
 // - Referenced paths that no longer exist
 // - Entries not verified within the stale threshold
 func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*DriftResult, error) {
-	memories, err := s.store.List(ctx, memory.Filters{Context: params.Context}, 0)
+	active, _, err := loadActiveMemories(ctx, s.store, params.Context, params.Service)
 	if err != nil {
 		return nil, fmt.Errorf("steward: drift scan list: %w", err)
 	}
 
 	now := time.Now().UTC()
-	staleDays := s.policy.StaleDays
-	if staleDays <= 0 {
-		staleDays = 30
-	}
+	staleDays := s.policy.EffectiveStaleDays()
 	staleThreshold := now.AddDate(0, 0, -staleDays)
 
 	result := &DriftResult{}
 
-	for _, m := range memories {
-		if memory.IsArchivedMemory(m) {
-			continue
-		}
-		if params.Service != "" && memory.MemoryService(m) != params.Service {
-			continue
-		}
-
+	for _, m := range active {
 		entity := memory.EngineeringTypeOf(m)
 		isCanonical := memory.IsCanonicalMemory(m)
 		if !matchesDriftScope(params.Scope, entity, isCanonical) {
@@ -88,10 +78,7 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 		}
 
 		result.Scanned++
-		title := m.Title
-		if title == "" {
-			title = truncate(m.Content, 60)
-		}
+		title := displayTitle(m, 60)
 
 		verified := memory.LastVerifiedAt(m)
 

@@ -87,6 +87,14 @@ func (s *Scheduler) Stop() {
 // TriggerEvent fires a steward run if the event matches a configured trigger.
 // Safe to call from any goroutine.
 func (s *Scheduler) TriggerEvent(event string) {
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
+	}
+	ctx := s.ctx
+	s.mu.Unlock()
+
 	policy := s.service.Policy()
 	if policy.Mode != PolicyModeEventDriven && policy.Mode != PolicyModeScheduled {
 		return
@@ -94,7 +102,7 @@ func (s *Scheduler) TriggerEvent(event string) {
 
 	for _, trigger := range policy.EventTriggers {
 		if trigger == event {
-			go s.runOnce("event:" + event)
+			go s.runOnceWithCtx(ctx, "event:"+event)
 			return
 		}
 	}
@@ -129,9 +137,16 @@ func (s *Scheduler) loop() {
 }
 
 func (s *Scheduler) runOnce(trigger string) {
+	s.mu.Lock()
+	ctx := s.ctx
+	s.mu.Unlock()
+	s.runOnceWithCtx(ctx, trigger)
+}
+
+func (s *Scheduler) runOnceWithCtx(ctx context.Context, trigger string) {
 	s.logger.Info("steward scheduled run starting", zap.String("trigger", trigger))
 
-	report, err := s.service.Run(s.ctx, RunParams{
+	report, err := s.service.Run(ctx, RunParams{
 		Scope:  ScopeFull,
 		DryRun: false,
 	})

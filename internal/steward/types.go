@@ -3,7 +3,10 @@
 // then applies safe actions or surfaces review items.
 package steward
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RunScope controls which scanners run during a steward cycle.
 type RunScope string
@@ -86,6 +89,14 @@ type Policy struct {
 	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"`  // default true
 
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EffectiveStaleDays returns StaleDays with a fallback to 30 if not set.
+func (p Policy) EffectiveStaleDays() int {
+	if p.StaleDays <= 0 {
+		return 30
+	}
+	return p.StaleDays
 }
 
 // DefaultPolicy returns the starting policy for new installations.
@@ -195,4 +206,53 @@ type RunBrief struct {
 	StartedAt time.Time `json:"started_at"`
 	Duration  string    `json:"duration"`
 	Stats     RunStats  `json:"stats"`
+}
+
+// ValidateRunScope validates and normalizes a scope string.
+func ValidateRunScope(s string) (RunScope, error) {
+	switch RunScope(s) {
+	case ScopeFull, ScopeDuplicates, ScopeConflicts, ScopeStale, ScopeCanonical:
+		return RunScope(s), nil
+	case "":
+		return ScopeFull, nil
+	default:
+		return "", fmt.Errorf("invalid scope %q: expected full, duplicates, conflicts, stale, or canonical", s)
+	}
+}
+
+// ValidateVerificationMethod validates a verification method string.
+func ValidateVerificationMethod(s string) (VerificationMethod, error) {
+	switch VerificationMethod(s) {
+	case VerifyManual, VerifySourceCheck, VerifyRepoScan, VerifyAgentVerified:
+		return VerificationMethod(s), nil
+	case "":
+		return VerifyManual, nil
+	default:
+		return "", fmt.Errorf("invalid verification method %q: expected manual, source_check, repo_scan, or agent_verified", s)
+	}
+}
+
+// ValidateVerificationStatus validates a verification status string.
+func ValidateVerificationStatus(s string) (VerificationStatus, error) {
+	switch VerificationStatus(s) {
+	case StatusVerified, StatusVerificationFailed, StatusNeedsUpdate:
+		return VerificationStatus(s), nil
+	case "":
+		return StatusVerified, nil
+	default:
+		return "", fmt.Errorf("invalid verification status %q: expected verified, verification_failed, or needs_update", s)
+	}
+}
+
+// ValidateDriftScope validates a drift scan scope string.
+func ValidateDriftScope(s string) (string, error) {
+	switch s {
+	case "", "all", "canonical", "decisions", "runbooks":
+		if s == "" {
+			return "all", nil
+		}
+		return s, nil
+	default:
+		return "", fmt.Errorf("invalid drift scope %q: expected all, canonical, decisions, or runbooks", s)
+	}
 }

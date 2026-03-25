@@ -17,6 +17,7 @@ const (
 	InboxDuplicateCandidate    InboxItemKind = "duplicate_candidate"
 	InboxContradictionCandidate InboxItemKind = "contradiction_candidate"
 	InboxStaleCanonical        InboxItemKind = "stale_canonical"
+	InboxStaleEntry            InboxItemKind = "stale_entry"
 	InboxOutdatedProcedural    InboxItemKind = "outdated_procedural"
 	InboxUnverifiedRunbook     InboxItemKind = "unverified_runbook"
 	InboxSourceMismatch        InboxItemKind = "source_mismatch"
@@ -271,7 +272,7 @@ func actionToInboxKind(kind ActionKind) InboxItemKind {
 	case ActionFlagConflict:
 		return InboxContradictionCandidate
 	case ActionMarkStale:
-		return InboxStaleCanonical
+		return InboxStaleEntry
 	case ActionPromoteCanonical:
 		return InboxPromotionCandidate
 	default:

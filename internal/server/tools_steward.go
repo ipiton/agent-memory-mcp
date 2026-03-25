@@ -25,9 +25,10 @@ func (s *MCPServer) callStewardRun(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	scope, _ := getString(args, "scope")
-	if scope == "" {
-		scope = "full"
+	scopeRaw, _ := getString(args, "scope")
+	scope, err := steward.ValidateRunScope(scopeRaw)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	dryRun := true
 	if v, ok := getBool(args, "dry_run"); ok {
@@ -38,7 +39,7 @@ func (s *MCPServer) callStewardRun(args map[string]any) (any, *rpcError) {
 	format, _ := getString(args, "format")
 
 	report, err := s.stewardService.Run(context.Background(), steward.RunParams{
-		Scope:   steward.RunScope(scope),
+		Scope:   scope,
 		DryRun:  dryRun,
 		Context: memContext,
 		Service: service,
@@ -140,16 +141,17 @@ func (s *MCPServer) callDriftScan(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	scope, _ := getString(args, "scope")
-	if scope == "" {
-		scope = "all"
+	scopeRaw, _ := getString(args, "scope")
+	driftScope, err := steward.ValidateDriftScope(scopeRaw)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
 	format, _ := getString(args, "format")
 
 	result, err := s.stewardService.DriftScan(context.Background(), steward.DriftScanParams{
-		Scope:    scope,
+		Scope:    driftScope,
 		Context:  memContext,
 		Service:  service,
 		RootPath: s.config.RootPath,
@@ -205,26 +207,28 @@ func (s *MCPServer) callVerifyEntry(args map[string]any) (any, *rpcError) {
 	if !ok || memoryID == "" {
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "memory_id is required"}
 	}
-	method, _ := getString(args, "method")
-	if method == "" {
-		method = "manual"
+	methodRaw, _ := getString(args, "method")
+	method, err := steward.ValidateVerificationMethod(methodRaw)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
-	status, _ := getString(args, "status")
-	if status == "" {
-		status = "verified"
+	statusRaw, _ := getString(args, "status")
+	vStatus, err := steward.ValidateVerificationStatus(statusRaw)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
 	note, _ := getString(args, "note")
 
-	err := s.stewardService.VerifyEntry(context.Background(), steward.VerifyParams{
+	err = s.stewardService.VerifyEntry(context.Background(), steward.VerifyParams{
 		MemoryID: memoryID,
-		Method:   steward.VerificationMethod(method),
-		Status:   steward.VerificationStatus(status),
+		Method:   method,
+		Status:   vStatus,
 		Note:     note,
 	})
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("verify entry failed: %v", err)}
 	}
-	return toolResultText(fmt.Sprintf("Memory %s marked as %s (method: %s)", memoryID, status, method)), nil
+	return toolResultText(fmt.Sprintf("Memory %s marked as %s (method: %s)", memoryID, vStatus, method)), nil
 }
 
 func (s *MCPServer) callStewardInbox(args map[string]any) (any, *rpcError) {
@@ -406,9 +410,11 @@ func formatRecallAsOf(results []*memory.SearchResult, asOf time.Time) string {
 	for i, r := range results {
 		title := r.Memory.Title
 		if title == "" {
-			title = r.Memory.Content
-			if len(title) > 60 {
-				title = title[:60] + "..."
+			runes := []rune(r.Memory.Content)
+			if len(runes) > 60 {
+				title = string(runes[:60]) + "..."
+			} else {
+				title = r.Memory.Content
 			}
 		}
 		fmt.Fprintf(&sb, "\n%d. %s (score: %.2f)\n", i+1, title, r.Score)

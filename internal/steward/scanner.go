@@ -9,6 +9,33 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
 
+// maxScanMemories is the safety limit for the number of memories loaded into RAM
+// during a single scan pass. Prevents OOM on large knowledge bases.
+const maxScanMemories = 5000
+
+// loadActiveMemories loads non-archived memories filtered by context and service.
+// Returns at most maxScanMemories entries; if truncated, the boolean is true.
+func loadActiveMemories(ctx context.Context, store *memory.Store, memContext, service string) ([]*memory.Memory, bool, error) {
+	memories, err := store.List(ctx, memory.Filters{Context: memContext}, 0)
+	if err != nil {
+		return nil, false, err
+	}
+	var active []*memory.Memory
+	for _, m := range memories {
+		if memory.IsArchivedMemory(m) {
+			continue
+		}
+		if service != "" && memory.MemoryService(m) != service {
+			continue
+		}
+		active = append(active, m)
+		if len(active) >= maxScanMemories {
+			return active, true, nil
+		}
+	}
+	return active, false, nil
+}
+
 // ScanResult collects actions from all scanners in a single run.
 type ScanResult struct {
 	Scanned         int
@@ -21,23 +48,16 @@ type ScanResult struct {
 func RunScanners(ctx context.Context, store *memory.Store, policy Policy, scope RunScope, memContext, service string) *ScanResult {
 	result := &ScanResult{}
 
-	// Load all non-archived memories once.
-	memories, err := store.List(ctx, memory.Filters{Context: memContext}, 0)
+	active, truncated, err := loadActiveMemories(ctx, store, memContext, service)
 	if err != nil {
 		result.Errors = append(result.Errors, RunError{Phase: "list", Message: fmt.Sprintf("failed to list memories: %v", err)})
 		return result
 	}
-
-	// Filter by service if specified and exclude archived.
-	var active []*memory.Memory
-	for _, m := range memories {
-		if memory.IsArchivedMemory(m) {
-			continue
-		}
-		if service != "" && memory.MemoryService(m) != service {
-			continue
-		}
-		active = append(active, m)
+	if truncated {
+		result.Errors = append(result.Errors, RunError{
+			Phase:   "list",
+			Message: fmt.Sprintf("scan truncated at %d memories; results may be incomplete — consider narrowing context/service filters", maxScanMemories),
+		})
 	}
 	result.Scanned = len(active)
 
@@ -77,7 +97,7 @@ func scanDuplicates(memories []*memory.Memory, policy Policy, result *ScanResult
 
 	groups := make(map[string]*group)
 	for _, m := range memories {
-		key := duplicateGroupKey(m)
+		key := groupKey(m)
 		if key == "" {
 			continue
 		}
@@ -99,10 +119,7 @@ func scanDuplicates(memories []*memory.Memory, policy Policy, result *ScanResult
 			ids[i] = m.ID
 		}
 
-		title := g.members[0].Title
-		if title == "" {
-			title = truncate(g.members[0].Content, 60)
-		}
+		title := displayTitle(g.members[0], 60)
 
 		result.Actions = append(result.Actions, Action{
 			Kind:       ActionMergeDuplicates,
@@ -127,7 +144,7 @@ func scanConflicts(memories []*memory.Memory, result *ScanResult) {
 
 	groups := make(map[string]*groupInfo)
 	for _, m := range memories {
-		key := conflictGroupKey(m)
+		key := groupKey(m)
 		if key == "" {
 			continue
 		}
@@ -168,10 +185,7 @@ func scanConflicts(memories []*memory.Memory, result *ScanResult) {
 			ids[i] = m.ID
 		}
 
-		title := g.members[0].Title
-		if title == "" {
-			title = truncate(g.members[0].Content, 60)
-		}
+		title := displayTitle(g.members[0], 60)
 
 		result.Actions = append(result.Actions, Action{
 			Kind:       kind,
@@ -208,10 +222,7 @@ func scanStale(memories []*memory.Memory, policy Policy, now time.Time, result *
 			}
 		}
 
-		title := m.Title
-		if title == "" {
-			title = truncate(m.Content, 60)
-		}
+		title := displayTitle(m, 60)
 
 		daysSince := int(now.Sub(verified).Hours() / 24)
 		result.Actions = append(result.Actions, Action{
@@ -265,10 +276,7 @@ func scanCanonicalCandidates(memories []*memory.Memory, policy Policy, result *S
 			continue
 		}
 
-		title := m.Title
-		if title == "" {
-			title = truncate(m.Content, 60)
-		}
+		title := displayTitle(m, 60)
 
 		result.Actions = append(result.Actions, Action{
 			Kind:       ActionPromoteCanonical,
@@ -287,10 +295,7 @@ func scanCanonicalCandidates(memories []*memory.Memory, policy Policy, result *S
 func scanCanonicalHealth(memories []*memory.Memory, policy Policy, now time.Time) *CanonicalHealth {
 	health := &CanonicalHealth{}
 
-	staleDays := policy.StaleDays
-	if staleDays <= 0 {
-		staleDays = 30
-	}
+	staleDays := policy.EffectiveStaleDays()
 	staleThreshold := now.AddDate(0, 0, -staleDays*2) // 2x stale for canonical
 
 	// Track canonical subjects for conflict detection.
@@ -302,10 +307,7 @@ func scanCanonicalHealth(memories []*memory.Memory, policy Policy, now time.Time
 		}
 		health.Total++
 
-		title := m.Title
-		if title == "" {
-			title = truncate(m.Content, 60)
-		}
+		title := displayTitle(m, 60)
 
 		verified := memory.LastVerifiedAt(m)
 		vStatus := verificationStatusOf(m)
@@ -358,20 +360,9 @@ func scanCanonicalHealth(memories []*memory.Memory, policy Policy, now time.Time
 
 // --- helpers ---
 
-func duplicateGroupKey(m *memory.Memory) string {
-	subject := subjectWords(m, 10)
-	if subject == "" {
-		return ""
-	}
-	return strings.Join([]string{
-		string(memory.EngineeringTypeOf(m)),
-		memory.MemoryService(m),
-		strings.TrimSpace(m.Context),
-		subject,
-	}, "|")
-}
-
-func conflictGroupKey(m *memory.Memory) string {
+// groupKey builds a composite key for grouping memories by entity, service, context, and subject.
+// Used by both duplicate and conflict scanners.
+func groupKey(m *memory.Memory) string {
 	subject := subjectWords(m, 10)
 	if subject == "" {
 		return ""
@@ -411,10 +402,19 @@ func metadataStatus(m *memory.Memory) string {
 	return strings.ToLower(strings.TrimSpace(m.Metadata["status"]))
 }
 
-func truncate(s string, maxLen int) string {
+// displayTitle returns a short display title for a memory, falling back to truncated content.
+func displayTitle(m *memory.Memory, maxRunes int) string {
+	if m.Title != "" {
+		return m.Title
+	}
+	return truncate(m.Content, maxRunes)
+}
+
+func truncate(s string, maxRunes int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxRunes]) + "..."
 }
