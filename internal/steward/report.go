@@ -20,11 +20,17 @@ func ensureReportTable(db *sql.DB) error {
 			service TEXT,
 			stats TEXT NOT NULL,
 			actions TEXT NOT NULL,
-			errors TEXT
+			errors TEXT,
+			canonical_health TEXT
 		);
 		CREATE INDEX IF NOT EXISTS idx_steward_runs_started ON steward_runs(started_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add canonical_health column if table already exists without it.
+	_, _ = db.Exec(`ALTER TABLE steward_runs ADD COLUMN canonical_health TEXT`)
+	return nil
 }
 
 // SaveReport persists a completed steward report.
@@ -44,6 +50,13 @@ func SaveReport(db *sql.DB, r *Report) error {
 			return fmt.Errorf("steward: marshal errors: %w", err)
 		}
 	}
+	var healthJSON []byte
+	if r.CanonicalHealth != nil {
+		healthJSON, err = json.Marshal(r.CanonicalHealth)
+		if err != nil {
+			return fmt.Errorf("steward: marshal canonical_health: %w", err)
+		}
+	}
 
 	dryRun := 0
 	if r.DryRun {
@@ -51,10 +64,10 @@ func SaveReport(db *sql.DB, r *Report) error {
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO steward_runs (id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO steward_runs (id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors, canonical_health)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, r.ID, r.StartedAt, r.CompletedAt, string(r.Scope), dryRun,
-		r.Context, r.Service, string(statsJSON), string(actionsJSON), nullableString(errorsJSON))
+		r.Context, r.Service, string(statsJSON), string(actionsJSON), nullableString(errorsJSON), nullableString(healthJSON))
 	if err != nil {
 		return fmt.Errorf("steward: save report: %w", err)
 	}
@@ -64,7 +77,7 @@ func SaveReport(db *sql.DB, r *Report) error {
 // LoadReport retrieves a report by ID.
 func LoadReport(db *sql.DB, id string) (*Report, error) {
 	row := db.QueryRow(`
-		SELECT id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors
+		SELECT id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors, canonical_health
 		FROM steward_runs WHERE id = ?
 	`, id)
 	return scanReport(row)
@@ -73,7 +86,7 @@ func LoadReport(db *sql.DB, id string) (*Report, error) {
 // LoadLatestReport returns the most recent steward report.
 func LoadLatestReport(db *sql.DB) (*Report, error) {
 	row := db.QueryRow(`
-		SELECT id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors
+		SELECT id, started_at, completed_at, scope, dry_run, context, service, stats, actions, errors, canonical_health
 		FROM steward_runs ORDER BY started_at DESC LIMIT 1
 	`)
 	return scanReport(row)
@@ -92,10 +105,11 @@ func scanReport(row scannable) (*Report, error) {
 		statsJSON  string
 		actJSON    string
 		errsJSON   sql.NullString
+		healthJSON sql.NullString
 	)
 
 	err := row.Scan(&r.ID, &r.StartedAt, &r.CompletedAt, &scope, &dryRun,
-		&ctx, &svc, &statsJSON, &actJSON, &errsJSON)
+		&ctx, &svc, &statsJSON, &actJSON, &errsJSON, &healthJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -121,6 +135,13 @@ func scanReport(row scannable) (*Report, error) {
 		if err := json.Unmarshal([]byte(errsJSON.String), &r.Errors); err != nil {
 			return nil, fmt.Errorf("steward: unmarshal errors: %w", err)
 		}
+	}
+	if healthJSON.Valid && healthJSON.String != "" {
+		var health CanonicalHealth
+		if err := json.Unmarshal([]byte(healthJSON.String), &health); err != nil {
+			return nil, fmt.Errorf("steward: unmarshal canonical_health: %w", err)
+		}
+		r.CanonicalHealth = &health
 	}
 	return &r, nil
 }

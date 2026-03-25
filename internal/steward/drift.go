@@ -85,10 +85,22 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 		// Check referenced file paths.
 		if params.RootPath != "" {
 			refs := extractPathRefs(m.Content)
+			cleanRoot := filepath.Clean(params.RootPath)
 			for _, ref := range refs {
 				absPath := ref
 				if !filepath.IsAbs(ref) {
 					absPath = filepath.Join(params.RootPath, ref)
+				}
+				absPath = filepath.Clean(absPath)
+
+				// Guard: only stat paths within the configured root to prevent path traversal.
+				if !strings.HasPrefix(absPath, cleanRoot+string(filepath.Separator)) && absPath != cleanRoot {
+					result.UnreachableSources = append(result.UnreachableSources, UnreachableRef{
+						MemoryID:   m.ID,
+						SourcePath: ref,
+						Reason:     "path outside allowed root",
+					})
+					continue
 				}
 
 				info, err := os.Stat(absPath)

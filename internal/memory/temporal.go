@@ -11,8 +11,12 @@ import (
 //   - valid_from is nil or valid_from <= asOf
 //   - valid_until is nil or valid_until > asOf
 func (ms *Store) RecallAsOf(ctx context.Context, query string, asOf time.Time, filters Filters, limit int) ([]*SearchResult, error) {
-	// Use the standard recall first, then filter by temporal validity.
-	results, err := ms.Recall(ctx, query, filters, 0) // get all, we'll filter
+	// Use an over-fetching inner limit since temporal filtering may discard many results.
+	innerLimit := 200
+	if limit > 0 && limit*10 > innerLimit {
+		innerLimit = limit * 10
+	}
+	results, err := ms.Recall(ctx, query, filters, innerLimit)
 	if err != nil {
 		return nil, err
 	}

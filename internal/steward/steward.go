@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,10 +15,11 @@ import (
 // Service is the main stewardship orchestrator. It manages policy, runs scans,
 // applies safe actions, and records audit entries.
 type Service struct {
-	db     *sql.DB
-	store  *memory.Store
-	logger *zap.Logger
-	policy Policy
+	db       *sql.DB
+	store    *memory.Store
+	logger   *zap.Logger
+	policyMu sync.RWMutex
+	policy   Policy
 }
 
 // NewService creates a steward service and ensures the required database tables exist.
@@ -56,8 +58,10 @@ func NewService(store *memory.Store, logger *zap.Logger) (*Service, error) {
 	}, nil
 }
 
-// Policy returns the current stewardship policy.
+// Policy returns a snapshot of the current stewardship policy.
 func (s *Service) Policy() Policy {
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
 	return s.policy
 }
 
@@ -66,7 +70,9 @@ func (s *Service) SetPolicy(p Policy) error {
 	if err := SavePolicy(s.db, p); err != nil {
 		return err
 	}
+	s.policyMu.Lock()
 	s.policy = p
+	s.policyMu.Unlock()
 	return nil
 }
 
