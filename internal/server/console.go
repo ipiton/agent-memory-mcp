@@ -4,8 +4,10 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
@@ -44,6 +46,42 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
+		}
+
+		// MCP Streamable HTTP: GET opens an SSE stream for server-initiated messages.
+		// Per spec §5.2, servers that don't need server→client notifications keep the
+		// stream open with periodic keepalive comments until the client disconnects.
+		if r.Method == http.MethodGet {
+			if !authorizeHTTPRequest(w, r, authToken) {
+				return
+			}
+			if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				http.Error(w, "Accept must include text/event-stream", http.StatusNotAcceptable)
+				return
+			}
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, ": stream open\n\n")
+			flusher.Flush()
+
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-ticker.C:
+					_, _ = fmt.Fprintf(w, ": keepalive\n\n")
+					flusher.Flush()
+				}
+			}
 		}
 
 		if r.Method != http.MethodPost {
