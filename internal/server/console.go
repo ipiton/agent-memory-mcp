@@ -51,12 +51,8 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		// MCP Streamable HTTP: GET opens an SSE stream for server-initiated messages.
 		// Per spec §5.2, servers that don't need server→client notifications keep the
 		// stream open with periodic keepalive comments until the client disconnects.
-		if r.Method == http.MethodGet {
+		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
 			if !authorizeHTTPRequest(w, r, authToken) {
-				return
-			}
-			if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-				http.Error(w, "Accept must include text/event-stream", http.StatusNotAcceptable)
 				return
 			}
 			flusher, ok := w.(http.Flusher)
