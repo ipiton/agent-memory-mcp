@@ -717,6 +717,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
 | `MCP_EMBEDDING_DIMENSION` | `1024` | Vector dimension (change requires re-indexing) |
+| `MCP_EMBEDDING_TIMEOUT` | `5s` | Per-request timeout for embedding API calls |
+| `MCP_EMBEDDING_MAX_RETRIES` | `1` | Max retries per embedding request |
 | `MCP_INDEX_DIRS` | `docs` | Directories to index for RAG |
 | `MCP_INDEX_EXCLUDE_DIRS` | built-in defaults | Extra directory names or repo-relative paths to exclude from RAG indexing |
 | `MCP_INDEX_EXCLUDE_GLOBS` | - | Extra glob patterns matched against repo-relative paths, for example `docs/internal/*.md` |

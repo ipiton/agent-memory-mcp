@@ -58,8 +58,10 @@ type Config struct {
 	OpenAIBaseURL      string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
 	OpenAIModel        string // OpenAI embedding model (default: text-embedding-3-small)
 	OllamaBaseURL      string // Ollama base URL (default: http://localhost:11434)
-	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
-	EmbeddingMode      string // Embedding mode: auto or local-only
+	EmbeddingDimension  int           // Embedding vector dimension (default: 1024)
+	EmbeddingMode       string        // Embedding mode: auto or local-only
+	EmbeddingTimeout    time.Duration // Per-request timeout for embedding API calls (default: 5s)
+	EmbeddingMaxRetries int           // Max retries per embedding request (default: 1)
 
 	// RAG indexing behavior
 	AutoIndex        bool          // Auto-index on startup (default: true)
@@ -129,6 +131,8 @@ type envValues struct {
 	ollamaBaseURL                    string
 	embeddingDimension               int
 	embeddingMode                    string
+	embeddingTimeout                 string
+	embeddingMaxRetries              int
 	autoIndex                        bool
 	fileWatcher                      bool
 	watchInterval                    string
@@ -190,6 +194,8 @@ func readEnvValues() (envValues, error) {
 		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
 		embeddingDimension:               EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
 		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
+		embeddingTimeout:                 EnvOrDefault("MCP_EMBEDDING_TIMEOUT", "5s"),
+		embeddingMaxRetries:              EnvInt("MCP_EMBEDDING_MAX_RETRIES", 1),
 		autoIndex:                        EnvBool("MCP_RAG_AUTO_INDEX", true),
 		fileWatcher:                      EnvBool("MCP_RAG_FILE_WATCHER", true),
 		watchInterval:                    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
@@ -304,8 +310,10 @@ func resolvePaths(ev envValues) (Config, error) {
 		OpenAIBaseURL:      ev.openaiBaseURL,
 		OpenAIModel:        ev.openaiModel,
 		OllamaBaseURL:      ev.ollamaBaseURL,
-		EmbeddingDimension: ev.embeddingDimension,
-		EmbeddingMode:      ev.embeddingMode,
+		EmbeddingDimension:  ev.embeddingDimension,
+		EmbeddingMode:       ev.embeddingMode,
+		EmbeddingTimeout:    parseDurationOrDefault(ev.embeddingTimeout, 5*time.Second),
+		EmbeddingMaxRetries: ev.embeddingMaxRetries,
 
 		AutoIndex:        ev.autoIndex,
 		FileWatcher:      ev.fileWatcher,
@@ -513,8 +521,8 @@ func (c Config) EmbedderConfig() embedder.Config {
 		OllamaBaseURL: c.OllamaBaseURL,
 		Dimension:     c.EmbeddingDimension,
 		Mode:          c.EmbeddingMode,
-		MaxRetries:    1,
-		Timeout:       5 * time.Second,
+		MaxRetries:    c.EmbeddingMaxRetries,
+		Timeout:       c.EmbeddingTimeout,
 	}
 }
 
