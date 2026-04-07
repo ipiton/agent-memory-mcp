@@ -180,6 +180,7 @@ func FormatReport(r *Report) string {
 	fmt.Fprintf(&sb, "Scanned: %d memories\n", r.Stats.Scanned)
 	fmt.Fprintf(&sb, "  Duplicates found:       %d\n", r.Stats.DuplicatesFound)
 	fmt.Fprintf(&sb, "  Conflicts found:        %d\n", r.Stats.ConflictsFound)
+	fmt.Fprintf(&sb, "  Contradictions found:   %d\n", r.Stats.ContradictionsFound)
 	fmt.Fprintf(&sb, "  Stale found:            %d\n", r.Stats.StaleFound)
 	fmt.Fprintf(&sb, "  Promotion candidates:   %d\n", r.Stats.PromotionCandidates)
 	fmt.Fprintf(&sb, "  Actions applied:        %d\n", r.Stats.ActionsApplied)

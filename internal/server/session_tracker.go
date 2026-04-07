@@ -215,7 +215,9 @@ func (st *sessionTracker) handleSessionNotification(event sessionNotification) {
 	case "reset":
 		st.reset()
 	case "checkpoint":
-		st.forceCheckpoint(event)
+		st.forceCheckpoint(event, "checkpoint")
+	case "pre_compact":
+		st.forceCheckpoint(event, "pre_compact")
 	case "task_done", "final_summary":
 		st.flushWithNotification(normalizeSessionEvent(event.Event), event)
 	default:
@@ -278,7 +280,7 @@ func (st *sessionTracker) flushWithNotification(boundary string, event sessionNo
 	st.flushSession(boundary, session)
 }
 
-func (st *sessionTracker) forceCheckpoint(event sessionNotification) {
+func (st *sessionTracker) forceCheckpoint(event sessionNotification, boundary string) {
 	now := st.now()
 
 	st.mu.Lock()
@@ -300,7 +302,7 @@ func (st *sessionTracker) forceCheckpoint(event sessionNotification) {
 	}
 	st.mu.Unlock()
 
-	st.saveCheckpoint(session)
+	st.saveCheckpointWithBoundary(session, boundary)
 }
 
 func (st *sessionTracker) flushSession(boundary string, session *trackedSession) {
@@ -340,20 +342,29 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 }
 
 func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
+	st.saveCheckpointWithBoundary(session, "checkpoint")
+}
+
+func (st *sessionTracker) saveCheckpointWithBoundary(session *trackedSession, boundary string) {
 	if st == nil || session == nil || !hasEnoughTrackedMaterial(session, st.minEvents) {
 		return
 	}
 
-	summary := session.summary("checkpoint")
+	tags := []string{"session-checkpoint"}
+	if boundary != "checkpoint" {
+		tags = append(tags, boundary)
+	}
+
+	summary := session.summary(boundary)
 	if _, err := st.closeService.SaveRawSummaryWithOptions(st.ctx, summary, sessionclose.RawSaveOptions{
 		RecordKind: memory.RecordKindSessionCheckpoint,
-		ExtraTags:  []string{"session-checkpoint"},
+		ExtraTags:  tags,
 		Metadata: map[string]string{
-			memory.MetadataSessionBoundary: "checkpoint",
+			memory.MetadataSessionBoundary: boundary,
 			memory.MetadataSessionOrigin:   autoSessionOrigin,
 		},
 	}); err != nil {
-		st.logWarn("background session checkpoint failed", zap.Error(err))
+		st.logWarn("background session checkpoint failed", zap.String("boundary", boundary), zap.Error(err))
 	}
 }
 

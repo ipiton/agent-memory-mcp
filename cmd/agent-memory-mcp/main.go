@@ -61,6 +61,16 @@ func main() {
 		runExport(args)
 	case "import":
 		runImport(args)
+	case "setup":
+		runSetup(args)
+	case "hooks-config":
+		runHooksConfig(args)
+	case "context-inject":
+		runContextInject(args)
+	case "auto-capture":
+		runAutoCapture(args)
+	case "checkpoint":
+		runCheckpoint(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -188,6 +198,15 @@ Commands:
   reembed   Re-generate memory embeddings with the active model
   export    Export all memories to JSON (stdout)
   import    Import memories from JSON (file or stdin)
+
+Setup:
+  setup           Auto-configure Claude Code hooks in ~/.claude/settings.json
+
+Hooks (for Claude Code integration):
+  hooks-config    Generate Claude Code hooks configuration (manual)
+  context-inject  Output recent memories for session start injection
+  auto-capture    Capture session knowledge from transcript (stdin)
+  checkpoint      Save a session checkpoint (pre-compact or manual)
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)

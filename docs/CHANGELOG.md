@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-07
+
+### Added
+
+- **Claude Code hooks integration** — automatic session capture with zero manual effort
+  - `setup` command auto-configures hooks in `~/.claude/settings.json` during `brew install`
+  - `SessionStart` hook injects recent knowledge and pending raw summaries for agent-driven compilation
+  - `SessionEnd` hook auto-captures session knowledge via the extract/plan/apply pipeline
+  - `PreCompact` hook saves a checkpoint before context window compression
+- `hooks-config` CLI command for manual hooks JSON generation
+- `context-inject` CLI command — outputs knowledge context and uncompiled session summaries with compilation instructions
+- `auto-capture` CLI command — full session consolidation pipeline from stdin transcript
+- `checkpoint` CLI command — saves raw session checkpoints with configurable boundary type
+- **Embedding-based contradiction scanner** in stewardship — detects semantically similar memories with conflicting signals (lifecycle status, temporal markers, content patterns)
+- New steward scope `semantic_conflicts` and action kind `flag_contradiction`
+- Pre-compact event support in session tracker (`pre_compact` notification)
+- Version injection via ldflags — released binaries report actual version instead of "dev"
+
+### Changed
+
+- Homebrew formula runs `setup` automatically in `post_install` — hooks configured on install
+- Homebrew caveats updated to reflect automatic hooks configuration
+- `forceCheckpoint` now accepts boundary parameter for pre-compact vs regular checkpoints
+
 ## [0.4.1] - 2026-03-25
 
 ### Fixed

@@ -151,6 +151,8 @@ func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
 			stats.DuplicatesFound++
 		case ActionFlagConflict:
 			stats.ConflictsFound++
+		case ActionFlagContradiction:
+			stats.ContradictionsFound++
 		case ActionMarkStale:
 			stats.StaleFound++
 		case ActionPromoteCanonical:

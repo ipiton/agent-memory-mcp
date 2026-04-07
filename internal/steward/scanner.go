@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 )
 
 // maxScanMemories is the safety limit for the number of memories loaded into RAM
@@ -67,12 +68,15 @@ func RunScanners(ctx context.Context, store *memory.Store, policy Policy, scope 
 	case ScopeFull:
 		scanDuplicates(active, policy, result)
 		scanConflicts(active, result)
+		scanSemanticConflicts(active, policy, result)
 		scanStale(active, policy, now, result)
 		scanCanonicalCandidates(active, policy, result)
 	case ScopeDuplicates:
 		scanDuplicates(active, policy, result)
 	case ScopeConflicts:
 		scanConflicts(active, result)
+	case ScopeSemanticConflicts:
+		scanSemanticConflicts(active, policy, result)
 	case ScopeStale:
 		scanStale(active, policy, now, result)
 	case ScopeCanonical:
@@ -356,6 +360,144 @@ func scanCanonicalHealth(memories []*memory.Memory, policy Policy, now time.Time
 	}
 
 	return health
+}
+
+// scanSemanticConflicts finds pairs of memories that are semantically similar
+// but likely contradictory based on lifecycle status, temporal markers, or
+// conflicting content signals.
+func scanSemanticConflicts(memories []*memory.Memory, policy Policy, result *ScanResult) {
+	const (
+		similarityThreshold = 0.75
+		maxPairsPerGroup    = 50 // prevent O(n^2) blow-up in large groups
+	)
+
+	// Group memories by subject key (engineering type + service + context).
+	type subjectGroup struct {
+		members []*memory.Memory
+	}
+	groups := make(map[string]*subjectGroup)
+	for _, m := range memories {
+		if len(m.Embedding) == 0 {
+			continue
+		}
+		key := subjectKey(m)
+		if key == "" {
+			continue
+		}
+		g, ok := groups[key]
+		if !ok {
+			g = &subjectGroup{}
+			groups[key] = g
+		}
+		g.members = append(g.members, m)
+	}
+
+	// Track already-flagged pairs to avoid duplicates.
+	seen := make(map[string]struct{})
+
+	for _, g := range groups {
+		if len(g.members) < 2 {
+			continue
+		}
+		pairs := 0
+		for i := 0; i < len(g.members) && pairs < maxPairsPerGroup; i++ {
+			for j := i + 1; j < len(g.members) && pairs < maxPairsPerGroup; j++ {
+				a, b := g.members[i], g.members[j]
+
+				sim := vectorstore.CosineSimilarity(a.Embedding, b.Embedding)
+				if sim < similarityThreshold {
+					continue
+				}
+
+				if !hasContradictionSignals(a, b) {
+					continue
+				}
+
+				pairKey := a.ID + "|" + b.ID
+				if a.ID > b.ID {
+					pairKey = b.ID + "|" + a.ID
+				}
+				if _, exists := seen[pairKey]; exists {
+					continue
+				}
+				seen[pairKey] = struct{}{}
+				pairs++
+
+				titleA := displayTitle(a, 40)
+				titleB := displayTitle(b, 40)
+
+				result.Actions = append(result.Actions, Action{
+					Kind:      ActionFlagContradiction,
+					Handling:  HandlingReviewRequired,
+					State:     StatePlanned,
+					TargetIDs: []string{a.ID, b.ID},
+					Title:     fmt.Sprintf("Contradiction: %s vs %s", titleA, titleB),
+					Rationale: fmt.Sprintf("Semantically similar (%.2f) but conflicting signals detected", sim),
+					Evidence: []string{
+						fmt.Sprintf("similarity=%.3f", sim),
+						fmt.Sprintf("lifecycle_a=%s, lifecycle_b=%s", memory.LifecycleStatusOf(a), memory.LifecycleStatusOf(b)),
+					},
+					Confidence: contradictionConfidence(sim),
+				})
+			}
+		}
+	}
+}
+
+// hasContradictionSignals checks whether two semantically similar memories
+// show signs of contradiction: different lifecycle, temporal supersession,
+// or opposing content patterns.
+func hasContradictionSignals(a, b *memory.Memory) bool {
+	la := memory.LifecycleStatusOf(a)
+	lb := memory.LifecycleStatusOf(b)
+
+	// Different lifecycle statuses on same subject → likely contradiction.
+	if la != "" && lb != "" && la != lb {
+		return true
+	}
+
+	// One supersedes the other explicitly.
+	if a.SupersededBy == b.ID || b.SupersededBy == a.ID {
+		return true
+	}
+	if a.Replaces == b.ID || b.Replaces == a.ID {
+		return true
+	}
+
+	// Temporal conflict: both have valid_from but different windows.
+	if a.ValidFrom != nil && b.ValidFrom != nil && a.ValidUntil != nil {
+		if b.ValidFrom.After(*a.ValidFrom) && b.ValidFrom.Before(*a.ValidUntil) {
+			return true
+		}
+	}
+
+	// Content-level contradiction signals.
+	contentA := strings.ToLower(a.Content)
+	contentB := strings.ToLower(b.Content)
+	for _, signal := range contradictionKeywords {
+		if strings.Contains(contentA, signal) || strings.Contains(contentB, signal) {
+			return true
+		}
+	}
+
+	return false
+}
+
+var contradictionKeywords = []string{
+	"replaced by", "superseded", "deprecated", "no longer",
+	"instead of", "migrated to", "switched to", "removed",
+	"was changed to", "previously", "old approach",
+}
+
+func contradictionConfidence(similarity float64) float64 {
+	// Higher similarity with contradiction signals → higher confidence.
+	if similarity >= 0.90 {
+		return 0.85
+	}
+	if similarity >= 0.80 {
+		return 0.75
+	}
+	return 0.65
 }
 
 // --- helpers ---

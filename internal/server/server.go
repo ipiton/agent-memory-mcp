@@ -217,6 +217,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			stewardSched.TriggerEvent("session_close")
 		}
 	}
+
 	srv.toolHandlers = srv.buildToolHandlers()
 	return srv
 }

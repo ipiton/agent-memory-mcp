@@ -36,6 +36,7 @@ This makes it a better fit when the agent needs to answer questions like:
 
 ## Features
 
+- **Automatic session capture** — Claude Code hooks auto-capture knowledge at session end, save checkpoints before context compression, and compile pending summaries at session start
 - **Typed persistent memory** with 4 types: episodic, semantic, procedural, working
 - **Hybrid retrieval** that combines embeddings with keyword/BM25-like ranking
 - **RAG indexing** for project docs, changelogs, and knowledge archives
@@ -94,9 +95,9 @@ Run these commands from your project root.
 Install the binary with one of these options:
 
 ```bash
-# Homebrew (macOS/Linux)
+# Homebrew (macOS/Linux) — recommended, auto-configures Claude Code hooks
 brew tap ipiton/tap
-brew install --cask agent-memory-mcp
+brew install agent-memory-mcp
 ```
 
 ```bash

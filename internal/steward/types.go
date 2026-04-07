@@ -12,11 +12,12 @@ import (
 type RunScope string
 
 const (
-	ScopeFull       RunScope = "full"
-	ScopeDuplicates RunScope = "duplicates"
-	ScopeConflicts  RunScope = "conflicts"
-	ScopeStale      RunScope = "stale"
-	ScopeCanonical  RunScope = "canonical"
+	ScopeFull              RunScope = "full"
+	ScopeDuplicates        RunScope = "duplicates"
+	ScopeConflicts         RunScope = "conflicts"
+	ScopeStale             RunScope = "stale"
+	ScopeCanonical         RunScope = "canonical"
+	ScopeSemanticConflicts RunScope = "semantic_conflicts"
 )
 
 // PolicyMode controls when stewardship runs execute.
@@ -38,6 +39,7 @@ const (
 	ActionPromoteCanonical   ActionKind = "promote_canonical"
 	ActionRefreshFreshness   ActionKind = "refresh_freshness"
 	ActionFlagConflict       ActionKind = "flag_conflict"
+	ActionFlagContradiction  ActionKind = "flag_contradiction"
 )
 
 // ActionHandling indicates whether an action can be auto-applied.
@@ -119,13 +121,14 @@ type Action struct {
 
 // RunStats summarizes a steward run.
 type RunStats struct {
-	Scanned              int `json:"scanned"`
-	DuplicatesFound      int `json:"duplicates_found"`
-	ConflictsFound       int `json:"conflicts_found"`
-	StaleFound           int `json:"stale_found"`
-	PromotionCandidates  int `json:"promotion_candidates"`
-	ActionsApplied       int `json:"actions_applied"`
-	ActionsPendingReview int `json:"actions_pending_review"`
+	Scanned               int `json:"scanned"`
+	DuplicatesFound       int `json:"duplicates_found"`
+	ConflictsFound        int `json:"conflicts_found"`
+	ContradictionsFound   int `json:"contradictions_found"`
+	StaleFound            int `json:"stale_found"`
+	PromotionCandidates   int `json:"promotion_candidates"`
+	ActionsApplied        int `json:"actions_applied"`
+	ActionsPendingReview  int `json:"actions_pending_review"`
 }
 
 // Report is the result of a steward run.
@@ -200,12 +203,12 @@ type RunBrief struct {
 // ValidateRunScope validates and normalizes a scope string.
 func ValidateRunScope(s string) (RunScope, error) {
 	switch RunScope(s) {
-	case ScopeFull, ScopeDuplicates, ScopeConflicts, ScopeStale, ScopeCanonical:
+	case ScopeFull, ScopeDuplicates, ScopeConflicts, ScopeStale, ScopeCanonical, ScopeSemanticConflicts:
 		return RunScope(s), nil
 	case "":
 		return ScopeFull, nil
 	default:
-		return "", fmt.Errorf("invalid scope %q: expected full, duplicates, conflicts, stale, or canonical", s)
+		return "", fmt.Errorf("invalid scope %q: expected full, duplicates, conflicts, stale, canonical, or semantic_conflicts", s)
 	}
 }
 

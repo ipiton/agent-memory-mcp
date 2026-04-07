@@ -270,6 +270,8 @@ func actionToInboxKind(kind ActionKind) InboxItemKind {
 		return InboxDuplicateCandidate
 	case ActionFlagConflict:
 		return InboxContradictionCandidate
+	case ActionFlagContradiction:
+		return InboxContradictionCandidate
 	case ActionMarkStale:
 		return InboxStaleEntry
 	case ActionPromoteCanonical:
