@@ -13,6 +13,7 @@ func runSetup(args []string) {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	command := fs.String("command", defaultConfigCommand(), "Path to agent-memory-mcp binary")
 	dryRun := fs.Bool("dry-run", false, "Show what would be written without modifying files")
+	force := fs.Bool("force", false, "Overwrite existing hooks (useful after brew upgrade)")
 	mustParse(fs, args)
 
 	settingsPath := claudeSettingsPath()
@@ -27,8 +28,8 @@ func runSetup(args []string) {
 		existing = make(map[string]any)
 	}
 
-	if hooksAlreadyConfigured(existing) {
-		fmt.Fprintf(os.Stderr, "Hooks already configured in %s — skipping.\n", settingsPath)
+	if !*force && hooksAlreadyConfigured(existing, *command) {
+		fmt.Fprintf(os.Stderr, "Hooks already configured in %s — skipping. Use --force to overwrite.\n", settingsPath)
 		return
 	}
 
@@ -79,7 +80,8 @@ func readJSONFile(path string) (map[string]any, error) {
 	return result, nil
 }
 
-func hooksAlreadyConfigured(settings map[string]any) bool {
+// hooksAlreadyConfigured returns true only if our hooks exist AND point to the current binary.
+func hooksAlreadyConfigured(settings map[string]any, currentCommand string) bool {
 	hooks, ok := settings["hooks"]
 	if !ok {
 		return false
@@ -88,24 +90,36 @@ func hooksAlreadyConfigured(settings map[string]any) bool {
 	if !ok {
 		return false
 	}
-	// Check if any of our hook events are already set.
+
+	found := 0
 	for _, event := range []string{"SessionStart", "SessionEnd", "PreCompact"} {
-		if entries, ok := hooksMap[event]; ok {
-			if arr, ok := entries.([]any); ok && len(arr) > 0 {
-				// Check if it's our hook (contains "agent-memory-mcp").
-				for _, entry := range arr {
-					if m, ok := entry.(map[string]any); ok {
-						if cmd, ok := m["command"].(string); ok {
-							if containsStr(cmd, "agent-memory-mcp") {
-								return true
-							}
-						}
-					}
+		entries, ok := hooksMap[event]
+		if !ok {
+			continue
+		}
+		arr, ok := entries.([]any)
+		if !ok || len(arr) == 0 {
+			continue
+		}
+		for _, entry := range arr {
+			m, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			cmd, ok := m["command"].(string)
+			if !ok {
+				continue
+			}
+			if containsStr(cmd, "agent-memory-mcp") {
+				// Hook exists but points to a different binary — needs update.
+				if !containsStr(cmd, currentCommand) {
+					return false
 				}
+				found++
 			}
 		}
 	}
-	return false
+	return found >= 3
 }
 
 func mergeHooks(settings map[string]any, hooks map[string][]hookEntry) {

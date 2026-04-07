@@ -78,7 +78,7 @@ brews:
       (var/"agent-memory-mcp/memory-store").mkpath
       (var/"agent-memory-mcp/rag-index").mkpath
       (var/"log/agent-memory-mcp").mkpath
-      system bin/"agent-memory-mcp", "setup"
+      system bin/"agent-memory-mcp", "setup", "--force"
     service: |
       run [opt_bin/"agent-memory-mcp", "serve", "--config", etc/"agent-memory-mcp/config.env"]
       keep_alive true
