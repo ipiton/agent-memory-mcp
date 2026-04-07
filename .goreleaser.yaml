@@ -78,7 +78,6 @@ brews:
       (var/"agent-memory-mcp/memory-store").mkpath
       (var/"agent-memory-mcp/rag-index").mkpath
       (var/"log/agent-memory-mcp").mkpath
-      system bin/"agent-memory-mcp", "setup", "--force"
     service: |
       run [opt_bin/"agent-memory-mcp", "serve", "--config", etc/"agent-memory-mcp/config.env"]
       keep_alive true
@@ -86,23 +85,15 @@ brews:
       error_log_path var/"log/agent-memory-mcp/service.err.log"
       working_dir var/"agent-memory-mcp"
     caveats: |
-      agent-memory-mcp is installed and Claude Code hooks are configured.
+      Run once to configure Claude Code auto-capture:
+        agent-memory-mcp setup
 
       To start the background service:
         brew services start agent-memory-mcp
 
-      What's automatic:
-        - SessionEnd: captures session knowledge
-        - PreCompact: saves checkpoint before context compression
-        - SessionStart: loads context + compiles pending summaries
-
       Config: #{etc}/agent-memory-mcp/config.env
-      Hooks:  ~/.claude/settings.json
       Data:   #{var}/agent-memory-mcp/
       Logs:   #{var}/log/agent-memory-mcp/
-
-      To reconfigure hooks: agent-memory-mcp setup
-      To enable RAG: set MCP_RAG_ENABLED=true in config.env
     test: |
       assert_match version.to_s, shell_output("#{bin}/agent-memory-mcp 2>&1", 1)
 
