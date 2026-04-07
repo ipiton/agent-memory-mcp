@@ -130,11 +130,13 @@ func shellQuote(value string) string {
 
 func defaultConfigCommand() string {
 	path, err := os.Executable()
-	if err == nil {
-		path, err = filepath.EvalSymlinks(path)
-		if err == nil && filepath.Base(path) == "agent-memory-mcp" && !strings.Contains(path, string(filepath.Separator)+"go-build") {
-			return path
-		}
+	if err != nil {
+		return "agent-memory-mcp"
+	}
+	// Use the symlink path (e.g. /opt/homebrew/bin/agent-memory-mcp)
+	// instead of the resolved Cellar path, so hooks survive brew upgrades.
+	if filepath.Base(path) == "agent-memory-mcp" && !strings.Contains(path, string(filepath.Separator)+"go-build") {
+		return path
 	}
 	return "agent-memory-mcp"
 }
