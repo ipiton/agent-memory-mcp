@@ -199,6 +199,113 @@ func TestHTTPOptions(t *testing.T) {
 	}
 }
 
+func TestHTTPGetSSEStreamOpens(t *testing.T) {
+	s := newTestServer(t, "")
+	mux := buildMux(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	// Give handler time to write initial SSE comment, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", cc)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ": stream open") {
+		t.Fatalf("SSE body missing initial comment, got %q", body)
+	}
+}
+
+func TestHTTPGetSSERequiresAuth(t *testing.T) {
+	s := newTestServer(t, "secret-token-123")
+	mux := buildMux(s)
+
+	// No auth header → 401
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without auth, got %d", rec.Code)
+	}
+
+	// Wrong token → 401
+	req = httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong token, got %d", rec.Code)
+	}
+}
+
+func TestHTTPGetWithoutSSEAcceptReturns405(t *testing.T) {
+	s := newTestServer(t, "")
+	mux := buildMux(s)
+
+	// GET without Accept: text/event-stream falls through to 405
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for GET without SSE accept, got %d", rec.Code)
+	}
+}
+
+func TestHTTPGetSSEKeepAlive(t *testing.T) {
+	s := newTestServer(t, "")
+
+	authToken := s.config.HTTPAuthToken
+	_ = authToken
+
+	mux := buildMux(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	req.Header.Set("Accept", "text/event-stream")
+
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	// Cancel immediately — handler should exit cleanly via r.Context().Done().
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	s := newTestServer(t, "secret")
 	mux := buildMux(s)
