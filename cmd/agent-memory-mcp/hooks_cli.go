@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,11 +12,43 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
+
+	_ "modernc.org/sqlite"
 )
 
+// contextInjectRow holds the minimal fields needed for context-inject output.
+type contextInjectRow struct {
+	ID      string
+	Title   string
+	Content string
+	Context string
+	Tags    string // JSON array
+}
+
+func (r contextInjectRow) displayTitle(maxRunes int) string {
+	if t := strings.TrimSpace(r.Title); t != "" {
+		return memory.TruncateRunes(t, maxRunes)
+	}
+	value := strings.TrimSpace(r.Content)
+	if idx := strings.IndexByte(value, '\n'); idx >= 0 {
+		value = strings.TrimSpace(value[:idx])
+	}
+	return memory.TruncateRunes(value, maxRunes)
+}
+
+func (r contextInjectRow) parseTags() []string {
+	if r.Tags == "" || r.Tags == "null" {
+		return nil
+	}
+	var tags []string
+	_ = json.Unmarshal([]byte(r.Tags), &tags)
+	return tags
+}
+
 // runContextInject outputs recent memories, pending raw summaries, and compilation
-// instructions for session start injection. The agent reads this output and
-// compiles pending summaries into structured knowledge using MCP tools.
+// instructions for session start injection.
+//
+// Lightweight path: opens SQLite directly, skips embedder/cache/background workers.
 func runContextInject(args []string) {
 	fs := flag.NewFlagSet("context-inject", flag.ExitOnError)
 	limit := fs.Int("limit", 10, "Max recent knowledge items to include")
@@ -29,93 +63,145 @@ func runContextInject(args []string) {
 		os.Exit(1)
 	}
 
-	store, cleanup, err := initMemoryStore(cfg)
+	db, err := sql.Open("sqlite", cfg.MemoryDBPath+"?_journal_mode=WAL&mode=ro")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	defer cleanup()
+	defer func() { _ = db.Close() }()
 
-	filters := memory.Filters{
-		Context: strings.TrimSpace(*memContext),
-	}
-	if svc := strings.TrimSpace(*service); svc != "" {
-		filters.Tags = []string{"service:" + svc}
-	}
-
-	allMemories, err := store.List(context.Background(), filters, 0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Split into knowledge items and pending raw summaries.
-	var knowledge []*memory.Memory
-	var pending []*memory.Memory
-	for _, m := range allMemories {
-		if memory.IsSessionSummaryMemory(m) && !hasTag(m.Tags, "compiled") {
-			pending = append(pending, m)
-		} else if !memory.IsSessionSummaryMemory(m) && !memory.IsSessionCheckpointMemory(m) && !memory.IsReviewQueueMemory(m) {
-			knowledge = append(knowledge, m)
-		}
-	}
-
+	ctx := context.Background()
 	hasOutput := false
 
-	// Output recent knowledge.
-	if len(knowledge) > 0 {
-		if len(knowledge) > *limit {
-			knowledge = knowledge[:*limit]
+	// Output recent knowledge items.
+	if *limit > 0 {
+		knowledge, err := queryKnowledge(ctx, db, *limit, *memContext, *service)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error querying knowledge: %v\n", err)
+			os.Exit(1)
 		}
-		fmt.Println("# Session Context (from agent-memory-mcp)")
-		fmt.Println()
-		for _, m := range knowledge {
-			title := memory.DisplayTitle(m, 80)
-			fmt.Printf("## %s\n", title)
-			if m.Context != "" {
-				fmt.Printf("Context: %s\n", m.Context)
-			}
-			if len(m.Tags) > 0 {
-				fmt.Printf("Tags: %s\n", strings.Join(m.Tags, ", "))
-			}
-			content := strings.TrimSpace(m.Content)
-			if len(content) > 500 {
-				content = content[:500] + "..."
-			}
-			fmt.Println(content)
+		if len(knowledge) > 0 {
+			fmt.Println("# Session Context (from agent-memory-mcp)")
 			fmt.Println()
+			for _, r := range knowledge {
+				fmt.Printf("## %s\n", r.displayTitle(80))
+				if r.Context != "" {
+					fmt.Printf("Context: %s\n", r.Context)
+				}
+				if tags := r.parseTags(); len(tags) > 0 {
+					fmt.Printf("Tags: %s\n", strings.Join(tags, ", "))
+				}
+				content := strings.TrimSpace(r.Content)
+				if len(content) > 500 {
+					content = content[:500] + "..."
+				}
+				fmt.Println(content)
+				fmt.Println()
+			}
+			hasOutput = true
 		}
-		hasOutput = true
 	}
 
 	// Output pending raw summaries with compilation instructions.
-	if len(pending) > 0 {
-		if len(pending) > *pendingLimit {
-			pending = pending[:*pendingLimit]
+	if *pendingLimit > 0 {
+		pending, err := queryPending(ctx, db, *pendingLimit, *memContext)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error querying pending: %v\n", err)
+			os.Exit(1)
 		}
-		if hasOutput {
-			fmt.Println("---")
-			fmt.Println()
-		}
-		fmt.Printf("# Pending session summaries (%d uncompiled)\n\n", len(pending))
-		fmt.Println("Review the raw session summaries below. For each one, extract reusable knowledge")
-		fmt.Println("using the MCP memory tools (store_decision, store_memory, etc.).")
-		fmt.Println("After processing a summary, call update_memory to add the tag \"compiled\" to it.")
-		fmt.Println()
-		for _, m := range pending {
-			title := memory.DisplayTitle(m, 80)
-			fmt.Printf("## [pending] %s (id: %s)\n", title, m.ID)
-			if m.Context != "" {
-				fmt.Printf("Context: %s\n", m.Context)
+		if len(pending) > 0 {
+			if hasOutput {
+				fmt.Println("---")
+				fmt.Println()
 			}
-			content := strings.TrimSpace(m.Content)
-			if len(content) > 1000 {
-				content = content[:1000] + "..."
-			}
-			fmt.Println(content)
+			fmt.Printf("# Pending session summaries (%d uncompiled)\n\n", len(pending))
+			fmt.Println("Review the raw session summaries below. For each one, extract reusable knowledge")
+			fmt.Println("using the MCP memory tools (store_decision, store_memory, etc.).")
+			fmt.Println("After processing a summary, call update_memory to add the tag \"compiled\" to it.")
 			fmt.Println()
+			for _, r := range pending {
+				fmt.Printf("## [pending] %s (id: %s)\n", r.displayTitle(80), r.ID)
+				if r.Context != "" {
+					fmt.Printf("Context: %s\n", r.Context)
+				}
+				content := strings.TrimSpace(r.Content)
+				if len(content) > 1000 {
+					content = content[:1000] + "..."
+				}
+				fmt.Println(content)
+				fmt.Println()
+			}
 		}
 	}
+}
+
+// queryKnowledge returns recent knowledge items (excluding session/checkpoint/review records).
+func queryKnowledge(ctx context.Context, db *sql.DB, limit int, memContext, service string) ([]contextInjectRow, error) {
+	var conditions []string
+	var params []any
+
+	// Exclude internal record kinds.
+	conditions = append(conditions, `(
+		json_extract(metadata, '$.record_kind') IS NULL
+		OR json_extract(metadata, '$.record_kind') NOT IN ('session_summary', 'session_checkpoint', 'review_queue_item')
+	)`)
+
+	if memContext != "" {
+		conditions = append(conditions, "context = ?")
+		params = append(params, memContext)
+	}
+	if service != "" {
+		conditions = append(conditions, "tags LIKE ?")
+		params = append(params, `%"service:`+service+`"%`)
+	}
+
+	query := "SELECT id, COALESCE(title,''), content, COALESCE(context,''), COALESCE(tags,'') FROM memories"
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY updated_at DESC LIMIT ?"
+	params = append(params, limit)
+
+	return queryRows(ctx, db, query, params)
+}
+
+// queryPending returns uncompiled session summary records.
+func queryPending(ctx context.Context, db *sql.DB, limit int, memContext string) ([]contextInjectRow, error) {
+	var conditions []string
+	var params []any
+
+	conditions = append(conditions, "json_extract(metadata, '$.record_kind') = 'session_summary'")
+	conditions = append(conditions, `tags NOT LIKE '%"compiled"%'`)
+
+	if memContext != "" {
+		conditions = append(conditions, "context = ?")
+		params = append(params, memContext)
+	}
+
+	query := "SELECT id, COALESCE(title,''), content, COALESCE(context,''), COALESCE(tags,'') FROM memories WHERE " +
+		strings.Join(conditions, " AND ") +
+		" ORDER BY created_at DESC LIMIT ?"
+	params = append(params, limit)
+
+	return queryRows(ctx, db, query, params)
+}
+
+func queryRows(ctx context.Context, db *sql.DB, query string, params []any) ([]contextInjectRow, error) {
+	rows, err := db.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var results []contextInjectRow
+	for rows.Next() {
+		var r contextInjectRow
+		if err := rows.Scan(&r.ID, &r.Title, &r.Content, &r.Context, &r.Tags); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }
 
 func hasTag(tags []string, target string) bool {
