@@ -28,7 +28,7 @@ import (
 
 const maxRequestBodyBytes = 10 * 1024 * 1024 // 10 MB
 
-const protocolVersion = "2024-11-05"
+const protocolVersion = "2025-11-25"
 
 // Version is set via ldflags at build time: -ldflags "-X ...server.Version=..."
 // Falls back to "dev" if not set.
