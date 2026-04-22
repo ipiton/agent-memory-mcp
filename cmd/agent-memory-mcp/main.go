@@ -71,6 +71,10 @@ func main() {
 		runAutoCapture(args)
 	case "checkpoint":
 		runCheckpoint(args)
+	case "sweep-archive":
+		runSweepArchive(args)
+	case "end-task":
+		runEndTask(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -207,6 +211,10 @@ Hooks (for Claude Code integration):
   context-inject  Output recent memories for session start injection
   auto-capture    Capture session knowledge from transcript (stdin)
   checkpoint      Save a session checkpoint (pre-compact or manual)
+
+Task lifecycle (T47):
+  sweep-archive   Mark working memories tied to archived task slugs as outdated
+  end-task        Explicitly consolidate working memories for a single archived task slug
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)

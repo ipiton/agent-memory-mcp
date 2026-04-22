@@ -3,8 +3,10 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +97,12 @@ type Config struct {
 	CheckpointDedupThreshold float64       // Jaccard similarity at/above which a record is considered a duplicate (default: 0.9)
 	CheckpointDedupWindow    time.Duration // How far back to scan for a recent duplicate (default: 10m)
 	CheckpointDedupMinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
+
+	// Task archive sweep (T47) — pull-mode archive consolidation. Each root is
+	// scanned for subdirectories (task slugs); working memories whose Context
+	// matches a slug are marked outdated (high-importance ones go to review queue).
+	TaskArchiveRoots   []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
+	TaskSlugPattern    *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -160,6 +168,8 @@ type envValues struct {
 	checkpointDedupThreshold         float64
 	checkpointDedupWindow            string
 	checkpointDedupMinChars          int
+	taskArchiveRoots                 string
+	taskSlugPattern                  string
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -225,6 +235,8 @@ func readEnvValues() (envValues, error) {
 		checkpointDedupThreshold:         EnvFloat("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
 		checkpointDedupWindow:            EnvOrDefault("MCP_CHECKPOINT_DEDUP_WINDOW", "10m"),
 		checkpointDedupMinChars:          EnvInt("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
+		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
+		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
 	}, nil
 }
 
@@ -349,11 +361,46 @@ func resolvePaths(ev envValues) (Config, error) {
 		CheckpointDedupThreshold: ev.checkpointDedupThreshold,
 		CheckpointDedupWindow:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
 		CheckpointDedupMinChars:  ev.checkpointDedupMinChars,
+
+		TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+	}
+	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
+		re, err := regexp.Compile(slugPattern)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid MCP_TASK_SLUG_PATTERN %q: %w", slugPattern, err)
+		}
+		cfg.TaskSlugPattern = re
 	}
 	if err := validateResolvedConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// parseArchiveRoots splits a colon-separated (PATH-style) list of archive roots
+// and resolves each to an absolute path, relative to `root` if needed.
+// Empty entries are skipped. Returns nil for empty input (sweep disabled).
+func parseArchiveRoots(raw string, root string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ":")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+		out = append(out, filepath.Clean(p))
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // LoadFromEnv reads configuration only from environment variables (no flag parsing).
