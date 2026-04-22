@@ -163,5 +163,23 @@
     "question": "observability stack components",
     "source_type": "adr",
     "expected_doc_ids": ["adrs/adr-005-observability-stack.md"]
+  },
+  {
+    "id": "dead-end-1",
+    "type": "conditional",
+    "question": "what approach did we try for async migration and why did it fail?",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-async-migration.md"]
+  },
+  {
+    "id": "dead-end-2",
+    "type": "simple",
+    "question": "lesson learned from sharding without capacity planning",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
+  },
+  {
+    "id": "dead-end-3",
+    "type": "simple",
+    "question": "why should we avoid naive hash sharding of the ledger",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
   }
 ]
