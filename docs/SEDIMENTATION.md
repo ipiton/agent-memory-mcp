@@ -57,6 +57,9 @@ the `json_extract` behaviour across modernc/sqlite versions we support has
 edge cases around empty/null metadata. At 100–1000 rows/ms this is well
 within startup budget.
 
+**Known bound**: the migration loads all rows into memory during backfill.
+Validated up to ~100k rows; larger DBs should chunk via a future enhancement.
+
 Running `NewStore` twice on the same DB is a no-op: the column-exists check
 skips the backfill, and the new rows already carry the correct layer from
 `Validate()`.
@@ -153,8 +156,14 @@ is stored atomically on the `Store` and set once at startup from
 agent-memory-mcp sediment-cycle [--dry-run] [--since-days N] [--limit N] [--verbose] [--json]
 ```
 
-- `--dry-run`: show proposed transitions without writing.
-- `--since-days N`: only consider memories created in the last N days (0 = all).
+- `--dry-run`: show proposed transitions without writing. Under `--dry-run`,
+  `AutoApplied` counts transitions that *would* be applied, not mutations
+  actually performed. `ReviewQueued` likewise counts review items that
+  *would* be written.
+- `--since-days N`: only consider memories **older** than N days (`CreatedAt <= now - N*24h`).
+  0 = all. Useful for limiting cycle scope to stable memories; the age-based
+  transition rules (surface≥7d, episodic≥30d, character-decay≥90d) only
+  fire on older memories, so this flag never drops legitimate candidates.
 - `--limit N`: cap transitions per run (0 = no cap).
 - `--verbose`: print each transition.
 - `--json`: emit the raw `SedimentCycleResult`.

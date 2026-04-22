@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -565,5 +567,174 @@ func TestRecallSedimentBoost_DisabledFlagPreservesOldBehaviour(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("with flag OFF, surface memory must be reachable (old behaviour)")
+	}
+}
+
+// TestRunSedimentCycle_SinceDays_FiltersYoungMemories verifies that
+// SinceDays filters for memories OLDER than N days — i.e. memories
+// created within the last N days are excluded from the cycle (they are
+// "too fresh" for age-based transitions).
+func TestRunSedimentCycle_SinceDays_FiltersYoungMemories(t *testing.T) {
+	store, cleanup := newSedimentTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// young: 3 days old — should NOT be considered with SinceDays=5.
+	young := &Memory{Content: "young", Type: TypeWorking, AccessCount: 1}
+	if err := store.Store(ctx, young); err != nil {
+		t.Fatalf("Store young: %v", err)
+	}
+	youngCreated := time.Now().Add(-3 * 24 * time.Hour)
+	if _, err := store.db.Exec(
+		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
+		youngCreated, 1, young.ID,
+	); err != nil {
+		t.Fatalf("backdate young: %v", err)
+	}
+
+	// old: 8 days old — should be processed and auto-promoted to episodic.
+	old := &Memory{Content: "old", Type: TypeWorking, AccessCount: 1}
+	if err := store.Store(ctx, old); err != nil {
+		t.Fatalf("Store old: %v", err)
+	}
+	oldCreated := time.Now().Add(-8 * 24 * time.Hour)
+	if _, err := store.db.Exec(
+		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
+		oldCreated, 1, old.ID,
+	); err != nil {
+		t.Fatalf("backdate old: %v", err)
+	}
+	if err := store.loadMemoriesToCache(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	result, err := store.RunSedimentCycle(ctx, SedimentCycleConfig{SinceDays: 5})
+	if err != nil {
+		t.Fatalf("RunSedimentCycle: %v", err)
+	}
+	if result.AutoApplied != 1 {
+		t.Errorf("AutoApplied=%d, want 1 (only the 8-day-old memory); transitions=%+v",
+			result.AutoApplied, result.Transitions)
+	}
+
+	gotYoung, err := store.Get(young.ID)
+	if err != nil {
+		t.Fatalf("Get young: %v", err)
+	}
+	if gotYoung.SedimentLayer != string(LayerSurface) {
+		t.Errorf("young memory moved to %q; expected surface (must be filtered out by SinceDays)",
+			gotYoung.SedimentLayer)
+	}
+
+	gotOld, err := store.Get(old.ID)
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	if gotOld.SedimentLayer != string(LayerEpisodic) {
+		t.Errorf("old memory layer=%q; expected episodic", gotOld.SedimentLayer)
+	}
+}
+
+// TestRunSedimentCycle_SinceDaysZero_ProcessesAll verifies SinceDays=0
+// (default) disables the filter and processes all memories regardless
+// of age.
+func TestRunSedimentCycle_SinceDaysZero_ProcessesAll(t *testing.T) {
+	store, cleanup := newSedimentTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Both memories are valid candidates for surface→episodic (>=7d old,
+	// access_count>=1), so SinceDays=0 should auto-promote both.
+	m1 := &Memory{Content: "a", Type: TypeWorking, AccessCount: 1}
+	if err := store.Store(ctx, m1); err != nil {
+		t.Fatalf("Store m1: %v", err)
+	}
+	m2 := &Memory{Content: "b", Type: TypeWorking, AccessCount: 1}
+	if err := store.Store(ctx, m2); err != nil {
+		t.Fatalf("Store m2: %v", err)
+	}
+	oldTime := time.Now().Add(-10 * 24 * time.Hour)
+	if _, err := store.db.Exec(
+		`UPDATE memories SET created_at = ?, access_count = ? WHERE id IN (?, ?)`,
+		oldTime, 1, m1.ID, m2.ID,
+	); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if err := store.loadMemoriesToCache(); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	result, err := store.RunSedimentCycle(ctx, SedimentCycleConfig{SinceDays: 0})
+	if err != nil {
+		t.Fatalf("RunSedimentCycle: %v", err)
+	}
+	if result.AutoApplied != 2 {
+		t.Errorf("AutoApplied=%d, want 2 (SinceDays=0 must process all); transitions=%+v",
+			result.AutoApplied, result.Transitions)
+	}
+}
+
+// TestRunSedimentCycle_ReviewItem_HandlesCyrillicTitleSafely verifies that
+// the review-queue item's title is truncated on RUNE boundaries, not byte
+// boundaries — a naive byte slice at index 80 in a Cyrillic string would
+// produce invalid UTF-8.
+func TestRunSedimentCycle_ReviewItem_HandlesCyrillicTitleSafely(t *testing.T) {
+	store, cleanup := newSedimentTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// A Cyrillic title longer than 80 runes; each Cyrillic char is 2 bytes in
+	// UTF-8. A single ASCII-byte prefix shifts parity so that byte index 80
+	// lands mid-codepoint — a naive `s[:80]` slice produces INVALID UTF-8
+	// under the pre-fix code path.
+	longCyrillic := "x" + strings.Repeat("Обработка сессии ", 10) // >80 bytes, odd-shifted
+	m := &Memory{
+		Title:   longCyrillic,
+		Content: "knowledge",
+		Type:    TypeSemantic,
+		Context: "proj-ru",
+		Metadata: map[string]string{
+			MetadataKnowledgeLayer: "canonical",
+		},
+	}
+	if err := store.Store(ctx, m); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	// Force layer to semantic so Decide emits the non-auto
+	// semantic→character transition (which is what routes to review queue).
+	if _, err := store.PromoteSediment(ctx, m.ID, LayerSemantic); err != nil {
+		t.Fatalf("pre-promote: %v", err)
+	}
+
+	result, err := store.RunSedimentCycle(ctx, SedimentCycleConfig{})
+	if err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+	if result.ReviewQueued != 1 {
+		t.Fatalf("ReviewQueued=%d, want 1", result.ReviewQueued)
+	}
+
+	items, err := store.List(ctx, Filters{Context: "proj-ru", Type: TypeWorking}, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var reviewItem *Memory
+	for _, it := range items {
+		if IsReviewQueueMemory(it) && it.Metadata[MetadataReviewSource] == ReviewSourceSedimentCycle {
+			reviewItem = it
+			break
+		}
+	}
+	if reviewItem == nil {
+		t.Fatalf("no review-queue item found")
+	}
+	if !utf8.ValidString(reviewItem.Title) {
+		t.Errorf("review item title is not valid UTF-8: %q", reviewItem.Title)
+	}
+	if !utf8.ValidString(reviewItem.Content) {
+		t.Errorf("review item content is not valid UTF-8: %q", reviewItem.Content)
 	}
 }

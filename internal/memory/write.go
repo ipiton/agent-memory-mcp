@@ -429,7 +429,7 @@ type DemoteSedimentResult struct {
 func (ms *Store) PromoteSediment(ctx context.Context, id string, target SedimentLayer) (*PromoteSedimentResult, error) {
 	target = NormalizeSedimentLayer(string(target))
 	if target == "" {
-		return nil, &ErrValidation{Message: fmt.Sprintf("invalid target sediment layer")}
+		return nil, &ErrValidation{Message: "invalid target sediment layer"}
 	}
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()

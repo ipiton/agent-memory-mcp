@@ -19,8 +19,12 @@ type SedimentCycleConfig struct {
 	// review-queue items created.
 	DryRun bool
 
-	// SinceDays optionally restricts the cycle to memories created in the
-	// last N days. Zero/negative = scan all.
+	// SinceDays optionally restricts the cycle to memories OLDER than N
+	// days (CreatedAt <= now - N*24h). Zero/negative = scan all. Useful
+	// for limiting cycle scope to stable memories — the age-based transition
+	// rules (surface≥7d, episodic≥30d, character-decay≥90d) all require
+	// older memories, so filtering for newer memories would silently yield
+	// zero transitions.
 	SinceDays int
 
 	// Limit caps the number of transitions considered. 0 = no cap.
@@ -55,14 +59,20 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 	policy := cfg.Policy.DefaultsApplied()
 	now := policy.Now()
 
-	filters := Filters{}
-	if cfg.SinceDays > 0 {
-		filters.Since = now.Add(-time.Duration(cfg.SinceDays) * 24 * time.Hour)
-	}
-
-	memories, err := ms.List(ctx, filters, 0)
+	// SinceDays filters for memories OLDER than N days. We post-filter
+	// after List() rather than pushing into Filters{Since: ...} because
+	// Filters.Since selects memories NEWER than the threshold — the
+	// opposite semantic. Age-based transition rules only fire on older
+	// memories, so pre-filtering via Filters.Since would silently drop
+	// the exact candidates we need to consider.
+	memories, err := ms.List(ctx, Filters{}, 0)
 	if err != nil {
 		return nil, fmt.Errorf("sediment-cycle: list memories: %w", err)
+	}
+
+	var sinceCutoff time.Time
+	if cfg.SinceDays > 0 {
+		sinceCutoff = now.Add(-time.Duration(cfg.SinceDays) * 24 * time.Hour)
 	}
 
 	result := &SedimentCycleResult{DryRun: cfg.DryRun}
@@ -70,6 +80,10 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 	processed := 0
 	for _, m := range memories {
 		if m == nil {
+			continue
+		}
+		if !sinceCutoff.IsZero() && m.CreatedAt.After(sinceCutoff) {
+			// Memory is younger than cutoff — skip.
 			continue
 		}
 		if cfg.Limit > 0 && processed >= cfg.Limit {
@@ -152,13 +166,13 @@ func (ms *Store) createSedimentReviewItem(ctx context.Context, target *Memory, t
 		target.ID, tr.From, tr.To, tr.Reason,
 	)
 
+	// Use rune-safe truncation; byte slicing breaks multi-byte codepoints
+	// (e.g. Cyrillic chars are 2 bytes each) and produces invalid UTF-8.
 	displayTitleStr := strings.TrimSpace(target.Title)
 	if displayTitleStr == "" {
 		displayTitleStr = target.ID
 	}
-	if len(displayTitleStr) > 80 {
-		displayTitleStr = displayTitleStr[:80] + "..."
-	}
+	displayTitleStr = TruncateRunes(displayTitleStr, 80)
 
 	reviewMem := &Memory{
 		Title:      fmt.Sprintf("Review: %s→%s for %s", tr.From, tr.To, displayTitleStr),

@@ -1026,8 +1026,8 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"dry_run":    map[string]any{"type": "boolean", "default": false, "description": "Preview transitions without applying them"},
-					"since_days": map[string]any{"type": "integer", "minimum": 0, "description": "Only consider memories created in the last N days (0 = all)"},
+					"dry_run":    map[string]any{"type": "boolean", "default": false, "description": "Preview only; AutoApplied and ReviewQueued in result count proposed transitions, not mutations"},
+					"since_days": map[string]any{"type": "integer", "minimum": 0, "description": "Only consider memories OLDER than N days (0 = all). Useful for limiting cycle scope to stable memories."},
 					"limit":      map[string]any{"type": "integer", "minimum": 0, "description": "Cap on transitions per run (0 = no limit)"},
 					"format":     map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
 				},

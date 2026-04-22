@@ -20,8 +20,8 @@ import (
 // gates retrieval-side layer weighting.
 func runSedimentCycle(args []string) {
 	fs := flag.NewFlagSet("sediment-cycle", flag.ExitOnError)
-	dryRun := fs.Bool("dry-run", false, "Show proposed transitions without applying them")
-	sinceDays := fs.Int("since-days", 0, "Only consider memories created in the last N days (0 = all)")
+	dryRun := fs.Bool("dry-run", false, "Don't mutate; AutoApplied in result counts proposed transitions that WOULD be applied")
+	sinceDays := fs.Int("since-days", 0, "Only consider memories OLDER than N days (0 = all). Useful for limiting cycle scope to stable memories.")
 	limit := fs.Int("limit", 0, "Cap on transitions per run (0 = no limit)")
 	verbose := fs.Bool("verbose", false, "Print each transition")
 	jsonOut := fs.Bool("json", false, "Output JSON")
