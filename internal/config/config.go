@@ -83,12 +83,12 @@ type Config struct {
 	SessionMinEvents          int           // Minimum observed tool events before auto-close
 
 	// Stewardship configuration
-	StewardEnabled             bool    // Enable knowledge stewardship service
-	StewardMode                string  // Policy mode: off, manual, scheduled, event_driven
-	StewardScheduleInterval    string  // Schedule interval (e.g. "24h")
-	StewardDuplicateThreshold  float64 // Similarity threshold for duplicate detection (default: 0.85)
-	StewardStaleDays           int     // Days before a memory is considered stale (default: 30)
-	StewardCanonicalMinConf    float64 // Minimum confidence for canonical promotion (default: 0.80)
+	StewardEnabled            bool    // Enable knowledge stewardship service
+	StewardMode               string  // Policy mode: off, manual, scheduled, event_driven
+	StewardScheduleInterval   string  // Schedule interval (e.g. "24h")
+	StewardDuplicateThreshold float64 // Similarity threshold for duplicate detection (default: 0.85)
+	StewardStaleDays          int     // Days before a memory is considered stale (default: 30)
+	StewardCanonicalMinConf   float64 // Minimum confidence for canonical promotion (default: 0.80)
 
 	// Hooks CLI dedup (T45) — prevents flood of near-duplicate session-checkpoint
 	// records coming from the `auto-capture` and `checkpoint` hook CLI paths.
@@ -101,8 +101,8 @@ type Config struct {
 	// Task archive sweep (T47) — pull-mode archive consolidation. Each root is
 	// scanned for subdirectories (task slugs); working memories whose Context
 	// matches a slug are marked outdated (high-importance ones go to review queue).
-	TaskArchiveRoots   []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
-	TaskSlugPattern    *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
+	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
+	TaskSlugPattern  *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -379,7 +379,8 @@ func resolvePaths(ev envValues) (Config, error) {
 
 // parseArchiveRoots splits a colon-separated (PATH-style) list of archive roots
 // and resolves each to an absolute path, relative to `root` if needed.
-// Empty entries are skipped. Returns nil for empty input (sweep disabled).
+// Empty entries are skipped; duplicates (after resolution) are dropped while
+// preserving the first occurrence. Returns nil for empty input (sweep disabled).
 func parseArchiveRoots(raw string, root string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -387,6 +388,7 @@ func parseArchiveRoots(raw string, root string) []string {
 	}
 	parts := strings.Split(raw, ":")
 	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -395,7 +397,12 @@ func parseArchiveRoots(raw string, root string) []string {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(root, p)
 		}
-		out = append(out, filepath.Clean(p))
+		p = filepath.Clean(p)
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
 	if len(out) == 0 {
 		return nil

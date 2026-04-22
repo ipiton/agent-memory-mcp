@@ -2,9 +2,12 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -293,7 +296,10 @@ func TestEndTask_ValidatesSlugUnderRoot(t *testing.T) {
 	}
 
 	// And the memory must remain untouched.
-	memories, _ := store.List(context.Background(), memory.Filters{Context: "unknown-slug", Type: memory.TypeWorking}, 0)
+	memories, err := store.List(context.Background(), memory.Filters{Context: "unknown-slug", Type: memory.TypeWorking}, 0)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
 	for _, m := range memories {
 		if memory.LifecycleStatusOf(m) == memory.LifecycleOutdated {
 			t.Fatalf("memory under unvalidated slug was touched (id=%s)", m.ID)
@@ -321,7 +327,10 @@ func TestEndTask_ValidSlug_Sweeps(t *testing.T) {
 	}
 }
 
-func TestSweep_NonWorkingTypeIgnored(t *testing.T) {
+// TestSweep_SemanticAndEpisodicIgnored verifies the sweep ignores durable
+// memory types (semantic / episodic) even when they share the archived slug's
+// Context. Procedural memories ARE swept (see TestSweep_ProceduralIsCandidate).
+func TestSweep_SemanticAndEpisodicIgnored(t *testing.T) {
 	store := newTestStore(t)
 	root := seedTempArchive(t, "task-mixed")
 
@@ -368,7 +377,7 @@ func TestSweep_NonWorkingTypeIgnored(t *testing.T) {
 			t.Fatalf("Get: %v", err)
 		}
 		if memory.LifecycleStatusOf(m) == memory.LifecycleOutdated {
-			t.Fatalf("non-working memory %s was swept", id)
+			t.Fatalf("non-swept type memory %s was swept", id)
 		}
 	}
 
@@ -376,6 +385,143 @@ func TestSweep_NonWorkingTypeIgnored(t *testing.T) {
 	fresh, _ := store.Get(working.ID)
 	if memory.LifecycleStatusOf(fresh) != memory.LifecycleOutdated {
 		t.Fatalf("working memory not outdated: %s", memory.LifecycleStatusOf(fresh))
+	}
+}
+
+// TestSweep_ProceduralIsCandidate seeds a procedural memory tied to the
+// archive slug with importance BELOW the promotion threshold. The procedural
+// branch in decide() must still classify it as promotion_candidate (patterns
+// are reusable) and emit a review_queue item.
+//
+// This test regressed once: before Fix 1 the sweepSlug List only queried
+// TypeWorking, so the procedural memory never entered decide() and the
+// Procedural branch was dead code.
+func TestSweep_ProceduralIsCandidate(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-proc")
+
+	proc := &memory.Memory{
+		Title:      "procedural pattern",
+		Content:    "how to do X",
+		Type:       memory.TypeProcedural,
+		Context:    "task-proc",
+		Importance: 0.4, // below the 0.7 threshold on purpose
+	}
+	if err := store.Store(context.Background(), proc); err != nil {
+		t.Fatalf("Store procedural: %v", err)
+	}
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{Roots: []string{root}})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+	if result.TotalPromotionCand != 1 {
+		t.Fatalf("expected 1 promotion candidate (procedural), got %d (actions=%+v)", result.TotalPromotionCand, result.Actions)
+	}
+	if result.TotalOutdated != 0 {
+		t.Fatalf("procedural must not be outdated, got TotalOutdated=%d", result.TotalOutdated)
+	}
+
+	// Action breadcrumb: the action for the procedural memory must be
+	// promotion_candidate, not skipped_non_working.
+	found := false
+	for _, a := range result.Actions {
+		if a.MemoryID == proc.ID {
+			if a.Action != "promotion_candidate" {
+				t.Fatalf("procedural memory classified as %q, want promotion_candidate", a.Action)
+			}
+			// Log for verification: proves decide() procedural branch was
+			// reached (reason embeds the type=procedural fragment).
+			t.Logf("procedural-branch reached: action=%s reason=%s", a.Action, a.Reason)
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no ArchiveAction recorded for procedural memory %s", proc.ID)
+	}
+
+	// A review_queue item must exist for this procedural memory.
+	if n := countReviewQueueItemsForTarget(t, store, proc.ID); n != 1 {
+		t.Fatalf("expected exactly 1 review-queue item for procedural memory %s, got %d", proc.ID, n)
+	}
+}
+
+// failingStore wraps a real memory.Store but forces MarkOutdated to fail for
+// a specific memory ID. Used by TestSweep_PartialFailure_ReportedInResult.
+type failingStore struct {
+	inner   storeAPI
+	failIDs map[string]error
+}
+
+func (f *failingStore) List(ctx context.Context, filters memory.Filters, limit int) ([]*memory.Memory, error) {
+	return f.inner.List(ctx, filters, limit)
+}
+
+func (f *failingStore) Store(ctx context.Context, m *memory.Memory) error {
+	return f.inner.Store(ctx, m)
+}
+
+func (f *failingStore) MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error) {
+	if err, ok := f.failIDs[id]; ok {
+		return nil, err
+	}
+	return f.inner.MarkOutdated(ctx, id, reason, supersededBy)
+}
+
+// TestSweep_PartialFailure_ReportedInResult injects a failing MarkOutdated for
+// one of three memories; the sweep must report the error in result.Errors and
+// leave counters reflecting only the two successful writes.
+func TestSweep_PartialFailure_ReportedInResult(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-partial")
+
+	_ = seedWorkingMemory(t, store, "task-partial", "a", 0.3, nil, nil)
+	b := seedWorkingMemory(t, store, "task-partial", "b", 0.3, nil, nil)
+	_ = seedWorkingMemory(t, store, "task-partial", "c", 0.3, nil, nil)
+
+	fail := &failingStore{
+		inner:   store,
+		failIDs: map[string]error{b.ID: errors.New("injected mark_outdated failure")},
+	}
+
+	sw := newSweeperFromAPI(fail)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{Roots: []string{root}})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+
+	// Two writes succeeded (a, c), one failed (b).
+	if result.TotalOutdated != 2 {
+		t.Fatalf("expected TotalOutdated=2 (a,c succeeded), got %d", result.TotalOutdated)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 error entry, got %d: %v", len(result.Errors), result.Errors)
+	}
+	if !strings.Contains(result.Errors[0], b.ID) {
+		t.Fatalf("error entry missing failed memory ID %s: %q", b.ID, result.Errors[0])
+	}
+	if !strings.Contains(result.Errors[0], "injected mark_outdated failure") {
+		t.Fatalf("error entry missing root cause: %q", result.Errors[0])
+	}
+}
+
+// TestEndTask_RejectsPathTraversal makes sure obviously-unsafe slugs (empty,
+// ".", "..", or containing path separators) are rejected before any store
+// interaction.
+func TestEndTask_RejectsPathTraversal(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "real-slug")
+
+	sw := NewSweeper(store)
+	cases := []string{"", " ", ".", "..", "../../etc", "foo/bar", "foo\\bar", "../real-slug"}
+	for _, slug := range cases {
+		t.Run(fmt.Sprintf("slug=%q", slug), func(t *testing.T) {
+			_, err := sw.EndTask(context.Background(), slug, ArchiveSweepConfig{Roots: []string{root}})
+			if err == nil {
+				t.Fatalf("EndTask accepted unsafe slug %q; expected error", slug)
+			}
+		})
 	}
 }
 

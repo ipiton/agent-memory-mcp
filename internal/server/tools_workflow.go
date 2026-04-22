@@ -703,12 +703,12 @@ type taggedItem interface {
 type taggedSearchResult struct{ r *memory.SearchResult }
 
 func (t taggedSearchResult) itemTags() []string  { return t.r.Memory.Tags }
-func (t taggedSearchResult) itemService() string  { return "" }
+func (t taggedSearchResult) itemService() string { return "" }
 
 type taggedCanonical struct{ e *memory.CanonicalKnowledge }
 
 func (t taggedCanonical) itemTags() []string  { return t.e.Tags }
-func (t taggedCanonical) itemService() string  { return t.e.Service }
+func (t taggedCanonical) itemService() string { return t.e.Service }
 
 func filterByTags[T any](items []T, wrap func(T) (taggedItem, bool), service string, tags []string, limit int) []T {
 	requiredTags := append([]string(nil), tags...)
@@ -823,7 +823,7 @@ func (srv *MCPServer) callEndTask(args map[string]any) (any, *rpcError) {
 		return nil, fmtErr
 	}
 	if format == "text" {
-		return toolResultText(formatSweepResult(result)), nil
+		return toolResultText(lifecycle.FormatSweepResult(result)), nil
 	}
 	return toolResultJSON(result), nil
 }
@@ -851,7 +851,7 @@ func (srv *MCPServer) callSweepArchive(args map[string]any) (any, *rpcError) {
 		return nil, fmtErr
 	}
 	if format == "text" {
-		return toolResultText(formatSweepResult(result)), nil
+		return toolResultText(lifecycle.FormatSweepResult(result)), nil
 	}
 	return toolResultJSON(result), nil
 }
@@ -884,28 +884,3 @@ func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool)
 	}
 	return sweepCfg, nil
 }
-
-func formatSweepResult(r *lifecycle.SweepResult) string {
-	mode := "live"
-	if r.DryRun {
-		mode = "dry-run"
-	}
-	var b strings.Builder
-	if r.Slug != "" {
-		fmt.Fprintf(&b, "end_task sweep (%s) for slug %q:\n", mode, r.Slug)
-	} else {
-		fmt.Fprintf(&b, "Archive sweep (%s):\n", mode)
-	}
-	fmt.Fprintf(&b, "- Outdated: %d\n", r.TotalOutdated)
-	fmt.Fprintf(&b, "- Promotion candidates: %d\n", r.TotalPromotionCand)
-	fmt.Fprintf(&b, "- Skipped: %d\n", r.TotalSkipped)
-	if len(r.PerSlug) > 0 {
-		b.WriteString("\nPer-slug:\n")
-		for slug, stats := range r.PerSlug {
-			fmt.Fprintf(&b, "- %s: outdated=%d, promotion=%d, skipped=%d\n",
-				slug, stats.OutdatedCount, stats.PromotionCandidates, stats.Skipped)
-		}
-	}
-	return b.String()
-}
-

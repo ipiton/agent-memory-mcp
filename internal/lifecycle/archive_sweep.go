@@ -12,6 +12,15 @@
 // Push-mode EndTask(slug) is the explicit one-off path used by the `end-task`
 // CLI/MCP tool — it validates the slug is under at least one configured
 // archive root before doing anything.
+//
+// Concurrency: SweepArchive/EndTask are NOT safe for concurrent invocation on
+// the same slug — the dedup check (reviewItemExists) races with the subsequent
+// Store call and may produce duplicate review_queue items. Callers must
+// serialize sweeps per slug.
+//
+// Symlinks: archive roots are traversed via os.ReadDir, which follows
+// symlinks. Ensure archive roots are under administrator control; an untrusted
+// symlink inside a root could cause the sweep to consider an unintended slug.
 package lifecycle
 
 import (
@@ -39,6 +48,22 @@ const DefaultPromotionThreshold = 0.7
 // ErrNoRoots is returned by SweepArchive when ArchiveSweepConfig.Roots is empty.
 // Defense-in-depth: we never want a misconfigured call to sweep "everything".
 var ErrNoRoots = errors.New("archive sweep: no roots configured (MCP_TASK_ARCHIVE_ROOTS empty)")
+
+// sweptTypes is the set of memory types the sweep considers. Procedural
+// memories are included so the promotion-candidate branch in decide() can fire.
+// Semantic/Episodic are deliberately excluded — they are durable knowledge,
+// not task-scoped working state.
+var sweptTypes = []memory.Type{memory.TypeWorking, memory.TypeProcedural}
+
+// storeAPI is the narrow slice of *memory.Store that Sweeper depends on.
+// Extracted to let tests inject failing/mocked stores for error-path coverage
+// without spinning up the full SQLite store. *memory.Store satisfies this
+// interface natively.
+type storeAPI interface {
+	List(ctx context.Context, filters memory.Filters, limit int) ([]*memory.Memory, error)
+	Store(ctx context.Context, m *memory.Memory) error
+	MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error)
+}
 
 // ArchiveSweepConfig configures a single sweep invocation.
 type ArchiveSweepConfig struct {
@@ -69,8 +94,10 @@ type ArchiveSweepConfig struct {
 type ArchiveAction struct {
 	MemoryID string `json:"memory_id"`
 	Slug     string `json:"slug"`
-	Action   string `json:"action"` // "outdated" | "promotion_candidate" | "skipped_keep_tag" | "already_outdated" | "skipped_non_working"
-	Reason   string `json:"reason,omitempty"`
+	// Action is one of: "outdated" | "promotion_candidate" | "skipped_keep_tag"
+	// | "already_outdated" | "skipped_non_working" | "skipped_review_queue_item".
+	Action string `json:"action"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // SlugStats aggregates per-slug counters.
@@ -88,15 +115,24 @@ type SweepResult struct {
 	TotalPromotionCand int                   `json:"total_promotion_candidates"`
 	TotalSkipped       int                   `json:"total_skipped"`
 	Actions            []ArchiveAction       `json:"actions,omitempty"`
-	DryRun             bool                  `json:"dry_run"`
+	// Errors records per-memory partial failures as "<memory-id>: <error>"
+	// entries. A non-empty Errors slice means counters reflect only successful
+	// writes — callers should surface this to operators (CLI exits non-zero,
+	// MCP response includes the list).
+	Errors []string `json:"errors,omitempty"`
+	DryRun bool     `json:"dry_run"`
 }
 
-// Sweeper orchestrates archive-sweep runs against a memory.Store.
+// Receiver name 'sw' avoids a local secret-scanner false positive on 's.*'.
+// Safe to rename later once the scanner is tightened.
 //
-// Safe for concurrent use by multiple goroutines (all state is in the Store;
-// Sweeper itself is stateless after construction).
+// Sweeper orchestrates archive-sweep runs against a memory store.
+//
+// After construction Sweeper holds only read-only references — the store
+// itself owns concurrency guarantees. See package godoc for the per-slug
+// serialization requirement.
 type Sweeper struct {
-	store     *memory.Store
+	store     storeAPI
 	logger    *zap.Logger
 	now       func() time.Time
 	statFS    func(path string) (os.FileInfo, error) // injectable for tests
@@ -137,6 +173,13 @@ func WithFS(stat func(string) (os.FileInfo, error), readDir func(string) ([]os.D
 
 // NewSweeper constructs a Sweeper against the given memory.Store.
 func NewSweeper(store *memory.Store, opts ...Option) *Sweeper {
+	return newSweeperFromAPI(store, opts...)
+}
+
+// newSweeperFromAPI is the internal constructor that accepts the narrow
+// storeAPI interface. Tests use it to inject failing/fake stores; production
+// callers use NewSweeper which passes *memory.Store.
+func newSweeperFromAPI(store storeAPI, opts ...Option) *Sweeper {
 	sw := &Sweeper{
 		store:     store,
 		logger:    zap.NewNop(),
@@ -218,6 +261,9 @@ func (sw *Sweeper) EndTask(ctx context.Context, slug string, cfg ArchiveSweepCon
 	if slug == "" {
 		return nil, errors.New("end-task: slug is required")
 	}
+	if slug == "." || slug == ".." || strings.ContainsAny(slug, "/\\") {
+		return nil, fmt.Errorf("end-task: invalid slug %q", slug)
+	}
 	if len(cfg.Roots) == 0 {
 		return nil, ErrNoRoots
 	}
@@ -241,10 +287,23 @@ func (sw *Sweeper) EndTask(ctx context.Context, slug string, cfg ArchiveSweepCon
 }
 
 // verifySlugInRoots returns nil if slug resolves to a directory under any root,
-// otherwise an error.
+// otherwise an error. Defends against path-traversal by rejecting empty /
+// "." / ".." / slash-bearing slugs up front and confirming filepath.Rel
+// between root and join(root, slug) doesn't escape.
 func (sw *Sweeper) verifySlugInRoots(slug string, roots []string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" || slug == "." || slug == ".." || strings.ContainsAny(slug, "/\\") {
+		return fmt.Errorf("end-task: invalid slug %q", slug)
+	}
 	for _, root := range roots {
 		candidate := filepath.Join(root, slug)
+		rel, err := filepath.Rel(root, candidate)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(rel, "..") || rel == "." {
+			continue
+		}
 		info, err := sw.statFS(candidate)
 		if err != nil {
 			continue
@@ -256,12 +315,20 @@ func (sw *Sweeper) verifySlugInRoots(slug string, roots []string) error {
 	return fmt.Errorf("end-task: slug %q not found as a subdirectory under any configured archive root", slug)
 }
 
-// sweepSlug processes the working-memory cohort tied to a single slug.
+// sweepSlug processes the memory cohort tied to a single slug.
+//
+// Lists memories of every type in sweptTypes (Working + Procedural) with the
+// slug as Context; each entry is passed to decide() which emits one
+// ArchiveAction. The procedural path in decide() would be dead code if the
+// List filter were restricted to TypeWorking — see the sweptTypes comment.
 func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepConfig, result *SweepResult) error {
-	filters := memory.Filters{Context: slug, Type: memory.TypeWorking}
-	memories, err := sw.store.List(ctx, filters, 0)
-	if err != nil {
-		return fmt.Errorf("list memories for slug %q: %w", slug, err)
+	var memories []*memory.Memory
+	for _, t := range sweptTypes {
+		m, err := sw.store.List(ctx, memory.Filters{Context: slug, Type: t}, 0)
+		if err != nil {
+			return fmt.Errorf("list %s memories for slug %q: %w", t, slug, err)
+		}
+		memories = append(memories, m...)
 	}
 	stats := &SlugStats{}
 	result.PerSlug[slug] = stats
@@ -275,23 +342,33 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 
 		switch action.Action {
 		case "outdated":
+			if cfg.DryRun {
+				stats.OutdatedCount++
+				result.TotalOutdated++
+				break
+			}
+			if _, err := sw.store.MarkOutdated(ctx, m.ID, action.Reason, ""); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: mark outdated: %v", m.ID, err))
+				sw.logger.Warn("archive-sweep: mark outdated failed",
+					zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
+				break
+			}
 			stats.OutdatedCount++
 			result.TotalOutdated++
-			if !cfg.DryRun {
-				if _, err := sw.store.MarkOutdated(ctx, m.ID, action.Reason, ""); err != nil {
-					sw.logger.Warn("archive-sweep: mark outdated failed",
-						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
-				}
-			}
 		case "promotion_candidate":
+			if cfg.DryRun {
+				stats.PromotionCandidates++
+				result.TotalPromotionCand++
+				break
+			}
+			if err := sw.createPromotionCandidate(ctx, m, slug); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, err))
+				sw.logger.Warn("archive-sweep: create review-queue item failed",
+					zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
+				break
+			}
 			stats.PromotionCandidates++
 			result.TotalPromotionCand++
-			if !cfg.DryRun {
-				if err := sw.createPromotionCandidate(ctx, m, slug); err != nil {
-					sw.logger.Warn("archive-sweep: create review-queue item failed",
-						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
-				}
-			}
 		default:
 			stats.Skipped++
 			result.TotalSkipped++
@@ -312,11 +389,12 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 func (sw *Sweeper) decide(m *memory.Memory, slug string, cfg ArchiveSweepConfig) ArchiveAction {
 	base := ArchiveAction{MemoryID: m.ID, Slug: slug}
 
-	if m.Type != memory.TypeWorking {
-		// Belt-and-suspenders: the List filter should exclude these, but if
-		// something slips through we skip rather than mutate unrelated types.
+	if !isSweptType(m.Type) {
+		// Belt-and-suspenders: the List filter should exclude these, but if a
+		// future change adds a new type to sweptTypes without updating the
+		// decide() switch, we skip rather than mutate unrelated types.
 		base.Action = "skipped_non_working"
-		base.Reason = fmt.Sprintf("type=%s (only working memories are swept)", m.Type)
+		base.Reason = fmt.Sprintf("type=%s (only working/procedural memories are swept)", m.Type)
 		return base
 	}
 
@@ -343,10 +421,10 @@ func (sw *Sweeper) decide(m *memory.Memory, slug string, cfg ArchiveSweepConfig)
 
 	// Procedural type → always promotion candidate (patterns are reusable).
 	// Working memories use Type=working so this path usually fires on
-	// importance only, but defense-in-depth for future schema changes.
+	// importance only.
 	if m.Type == memory.TypeProcedural || m.Importance >= cfg.PromotionThreshold {
 		base.Action = "promotion_candidate"
-		base.Reason = fmt.Sprintf("importance=%.2f threshold=%.2f", m.Importance, cfg.PromotionThreshold)
+		base.Reason = fmt.Sprintf("importance=%.2f threshold=%.2f type=%s", m.Importance, cfg.PromotionThreshold, m.Type)
 		return base
 	}
 
@@ -355,11 +433,25 @@ func (sw *Sweeper) decide(m *memory.Memory, slug string, cfg ArchiveSweepConfig)
 	return base
 }
 
+// isSweptType reports whether t is in sweptTypes.
+func isSweptType(t memory.Type) bool {
+	for _, s := range sweptTypes {
+		if t == s {
+			return true
+		}
+	}
+	return false
+}
+
 // createPromotionCandidate persists a review_queue_item memory suggesting the
 // given memory be promoted. Idempotent: returns nil without writing if a
 // matching review item already exists.
 func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memory, slug string) error {
-	if sw.reviewItemExists(ctx, m.ID) {
+	exists, err := sw.reviewItemExists(ctx, slug, m.ID)
+	if err != nil {
+		return fmt.Errorf("dedup check: %w", err)
+	}
+	if exists {
 		return nil
 	}
 
@@ -371,10 +463,10 @@ func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memor
 	)
 
 	reviewMem := &memory.Memory{
-		Title:   truncate(fmt.Sprintf("Review: promote %s?", displayTitle(m)), 120),
-		Content: content,
-		Type:    memory.TypeWorking, // review-queue items are working-memory by convention (see session_tracker)
-		Context: slug,               // keep the origin slug so review-queue views can filter by it
+		Title:      truncate(fmt.Sprintf("Review: promote %s?", displayTitle(m)), 120),
+		Content:    content,
+		Type:       memory.TypeWorking, // review-queue items are working-memory by convention (see session_tracker)
+		Context:    slug,               // keep the origin slug so review-queue views can filter by it
 		Importance: 0.5,
 		Tags: []string{
 			"review-queue",
@@ -394,26 +486,25 @@ func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memor
 	return sw.store.Store(ctx, reviewMem)
 }
 
-// reviewItemExists returns true if a review_queue_item already targets the
-// given memory ID. Used for sweep idempotency.
-func (sw *Sweeper) reviewItemExists(ctx context.Context, targetID string) bool {
-	// Scan working-type memories; review items live in TypeWorking per
-	// session_tracker convention.
-	all, err := sw.store.List(ctx, memory.Filters{Type: memory.TypeWorking}, 0)
+// reviewItemExists returns true iff a review_queue_item from an earlier sweep
+// already targets the given memory ID within the same slug. Scoped to the
+// slug's Context (that's where createPromotionCandidate writes) to avoid a
+// full-store scan on every high-importance working memory.
+func (sw *Sweeper) reviewItemExists(ctx context.Context, slug, targetID string) (bool, error) {
+	items, err := sw.store.List(ctx, memory.Filters{Context: slug, Type: memory.TypeWorking}, 0)
 	if err != nil {
-		sw.logger.Warn("archive-sweep: failed to list memories for dedup check", zap.Error(err))
-		return false
+		return false, err
 	}
-	for _, m := range all {
+	for _, m := range items {
 		if m == nil || !memory.IsReviewQueueMemory(m) {
 			continue
 		}
 		if m.Metadata["review_target_memory_id"] == targetID &&
 			m.Metadata["review_source"] == "archive_sweep" {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func hasTag(tags []string, target string) bool {
@@ -449,9 +540,51 @@ func displayTitle(m *memory.Memory) string {
 	return m.ID
 }
 
+// truncate shortens s to at most max runes, appending "..." if truncated.
+// Guards: non-positive max returns empty; max<3 returns a hard cut (no room
+// for the ellipsis).
 func truncate(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	if len(s) <= max {
 		return s
 	}
+	if max < 3 {
+		return s[:max]
+	}
 	return s[:max-3] + "..."
+}
+
+// FormatSweepResult renders a SweepResult as a human-readable multi-line
+// string. Shared by the CLI and MCP paths so both surfaces report identical
+// wording.
+func FormatSweepResult(r *SweepResult) string {
+	mode := "live"
+	if r.DryRun {
+		mode = "dry-run"
+	}
+	var b strings.Builder
+	if r.Slug != "" {
+		fmt.Fprintf(&b, "end_task sweep (%s) for slug %q:\n", mode, r.Slug)
+	} else {
+		fmt.Fprintf(&b, "Archive sweep (%s):\n", mode)
+	}
+	fmt.Fprintf(&b, "- Outdated: %d\n", r.TotalOutdated)
+	fmt.Fprintf(&b, "- Promotion candidates: %d\n", r.TotalPromotionCand)
+	fmt.Fprintf(&b, "- Skipped: %d\n", r.TotalSkipped)
+	if len(r.PerSlug) > 0 {
+		b.WriteString("\nPer-slug:\n")
+		for slug, stats := range r.PerSlug {
+			fmt.Fprintf(&b, "- %s: outdated=%d, promotion=%d, skipped=%d\n",
+				slug, stats.OutdatedCount, stats.PromotionCandidates, stats.Skipped)
+		}
+	}
+	if len(r.Errors) > 0 {
+		b.WriteString("\nErrors:\n")
+		for _, e := range r.Errors {
+			fmt.Fprintf(&b, "- %s\n", e)
+		}
+	}
+	return b.String()
 }

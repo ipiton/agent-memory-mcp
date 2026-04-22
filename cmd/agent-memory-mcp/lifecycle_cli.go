@@ -59,9 +59,13 @@ func runSweepArchive(args []string) {
 
 	if *jsonOut {
 		mustPrintJSON(result)
-		return
+	} else {
+		fmt.Print(lifecycle.FormatSweepResult(result))
 	}
-	printSweepResult(result)
+	if len(result.Errors) > 0 {
+		fmt.Fprintf(os.Stderr, "sweep completed with %d partial failures; see 'errors' in result\n", len(result.Errors))
+		os.Exit(1)
+	}
 }
 
 // runEndTask handles the "end-task" subcommand — explicit single-slug sweep.
@@ -109,15 +113,21 @@ func runEndTask(args []string) {
 
 	if *jsonOut {
 		mustPrintJSON(result)
-		return
+	} else {
+		fmt.Print(lifecycle.FormatSweepResult(result))
 	}
-	printSweepResult(result)
+	if len(result.Errors) > 0 {
+		fmt.Fprintf(os.Stderr, "end-task completed with %d partial failures; see 'errors' in result\n", len(result.Errors))
+		os.Exit(1)
+	}
 }
 
-// buildSweepConfig merges CLI flags with the env-loaded config.
+// buildSweepConfig merges CLI flags with the env-loaded config. The roots
+// slice is defensively copied so downstream mutation cannot poison the
+// long-lived config.TaskArchiveRoots slice.
 func buildSweepConfig(cfg config.Config, rootsCSV, pattern string, threshold float64, keepTag string, dryRun bool) (lifecycle.ArchiveSweepConfig, error) {
 	sweepCfg := lifecycle.ArchiveSweepConfig{
-		Roots:              cfg.TaskArchiveRoots,
+		Roots:              append([]string(nil), cfg.TaskArchiveRoots...),
 		SlugPattern:        cfg.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: threshold,
@@ -149,26 +159,4 @@ func splitColonList(raw string) []string {
 		return nil
 	}
 	return out
-}
-
-func printSweepResult(r *lifecycle.SweepResult) {
-	mode := "live"
-	if r.DryRun {
-		mode = "dry-run"
-	}
-	if r.Slug != "" {
-		fmt.Printf("end-task sweep (%s) for slug %q:\n", mode, r.Slug)
-	} else {
-		fmt.Printf("archive sweep (%s):\n", mode)
-	}
-	fmt.Printf("  outdated:             %d\n", r.TotalOutdated)
-	fmt.Printf("  promotion candidates: %d\n", r.TotalPromotionCand)
-	fmt.Printf("  skipped:              %d\n", r.TotalSkipped)
-	if len(r.PerSlug) > 0 {
-		fmt.Println("\nPer-slug breakdown:")
-		for slug, stats := range r.PerSlug {
-			fmt.Printf("  %s — outdated=%d promotion=%d skipped=%d\n",
-				slug, stats.OutdatedCount, stats.PromotionCandidates, stats.Skipped)
-		}
-	}
 }
