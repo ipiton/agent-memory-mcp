@@ -10,11 +10,27 @@ import (
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 
 	_ "modernc.org/sqlite"
 )
+
+// dedupConfigFrom returns the DedupConfig derived from runtime config.
+// When MCP_CHECKPOINT_DEDUP_DISABLED=true the returned config has
+// Threshold=0 and MinContentChars=0 — hooks.Check then short-circuits
+// to a no-skip result (escape hatch).
+func dedupConfigFrom(cfg config.Config) hooks.DedupConfig {
+	if cfg.CheckpointDedupDisabled {
+		return hooks.DedupConfig{}
+	}
+	return hooks.DedupConfig{
+		Threshold:       cfg.CheckpointDedupThreshold,
+		MinContentChars: cfg.CheckpointDedupMinChars,
+		Window:          cfg.CheckpointDedupWindow,
+	}
+}
 
 // contextInjectRow holds the minimal fields needed for context-inject output.
 type contextInjectRow struct {
@@ -263,6 +279,19 @@ func runAutoCapture(args []string) {
 		},
 	}
 
+	if dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg)); err == nil && dedup.Skip {
+		store.IncrementDedupSkipped(dedup.Reason)
+		switch dedup.Reason {
+		case "similar":
+			fmt.Printf("Auto-capture skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
+		case "empty":
+			fmt.Println("Auto-capture skipped: content too short")
+		default:
+			fmt.Println("Auto-capture skipped")
+		}
+		return
+	}
+
 	result, err := svc.Analyze(context.Background(), sessionclose.AnalyzeRequest{
 		Summary:          sessionSummary,
 		DryRun:           *dryRun,
@@ -327,6 +356,19 @@ func runCheckpoint(args []string) {
 	extraTags := []string{"session-checkpoint"}
 	if boundaryValue != "checkpoint" {
 		extraTags = append(extraTags, boundaryValue)
+	}
+
+	if dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg)); err == nil && dedup.Skip {
+		store.IncrementDedupSkipped(dedup.Reason)
+		switch dedup.Reason {
+		case "similar":
+			fmt.Printf("Checkpoint skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
+		case "empty":
+			fmt.Println("Checkpoint skipped: content too short")
+		default:
+			fmt.Println("Checkpoint skipped")
+		}
+		return
 	}
 
 	rawID, err := svc.SaveRawSummaryWithOptions(context.Background(), sessionSummary, sessionclose.RawSaveOptions{

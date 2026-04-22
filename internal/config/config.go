@@ -87,6 +87,14 @@ type Config struct {
 	StewardDuplicateThreshold  float64 // Similarity threshold for duplicate detection (default: 0.85)
 	StewardStaleDays           int     // Days before a memory is considered stale (default: 30)
 	StewardCanonicalMinConf    float64 // Minimum confidence for canonical promotion (default: 0.80)
+
+	// Hooks CLI dedup (T45) — prevents flood of near-duplicate session-checkpoint
+	// records coming from the `auto-capture` and `checkpoint` hook CLI paths.
+	// MCP programmatic `store_memory` is unaffected.
+	CheckpointDedupDisabled  bool          // Escape hatch — true disables the filter
+	CheckpointDedupThreshold float64       // Jaccard similarity at/above which a record is considered a duplicate (default: 0.9)
+	CheckpointDedupWindow    time.Duration // How far back to scan for a recent duplicate (default: 10m)
+	CheckpointDedupMinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -148,6 +156,10 @@ type envValues struct {
 	stewardDuplicateThreshold        float64
 	stewardStaleDays                 int
 	stewardCanonicalMinConf          float64
+	checkpointDedupDisabled          bool
+	checkpointDedupThreshold         float64
+	checkpointDedupWindow            string
+	checkpointDedupMinChars          int
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -209,6 +221,10 @@ func readEnvValues() (envValues, error) {
 		stewardDuplicateThreshold:        EnvFloat("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
 		stewardStaleDays:                 EnvInt("MCP_STEWARD_STALE_DAYS", 30),
 		stewardCanonicalMinConf:          EnvFloat("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
+		checkpointDedupDisabled:          EnvBool("MCP_CHECKPOINT_DEDUP_DISABLED", false),
+		checkpointDedupThreshold:         EnvFloat("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
+		checkpointDedupWindow:            EnvOrDefault("MCP_CHECKPOINT_DEDUP_WINDOW", "10m"),
+		checkpointDedupMinChars:          EnvInt("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
 	}, nil
 }
 
@@ -328,6 +344,11 @@ func resolvePaths(ev envValues) (Config, error) {
 		StewardDuplicateThreshold: ev.stewardDuplicateThreshold,
 		StewardStaleDays:          ev.stewardStaleDays,
 		StewardCanonicalMinConf:   ev.stewardCanonicalMinConf,
+
+		CheckpointDedupDisabled:  ev.checkpointDedupDisabled,
+		CheckpointDedupThreshold: ev.checkpointDedupThreshold,
+		CheckpointDedupWindow:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
+		CheckpointDedupMinChars:  ev.checkpointDedupMinChars,
 	}
 	if err := validateResolvedConfig(cfg); err != nil {
 		return Config{}, err

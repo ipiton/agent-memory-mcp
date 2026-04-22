@@ -47,6 +47,59 @@ func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
 	return snapshot
 }
 
+// LastInContext returns the most recent session-checkpoint memory stored in the
+// given context whose CreatedAt is >= since. It scans the cached context index
+// under mu.RLock (via snapshotForContext), then fetches the full Memory via Get
+// so that callers receive Content/Metadata — needed for similarity scoring.
+//
+// Returns (nil, nil) if no matching memory exists.
+func (ms *Store) LastInContext(ctx context.Context, contextName string, since time.Time) (*Memory, error) {
+	snapshot := ms.snapshotForContext(contextName)
+	if len(snapshot) == 0 {
+		return nil, nil
+	}
+
+	var latest *cachedMemory
+	for _, m := range snapshot {
+		if m == nil {
+			continue
+		}
+		if !since.IsZero() && m.CreatedAt.Before(since) {
+			continue
+		}
+		// Session-checkpoint filter: cachedMemory intentionally does not
+		// retain the full metadata map, so we use the "session-checkpoint"
+		// tag — set unconditionally by the checkpoint CLI — as a cheap
+		// pre-filter, then confirm record_kind via the full Get below.
+		hasCheckpointTag := false
+		for _, tag := range m.Tags {
+			if tag == "session-checkpoint" {
+				hasCheckpointTag = true
+				break
+			}
+		}
+		if !hasCheckpointTag {
+			continue
+		}
+		if latest == nil || m.CreatedAt.After(latest.CreatedAt) {
+			latest = m
+		}
+	}
+	if latest == nil {
+		return nil, nil
+	}
+
+	full, err := ms.Get(latest.ID)
+	if err != nil {
+		return nil, err
+	}
+	// Confirm via record_kind metadata — the tag alone is a hint.
+	if full.Metadata[MetadataRecordKind] != RecordKindSessionCheckpoint {
+		return nil, nil
+	}
+	return full, nil
+}
+
 // Recall searches memories by semantic similarity, applying filters and importance weighting.
 func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limit int) ([]*SearchResult, error) {
 	snapshot := ms.snapshotForContext(filters.Context)

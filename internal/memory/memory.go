@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
@@ -128,6 +129,13 @@ type Store struct {
 	memories     map[string]*cachedMemory
 	contextIndex map[string]map[string]*cachedMemory // context → id → *cachedMemory
 	loadErrors   int                                 // count of unmarshal errors during cache load
+
+	// Hook-CLI dedup counters (T45). Updated via IncrementDedupSkipped from
+	// the hooks CLI only; MCP programmatic store_memory never touches them.
+	// atomic.Int64 is required — NOT a field under mu — per the lock-order
+	// invariant (writeMu → mu) documented above on the Store.
+	dedupSkippedSimilar atomic.Int64
+	dedupSkippedEmpty   atomic.Int64
 }
 
 // NewStore creates a new Store backed by a SQLite database at dbPath.
@@ -379,6 +387,32 @@ func (ms *Store) LoadErrors() int {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 	return ms.loadErrors
+}
+
+// IncrementDedupSkipped bumps the hook-CLI dedup counter for the given reason.
+// Called from the hooks package after a pre-store Check determines the
+// candidate record should not be persisted. Unknown reasons are ignored to
+// keep the surface narrow.
+func (ms *Store) IncrementDedupSkipped(reason string) {
+	switch reason {
+	case "similar":
+		ms.dedupSkippedSimilar.Add(1)
+	case "empty":
+		ms.dedupSkippedEmpty.Add(1)
+	}
+}
+
+// DedupSkippedByReason returns a snapshot of hook-CLI dedup skip counters.
+// Only reasons with count > 0 appear in the map. Safe to call concurrently.
+func (ms *Store) DedupSkippedByReason() map[string]int64 {
+	out := make(map[string]int64, 2)
+	if v := ms.dedupSkippedSimilar.Load(); v > 0 {
+		out["similar"] = v
+	}
+	if v := ms.dedupSkippedEmpty.Load(); v > 0 {
+		out["empty"] = v
+	}
+	return out
 }
 
 // Filters specifies optional constraints for memory recall and listing.
