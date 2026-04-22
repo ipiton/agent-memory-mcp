@@ -70,18 +70,18 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 	indexDir := t.TempDir()
 
 	ragCfg := config.Config{
-		RootPath:          corpusAbs,
-		RAGIndexPath:      indexDir,
-		RAGEnabled:        true,
-		RAGMaxResults:     50,
-		IndexDirs:         []string{corpusAbs},
-		ChunkSize:         2000,
-		ChunkOverlap:      200,
-		OllamaBaseURL:     srv.URL,
+		RootPath:           corpusAbs,
+		RAGIndexPath:       indexDir,
+		RAGEnabled:         true,
+		RAGMaxResults:      50,
+		IndexDirs:          []string{corpusAbs},
+		ChunkSize:          2000,
+		ChunkOverlap:       200,
+		OllamaBaseURL:      srv.URL,
 		EmbeddingDimension: dim,
-		EmbeddingMode:     "local-only",
-		AutoIndex:         false,
-		FileWatcher:       false,
+		EmbeddingMode:      "local-only",
+		AutoIndex:          false,
+		FileWatcher:        false,
 	}
 
 	engine := rag.NewEngine(ragCfg, nil)

@@ -69,4 +69,3 @@ func TestRetrievalEval(t *testing.T) {
 			metrics.MRR, baseline.MRR, regressionTolerance)
 	}
 }
-
