@@ -17,10 +17,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// dedupConfigFrom returns the DedupConfig derived from runtime config.
-// When MCP_CHECKPOINT_DEDUP_DISABLED=true the returned config has
-// Threshold=0 and MinContentChars=0 — hooks.Check then short-circuits
-// to a no-skip result (escape hatch).
+// dedupConfigFrom builds a hooks.DedupConfig from the loaded runtime config.
+// When MCP_CHECKPOINT_DEDUP_DISABLED=true the returned config has Threshold=0
+// and MinContentChars=0, so hooks.Check short-circuits to a no-skip result for
+// any non-whitespace candidate. Whitespace-only summaries are still dropped as
+// ReasonEmpty regardless (see hooks.Check godoc).
 func dedupConfigFrom(cfg config.Config) hooks.DedupConfig {
 	if cfg.CheckpointDedupDisabled {
 		return hooks.DedupConfig{}

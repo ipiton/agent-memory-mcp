@@ -223,12 +223,37 @@ func TestJaccardSimilarity(t *testing.T) {
 // unicode-aware tokenizer fix, these separators leaked into tokens and drove
 // similarity below 1.0 for otherwise-identical Russian summaries.
 func TestJaccardSimilarity_UnicodeRussianPunctuation(t *testing.T) {
-	summary1 := "Исправил баг — обновил конфиг, закоммитил"
-	summary2 := "Исправил баг, обновил конфиг — закоммитил"
+	// Glued punctuation (no surrounding whitespace) — under an ASCII-only tokenizer
+	// "баг—обновил" would be a single token and the two summaries would have
+	// jaccard ≈ 0.14. Under unicode-aware isTokenSeparator they split correctly
+	// and jaccard approaches 1.0.
+	summary1 := "Исправил баг—обновил конфиг,закоммитил"
+	summary2 := "Исправил баг,обновил конфиг—закоммитил"
 
 	got := JaccardSimilarity(summary1, summary2)
 	if got < 0.9 {
-		t.Fatalf("expected similarity > 0.9 for Russian text with different punctuation, got %f", got)
+		t.Fatalf("expected similarity >= 0.9 for Russian text with different punctuation, got %f", got)
+	}
+}
+
+// TestCheck_DisabledConfig_WhitespaceStillEmpty pins the escape-hatch
+// behaviour of dedupConfigFrom when MCP_CHECKPOINT_DEDUP_DISABLED=true:
+// Threshold=0 and MinContentChars=0 short-circuit the similarity gate for
+// non-whitespace candidates, but whitespace-only summaries are still dropped
+// as ReasonEmpty.
+func TestCheck_DisabledConfig_WhitespaceStillEmpty(t *testing.T) {
+	store := newTestStore(t)
+
+	// Zero-value DedupConfig mirrors what dedupConfigFrom returns when the
+	// disable flag is set.
+	cfg := DedupConfig{}
+
+	result, err := Check(context.Background(), store, newSummary("proj-x", "   \n\t  "), cfg)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !result.Skip || result.Reason != ReasonEmpty {
+		t.Fatalf("expected Skip=true reason=empty for whitespace under disabled cfg, got %+v", result)
 	}
 }
 
