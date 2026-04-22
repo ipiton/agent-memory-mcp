@@ -12,6 +12,11 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 )
 
+// sourceBoostSecondary is the retrieval boost applied to secondary knowledge
+// artifacts (dead_end, changelog, adr, etc.) when the query matches their
+// keyword profile. Runbooks/postmortems use the stronger primary boost (0.08).
+const sourceBoostSecondary = 0.07
+
 type hybridCandidate struct {
 	chunk         vectorstore.Chunk
 	sourceType    string
@@ -39,6 +44,8 @@ func normalizeSourceType(value string) string {
 		return "runbook"
 	case "postmortem", "postmortems", "incident":
 		return "postmortem"
+	case "dead_end", "dead-end", "deadend", "dead_ends":
+		return "dead_end"
 	case "ci", "ci_config", "workflow", "pipeline":
 		return "ci_config"
 	case "helm":
@@ -90,6 +97,12 @@ func sourceAwareBoost(query string, sourceType string) float64 {
 	case "k8s":
 		if scoring.ContainsAny(queryLower, "k8s", "kubernetes", "deployment", "ingress", "service") {
 			return 0.07
+		}
+	case "dead_end":
+		// Pass the raw query — IsPitfallQuery handles case-insensitivity and
+		// uses word-boundary matching so "retry storm" won't fire "try".
+		if scoring.IsPitfallQuery(query) {
+			return sourceBoostSecondary
 		}
 	}
 
@@ -143,6 +156,8 @@ func documentConfidence(sourceType string) float64 {
 		return 0.94
 	case "postmortem":
 		return 0.92
+	case "dead_end":
+		return 0.90
 	case "changelog":
 		return 0.90
 	case "ci_config":
@@ -162,7 +177,7 @@ func documentOwner(sourceType string) string {
 	switch sourceType {
 	case "adr", "rfc", "docs":
 		return "engineering"
-	case "runbook", "postmortem":
+	case "runbook", "postmortem", "dead_end":
 		return "operations"
 	case "changelog":
 		return "release"
@@ -177,7 +192,15 @@ func confidenceBoost(confidence float64) float64 {
 	return math.Max(0, (confidence-0.50)*0.05)
 }
 
-func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool) ([]SearchResult, *SearchDebug) {
+// buildHybridSearchResults fuses semantic+keyword candidates into ordered
+// SearchResult rows and returns a parallel slice of full chunk content keyed
+// by index. The parallel content slice is consumed by the neural reranker
+// path (see vectorService.applyReranker) which needs the full chunk text —
+// the snippet in SearchResult is already truncated to 200 chars for display.
+//
+// The content slice always has the same length and ordering as the returned
+// []SearchResult, so content[i] is the full text for results[i].
+func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool) ([]SearchResult, []string, *SearchDebug) {
 	now := time.Now()
 	normalizedFilter := normalizeSourceType(sourceTypeFilter)
 
@@ -234,7 +257,14 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		candidates = append(candidates, *candidate)
 	}
 
-	searchResults := make([]SearchResult, 0, len(candidates))
+	// We keep full chunk content in a parallel slice to searchResults so the
+	// public SearchResult shape stays snippet-only (no JSON drift for API
+	// consumers) while the internal reranker path still gets the full text.
+	type resultWithContent struct {
+		result  SearchResult
+		content string
+	}
+	rows := make([]resultWithContent, 0, len(candidates))
 	for _, candidate := range candidates {
 		keywordComponent := 0.0
 		if maxKeywordScore > 0 {
@@ -247,7 +277,8 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 			score += 0.05
 		}
 
-		snippet := candidate.chunk.Content
+		fullContent := candidate.chunk.Content
+		snippet := fullContent
 		if len(snippet) > 200 {
 			snippet = snippet[:200] + "..."
 		}
@@ -276,22 +307,29 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 				AppliedBoosts: appliedBoosts(candidate, keywordComponent, confidenceComponent),
 			}
 		}
-		searchResults = append(searchResults, result)
+		rows = append(rows, resultWithContent{result: result, content: fullContent})
 	}
 
-	sort.Slice(searchResults, func(i, j int) bool {
-		if searchResults[i].Score == searchResults[j].Score {
-			return searchResults[i].LastModified.After(searchResults[j].LastModified)
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].result.Score == rows[j].result.Score {
+			return rows[i].result.LastModified.After(rows[j].result.LastModified)
 		}
-		return searchResults[i].Score > searchResults[j].Score
+		return rows[i].result.Score > rows[j].result.Score
 	})
 
-	if len(searchResults) > limit {
-		searchResults = searchResults[:limit]
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	searchResults := make([]SearchResult, len(rows))
+	contents := make([]string, len(rows))
+	for i, row := range rows {
+		searchResults[i] = row.result
+		contents[i] = row.content
 	}
 
 	if !debug {
-		return searchResults, nil
+		return searchResults, contents, nil
 	}
 
 	debugInfo := &SearchDebug{
@@ -314,7 +352,7 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		debugInfo.AppliedFilters = []string{fmt.Sprintf("source_type=%s", normalizedFilter)}
 	}
 
-	return searchResults, debugInfo
+	return searchResults, contents, debugInfo
 }
 
 func appliedBoosts(candidate hybridCandidate, keywordComponent float64, confidenceComponent float64) []string {

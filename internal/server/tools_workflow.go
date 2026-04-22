@@ -271,8 +271,41 @@ func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
 		prefixedLine("Decision", decision), prefixedLine("Rationale", mustString(args, "rationale")),
 		prefixedLine("Consequences", mustString(args, "consequences")), prefixedLine("Service", mustString(args, "service")),
 		prefixedLine("Owner", owner), prefixedLine("Status", mustString(args, "status")),
+		prefixedLine("Avoided dead end", mustString(args, "avoided_dead_end_id")),
 	)
-	return s.storeEngineeringMemory(args, memory.EngineeringTypeDecision, "Decision", content, decision, 0.85, nil, map[string]string{"owner": owner})
+	extraMeta := map[string]string{"owner": owner}
+	if avoidedID := strings.TrimSpace(mustString(args, "avoided_dead_end_id")); avoidedID != "" {
+		extraMeta["avoided_dead_end_id"] = avoidedID
+	}
+	return s.storeEngineeringMemory(args, memory.EngineeringTypeDecision, "Decision", content, decision, 0.85, nil, extraMeta)
+}
+
+// callStoreDeadEnd persists an abandoned approach with its failure rationale.
+// Stores as TypeSemantic (knowledge, not event) with metadata.entity=dead_end.
+func (s *MCPServer) callStoreDeadEnd(args map[string]any) (any, *rpcError) {
+	attempted, ok := getString(args, "attempted_approach")
+	if !ok || strings.TrimSpace(attempted) == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "attempted_approach parameter is required"}
+	}
+	whyFailed, ok := getString(args, "why_failed")
+	if !ok || strings.TrimSpace(whyFailed) == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "why_failed parameter is required"}
+	}
+	content := joinContentLines(
+		prefixedLine("Attempted approach", attempted),
+		prefixedLine("Why failed", whyFailed),
+		prefixedLine("Alternative used", mustString(args, "alternative_used")),
+		prefixedLine("Related task", mustString(args, "related_task_slug")),
+		prefixedLine("Service", mustString(args, "service")),
+	)
+	extraMeta := map[string]string{}
+	if slug := strings.TrimSpace(mustString(args, "related_task_slug")); slug != "" {
+		extraMeta["related_task_slug"] = slug
+	}
+	if alt := strings.TrimSpace(mustString(args, "alternative_used")); alt != "" {
+		extraMeta["alternative_used"] = alt
+	}
+	return s.storeEngineeringMemory(args, memory.EngineeringTypeDeadEnd, "Dead End", content, attempted, 0.80, nil, extraMeta)
 }
 
 func (s *MCPServer) callStoreIncident(args map[string]any) (any, *rpcError) {

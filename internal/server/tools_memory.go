@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -125,7 +126,60 @@ func (s *MCPServer) callRecallMemory(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "memory recall failed", Data: err.Error()}
 	}
 
-	return toolResultText(s.formatMemoryResults(query, results)), nil
+	deadEndSuggestion := s.maybeDeadEndSuggestion(query, filters, results)
+	return toolResultText(s.formatMemoryResults(query, results, deadEndSuggestion)), nil
+}
+
+// isDeadEndKeywordQuery reports whether the query hints at trying an approach
+// that may already be recorded as a dead_end. Thin wrapper around
+// scoring.IsPitfallQuery so tests and call sites stay local to this package.
+func isDeadEndKeywordQuery(q string) bool {
+	return scoring.IsPitfallQuery(q)
+}
+
+func containsDeadEndResult(results []*memory.SearchResult) bool {
+	for _, r := range results {
+		if r == nil || r.Memory == nil {
+			continue
+		}
+		if memory.EngineeringTypeOf(r.Memory) == memory.EngineeringTypeDeadEnd {
+			return true
+		}
+	}
+	return false
+}
+
+// maybeDeadEndSuggestion picks a top-1 dead_end memory to surface when the
+// query hints at a known pitfall and no dead_end already appears in results.
+// Returns nil when no suggestion applies.
+func (s *MCPServer) maybeDeadEndSuggestion(query string, filters memory.Filters, results []*memory.SearchResult) *memory.SearchResult {
+	if !isDeadEndKeywordQuery(query) {
+		return nil
+	}
+	if containsDeadEndResult(results) {
+		return nil
+	}
+	// Post-filter a broader Recall for dead_end-tagged memories, since
+	// Filters does not support metadata-key predicates directly.
+	probeFilters := memory.Filters{
+		Type:    memory.TypeSemantic,
+		Context: filters.Context,
+		Tags:    []string{"dead_end"},
+	}
+	probe, err := s.memoryStore.Recall(context.Background(), query, probeFilters, 5)
+	if err != nil || len(probe) == 0 {
+		return nil
+	}
+	for _, r := range probe {
+		if r == nil || r.Memory == nil {
+			continue
+		}
+		if memory.EngineeringTypeOf(r.Memory) != memory.EngineeringTypeDeadEnd {
+			continue
+		}
+		return r
+	}
+	return nil
 }
 
 func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {

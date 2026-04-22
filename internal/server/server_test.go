@@ -293,7 +293,7 @@ func TestConsoleAPIMemoryQuery(t *testing.T) {
 		Tags:       []string{"runbook", "service:api"},
 		Metadata:   map[string]string{"entity": "runbook", "service": "api"},
 	}
-	if err := s.memoryStore.Store(context.Background(),mem); err != nil {
+	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -360,6 +360,7 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"store_incident",
 		"store_runbook",
 		"store_postmortem",
+		"store_dead_end",
 		"search_runbooks",
 		"recall_similar_incidents",
 		"summarize_project_context",
@@ -503,7 +504,7 @@ func TestCallStoreDecisionStoresWorkflowMemory(t *testing.T) {
 		t.Fatalf("unexpected result text: %s", toolRes.Content[0].Text)
 	}
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -531,6 +532,229 @@ func TestCallStoreDecisionStoresWorkflowMemory(t *testing.T) {
 	}
 }
 
+func TestCallStoreDeadEndStoresWorkflowMemory(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	result, rErr := s.callStoreDeadEnd(map[string]any{
+		"attempted_approach": "use async migration in place without shadow write",
+		"why_failed":         "lost messages during cutover because readers lagged",
+		"alternative_used":   "dual-write phase with shadow consumer for two weeks",
+		"related_task_slug":  "T-12345-async-migration",
+		"service":            "catalog",
+		"context":            "payments",
+		"tags":               []any{"migration"},
+		"importance":         0.82,
+	})
+	if rErr != nil {
+		t.Fatalf("callStoreDeadEnd returned error: %+v", rErr)
+	}
+	toolRes, ok := result.(toolResult)
+	if !ok || len(toolRes.Content) == 0 {
+		t.Fatalf("unexpected tool result: %#v", result)
+	}
+	if !strings.Contains(toolRes.Content[0].Text, "Dead End stored:") {
+		t.Fatalf("unexpected result text: %s", toolRes.Content[0].Text)
+	}
+
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{}, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("len(memories) = %d, want 1", len(memories))
+	}
+	mem := memories[0]
+	if mem.Type != memory.TypeSemantic {
+		t.Fatalf("mem.Type = %s, want %s", mem.Type, memory.TypeSemantic)
+	}
+	if mem.Metadata[memory.MetadataEntity] != string(memory.EngineeringTypeDeadEnd) {
+		t.Fatalf("metadata entity = %q, want dead_end", mem.Metadata[memory.MetadataEntity])
+	}
+	if !containsTag(mem.Tags, "dead_end") {
+		t.Fatalf("missing dead_end tag in %v", mem.Tags)
+	}
+	if mem.Metadata["alternative_used"] != "dual-write phase with shadow consumer for two weeks" {
+		t.Fatalf("missing alternative_used metadata, got %#v", mem.Metadata)
+	}
+	if mem.Metadata["related_task_slug"] != "T-12345-async-migration" {
+		t.Fatalf("missing related_task_slug metadata, got %#v", mem.Metadata)
+	}
+	if !strings.Contains(mem.Content, "Attempted approach:") || !strings.Contains(mem.Content, "Why failed:") {
+		t.Fatalf("unexpected content: %s", mem.Content)
+	}
+}
+
+func TestCallStoreDeadEndRequiresAttemptedAndWhyFailed(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	_, rErr := s.callStoreDeadEnd(map[string]any{"why_failed": "x"})
+	if rErr == nil || rErr.Code != rpcErrInvalidParams {
+		t.Fatalf("expected invalid params for missing attempted_approach, got %+v", rErr)
+	}
+	_, rErr = s.callStoreDeadEnd(map[string]any{"attempted_approach": "try something"})
+	if rErr == nil || rErr.Code != rpcErrInvalidParams {
+		t.Fatalf("expected invalid params for missing why_failed, got %+v", rErr)
+	}
+}
+
+func TestCallStoreDecisionRecordsAvoidedDeadEndID(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	_, rErr := s.callStoreDecision(map[string]any{
+		"decision":            "use dual-write with shadow consumer",
+		"rationale":           "avoids data loss during async migration",
+		"service":             "catalog",
+		"status":              "accepted",
+		"avoided_dead_end_id": "mem-dead-001",
+	})
+	if rErr != nil {
+		t.Fatalf("callStoreDecision returned error: %+v", rErr)
+	}
+
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{}, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(memories) != 1 {
+		t.Fatalf("len(memories) = %d, want 1", len(memories))
+	}
+	if got := memories[0].Metadata["avoided_dead_end_id"]; got != "mem-dead-001" {
+		t.Fatalf("avoided_dead_end_id metadata = %q, want mem-dead-001", got)
+	}
+}
+
+func TestCallRecallMemoryBlendsDeadEndOnPitfallKeyword(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	// Seed a dead_end record.
+	_, rErr := s.callStoreDeadEnd(map[string]any{
+		"attempted_approach": "sharding without capacity planning",
+		"why_failed":         "hot partitions saturated a single node and migration had to be rolled back",
+		"service":            "ledger",
+		"context":            "payments",
+	})
+	if rErr != nil {
+		t.Fatalf("seed dead_end: %+v", rErr)
+	}
+	// Seed an unrelated top-ranking memory that matches the query so the
+	// dead_end is unlikely to appear in the main top-K.
+	if err := s.memoryStore.Store(context.Background(), &memory.Memory{
+		Title:      "catalog migration approach guide",
+		Content:    "how to approach catalog migration with staged rollout and canary verification",
+		Type:       memory.TypeSemantic,
+		Importance: 0.5,
+		Context:    "payments",
+	}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	// Use limit=1 so that if the generic memory out-ranks, the dead_end
+	// won't be in the main results — blending should kick in.
+	result, rErr := s.callRecallMemory(map[string]any{
+		"query": "how to approach catalog migration",
+		"limit": 1,
+	})
+	if rErr != nil {
+		t.Fatalf("callRecallMemory returned error: %+v", rErr)
+	}
+	toolRes, ok := result.(toolResult)
+	if !ok || len(toolRes.Content) == 0 {
+		t.Fatalf("unexpected tool result: %#v", result)
+	}
+	text := toolRes.Content[0].Text
+
+	// Two acceptable outcomes:
+	//  (a) the dead_end is already in results (suggestion omitted);
+	//  (b) the dead_end is surfaced as a suggestion marker.
+	deadEndInResults := strings.Contains(text, "Tags: [dead_end")
+	suggested := strings.Contains(text, "suggestion:dead_end")
+	if !deadEndInResults && !suggested {
+		t.Fatalf("expected dead_end either in results or as suggestion, got:\n%s", text)
+	}
+
+	// Regression: the blend must not mutate stored tags. The
+	// `suggestion:dead_end` marker may appear in the returned output but must
+	// never be persisted on the stored memory itself.
+	all, err := s.memoryStore.List(context.Background(), memory.Filters{}, 100)
+	if err != nil {
+		t.Fatalf("List after blend: %v", err)
+	}
+	for _, m := range all {
+		for _, tag := range m.Tags {
+			if tag == "suggestion:dead_end" {
+				t.Fatalf("stored memory %q tags mutated with suggestion marker: %v", m.ID, m.Tags)
+			}
+		}
+	}
+}
+
+func TestCallRecallMemoryNoBlendWhenQueryHasNoPitfallKeyword(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	_, rErr := s.callStoreDeadEnd(map[string]any{
+		"attempted_approach": "use async migration in place without shadow write",
+		"why_failed":         "lost messages during cutover",
+		"service":            "catalog",
+	})
+	if rErr != nil {
+		t.Fatalf("seed dead_end: %+v", rErr)
+	}
+	// Seed an unrelated semantic memory so the recall has something to return.
+	if err := s.memoryStore.Store(context.Background(), &memory.Memory{
+		Title:      "unrelated fact",
+		Content:    "catalog service uses protobuf for its public API",
+		Type:       memory.TypeSemantic,
+		Importance: 0.5,
+	}); err != nil {
+		t.Fatalf("Store unrelated: %v", err)
+	}
+
+	result, rErr := s.callRecallMemory(map[string]any{
+		"query": "catalog service protobuf schema",
+		"limit": 5,
+	})
+	if rErr != nil {
+		t.Fatalf("callRecallMemory returned error: %+v", rErr)
+	}
+	toolRes, ok := result.(toolResult)
+	if !ok || len(toolRes.Content) == 0 {
+		t.Fatalf("unexpected tool result: %#v", result)
+	}
+	text := toolRes.Content[0].Text
+	if strings.Contains(text, "suggestion:dead_end") {
+		t.Fatalf("did not expect dead_end suggestion for neutral query, got:\n%s", text)
+	}
+}
+
+func TestIsDeadEndKeywordQueryTable(t *testing.T) {
+	cases := []struct {
+		q    string
+		want bool
+	}{
+		{"how to approach async migration", true},
+		{"what is the lesson learned here?", true},
+		{"pitfall when sharding without plan", true},
+		{"should I avoid this pattern?", true},
+		{"why not use global locks", true},
+		{"", false},
+		{"catalog service public API schema", false},
+		{"how much memory does ingester use", false}, // near-miss: "how " without "how to"
+		// Regression: word-boundary matching must suppress substring hits.
+		{"retry storm diagnosis", false},    // "retry" must not fire "try"
+		{"country code validator", false},   // "country" must not fire "try"
+		{"entry point config", false},       // "entry" must not fire "try"
+		{"unavoidable dependency", false},   // "unavoidable" must not fire "avoid"
+		{"devoid of tests", false},          // "devoid" must not fire "avoid"
+		{"poultry counting service", false}, // "poultry" must not fire "try"
+	}
+	for _, c := range cases {
+		got := isDeadEndKeywordQuery(c.q)
+		if got != c.want {
+			t.Fatalf("isDeadEndKeywordQuery(%q) = %v, want %v", c.q, got, c.want)
+		}
+	}
+}
+
 func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 	s := newMemoryTestServer(t)
 
@@ -546,7 +770,7 @@ func TestCallAnalyzeSessionDryRunReturnsReviewAwareReport(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -614,7 +838,7 @@ func TestCallAnalyzeSessionSaveRawPersistsSessionSummary(t *testing.T) {
 		t.Fatalf("expected json output with raw_summary_saved, got:\n%s", toolRes.Content[0].Text)
 	}
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -651,7 +875,7 @@ func TestCallAnalyzeSessionAutoApplyLowRiskReturnsAppliedState(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -734,7 +958,7 @@ func TestCallAcceptSessionChangesUsesWriteEnabledDefaults(t *testing.T) {
 			memory.MetadataService: "api",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),existing); err != nil {
+	if err := s.memoryStore.Store(context.Background(), existing); err != nil {
 		t.Fatalf("Store existing: %v", err)
 	}
 
@@ -825,7 +1049,7 @@ func TestCallStoreMemoryNormalizesTagsFromString(t *testing.T) {
 		t.Fatalf("callStoreMemory error = %v", rErr)
 	}
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -899,11 +1123,11 @@ func TestSummarizeProjectContextIncludesWorkflowSections(t *testing.T) {
 			Tags:       []string{"incident", "service:api"},
 		},
 	} {
-		if err := s.memoryStore.Store(context.Background(),mem); err != nil {
+		if err := s.memoryStore.Store(context.Background(), mem); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -917,7 +1141,7 @@ func TestSummarizeProjectContextIncludesWorkflowSections(t *testing.T) {
 	if canonicalID == "" {
 		t.Fatal("failed to find decision memory to promote")
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),canonicalID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -968,10 +1192,10 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataStatus:  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),decision); err != nil {
+	if err := s.memoryStore.Store(context.Background(), decision); err != nil {
 		t.Fatalf("Store decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),decision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), decision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -988,7 +1212,7 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataSessionMode: string(memory.SessionModeMigration),
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),session); err != nil {
+	if err := s.memoryStore.Store(context.Background(), session); err != nil {
 		t.Fatalf("Store session summary: %v", err)
 	}
 
@@ -1006,7 +1230,7 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 			memory.MetadataReviewRequired:  "true",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),stale); err != nil {
+	if err := s.memoryStore.Store(context.Background(), stale); err != nil {
 		t.Fatalf("Store stale caveat: %v", err)
 	}
 
@@ -1056,10 +1280,10 @@ func TestCallProjectBankViewJSONAppliesStatusOwnerAndServiceFilters(t *testing.T
 			memory.MetadataStatus:  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),canonicalDecision); err != nil {
+	if err := s.memoryStore.Store(context.Background(), canonicalDecision); err != nil {
 		t.Fatalf("Store canonical decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),canonicalDecision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -1076,7 +1300,7 @@ func TestCallProjectBankViewJSONAppliesStatusOwnerAndServiceFilters(t *testing.T
 			memory.MetadataStatus:  "draft",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),rawDecision); err != nil {
+	if err := s.memoryStore.Store(context.Background(), rawDecision); err != nil {
 		t.Fatalf("Store raw decision: %v", err)
 	}
 
@@ -1136,7 +1360,7 @@ func TestBackgroundSessionTrackerFlushesOnIdle(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1171,7 +1395,7 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 
 	time.Sleep(60 * time.Millisecond)
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 20)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 20)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1189,7 +1413,7 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 		t.Fatalf("expected review queue item, memories = %d", len(memories))
 	}
 
-	view, err := s.memoryStore.ProjectBankView(context.Background(),memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
+	view, err := s.memoryStore.ProjectBankView(context.Background(), memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
 		Filters: memory.Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,
@@ -1229,7 +1453,7 @@ func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing
 		t.Fatalf("second handleToolsCall returned error: %+v", rErr)
 	}
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1271,7 +1495,7 @@ func TestBackgroundSessionTrackerFlushesOnTaskDoneNotification(t *testing.T) {
 		}`),
 	})
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 20)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 20)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1311,7 +1535,7 @@ func TestBackgroundSessionTrackerCheckpointNotificationPersistsCheckpoint(t *tes
 		}`),
 	})
 
-	memories, err := s.memoryStore.List(context.Background(),memory.Filters{Context: "payments"}, 10)
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1344,7 +1568,7 @@ func TestCallResolveReviewItemRemovesItemFromActiveQueue(t *testing.T) {
 			memory.MetadataStatus:         "review_required",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),item); err != nil {
+	if err := s.memoryStore.Store(context.Background(), item); err != nil {
 		t.Fatalf("Store review item: %v", err)
 	}
 
@@ -1377,7 +1601,7 @@ func TestCallResolveReviewItemRemovesItemFromActiveQueue(t *testing.T) {
 		t.Fatalf("review_resolved_by = %q, want platform", updated.Metadata["review_resolved_by"])
 	}
 
-	view, err := s.memoryStore.ProjectBankView(context.Background(),memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
+	view, err := s.memoryStore.ProjectBankView(context.Background(), memory.ProjectBankViewReviewQueue, memory.ProjectBankOptions{
 		Filters: memory.Filters{Context: "payments"},
 		Service: "api",
 		Limit:   10,
@@ -1405,10 +1629,10 @@ func TestCanonicalKnowledgeTools(t *testing.T) {
 			"service": "api",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),mem); err != nil {
+	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(),mem.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), mem.ID, "platform"); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -1479,10 +1703,10 @@ func TestConsolidationToolsWorkflow(t *testing.T) {
 			"status":  "accepted",
 		},
 	}
-	if err := s.memoryStore.Store(context.Background(),primary); err != nil {
+	if err := s.memoryStore.Store(context.Background(), primary); err != nil {
 		t.Fatalf("Store primary: %v", err)
 	}
-	if err := s.memoryStore.Store(context.Background(),duplicate); err != nil {
+	if err := s.memoryStore.Store(context.Background(), duplicate); err != nil {
 		t.Fatalf("Store duplicate: %v", err)
 	}
 
@@ -1541,7 +1765,7 @@ func TestConsolidationToolsWorkflow(t *testing.T) {
 		t.Fatalf("knowledge_layer = %q, want canonical", storedPrimary.Metadata["knowledge_layer"])
 	}
 
-	finalReport, err := s.memoryStore.ConflictsReport(context.Background(),memory.Filters{Context: "payments"}, 10)
+	finalReport, err := s.memoryStore.ConflictsReport(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
 		t.Fatalf("ConflictsReport: %v", err)
 	}

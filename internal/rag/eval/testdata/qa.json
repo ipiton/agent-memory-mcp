@@ -1,0 +1,185 @@
+[
+  {
+    "id": "simple-1",
+    "type": "simple",
+    "question": "How do I roll back a production deploy?",
+    "expected_doc_ids": ["runbooks/deploy-rollback.md"]
+  },
+  {
+    "id": "simple-2",
+    "type": "simple",
+    "question": "What is the procedure to rotate a leaked secret?",
+    "expected_doc_ids": ["runbooks/secret-rotation.md"]
+  },
+  {
+    "id": "simple-3",
+    "type": "simple",
+    "question": "How do I renew a TLS certificate manually with cert-manager?",
+    "expected_doc_ids": ["runbooks/tls-renewal.md"]
+  },
+  {
+    "id": "simple-4",
+    "type": "simple",
+    "question": "Why did we pick PostgreSQL as the primary database?",
+    "expected_doc_ids": ["adrs/adr-001-use-postgres.md"]
+  },
+  {
+    "id": "simple-5",
+    "type": "simple",
+    "question": "Which identity provider did we choose and why?",
+    "expected_doc_ids": ["adrs/adr-004-auth-provider.md"]
+  },
+  {
+    "id": "simple-6",
+    "type": "simple",
+    "question": "What is the rate limiting algorithm used by our API gateway?",
+    "expected_doc_ids": ["adrs/adr-002-rate-limiting.md"]
+  },
+  {
+    "id": "set-1",
+    "type": "set",
+    "question": "runbooks related to database operations",
+    "expected_doc_ids": [
+      "runbooks/db-migration-abort.md",
+      "postmortems/incident-2025-12-15-db-lock.md"
+    ]
+  },
+  {
+    "id": "set-2",
+    "type": "set",
+    "question": "incidents involving database",
+    "expected_doc_ids": [
+      "postmortems/incident-2025-12-15-db-lock.md",
+      "postmortems/incident-2025-09-08-cache-stampede.md"
+    ]
+  },
+  {
+    "id": "set-3",
+    "type": "set",
+    "question": "documents about TLS and certificates",
+    "expected_doc_ids": [
+      "runbooks/tls-renewal.md",
+      "postmortems/incident-2025-11-03-cert-expiry.md"
+    ]
+  },
+  {
+    "id": "set-4",
+    "type": "set",
+    "question": "onboarding materials for new engineers",
+    "expected_doc_ids": [
+      "docs/onboarding.md",
+      "docs/architecture-overview.md"
+    ]
+  },
+  {
+    "id": "set-5",
+    "type": "set",
+    "question": "deploy pipeline and rollback references",
+    "expected_doc_ids": [
+      "docs/deployment.md",
+      "runbooks/deploy-rollback.md"
+    ]
+  },
+  {
+    "id": "multi-1",
+    "type": "multi-hop",
+    "question": "How do we correlate logs, metrics, and traces across services?",
+    "expected_doc_ids": [
+      "adrs/adr-005-observability-stack.md",
+      "docs/architecture-overview.md"
+    ]
+  },
+  {
+    "id": "multi-2",
+    "type": "multi-hop",
+    "question": "What caused the cache stampede incident and how did we fix it?",
+    "expected_doc_ids": [
+      "postmortems/incident-2025-09-08-cache-stampede.md"
+    ]
+  },
+  {
+    "id": "multi-3",
+    "type": "multi-hop",
+    "question": "When a Helm values change causes an outage, what guards do we now have against drift?",
+    "expected_doc_ids": [
+      "postmortems/incident-2025-08-17-config-drift.md"
+    ]
+  },
+  {
+    "id": "multi-4",
+    "type": "multi-hop",
+    "question": "If latency spikes after a deploy, what steps should I take first?",
+    "expected_doc_ids": [
+      "docs/troubleshooting.md",
+      "runbooks/deploy-rollback.md"
+    ]
+  },
+  {
+    "id": "multi-5",
+    "type": "multi-hop",
+    "question": "What led to the search service memory leak and what prevents it now?",
+    "expected_doc_ids": [
+      "postmortems/incident-2025-10-20-memory-leak.md"
+    ]
+  },
+  {
+    "id": "cond-1",
+    "type": "conditional",
+    "question": "deploy rollback",
+    "source_type": "runbook",
+    "expected_doc_ids": ["runbooks/deploy-rollback.md"]
+  },
+  {
+    "id": "cond-2",
+    "type": "conditional",
+    "question": "architecture decision about monorepo layout",
+    "source_type": "adr",
+    "expected_doc_ids": ["adrs/adr-003-monorepo-layout.md"]
+  },
+  {
+    "id": "cond-3",
+    "type": "conditional",
+    "question": "database lock incident",
+    "source_type": "postmortem",
+    "expected_doc_ids": ["postmortems/incident-2025-12-15-db-lock.md"]
+  },
+  {
+    "id": "cond-4",
+    "type": "conditional",
+    "question": "TLS certificate expiry",
+    "source_type": "postmortem",
+    "expected_doc_ids": ["postmortems/incident-2025-11-03-cert-expiry.md"]
+  },
+  {
+    "id": "cond-5",
+    "type": "conditional",
+    "question": "incident response severity levels",
+    "source_type": "runbook",
+    "expected_doc_ids": ["runbooks/incident-response.md"]
+  },
+  {
+    "id": "cond-6",
+    "type": "conditional",
+    "question": "observability stack components",
+    "source_type": "adr",
+    "expected_doc_ids": ["adrs/adr-005-observability-stack.md"]
+  },
+  {
+    "id": "dead-end-1",
+    "type": "conditional",
+    "question": "what approach did we try for async migration and why did it fail?",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-async-migration.md"]
+  },
+  {
+    "id": "dead-end-2",
+    "type": "simple",
+    "question": "lesson learned from sharding without capacity planning",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
+  },
+  {
+    "id": "dead-end-3",
+    "type": "simple",
+    "question": "why should we avoid naive hash sharding of the ledger",
+    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
+  }
+]

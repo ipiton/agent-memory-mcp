@@ -92,6 +92,45 @@ func TestBuildEngineeringMetadataKeepsDetailedStatusAndDerivedLifecycle(t *testi
 	}
 }
 
+func TestValidateEngineeringType_DeadEnd(t *testing.T) {
+	cases := []struct {
+		in   string
+		want EngineeringType
+	}{
+		{"dead_end", EngineeringTypeDeadEnd},
+		{"dead-end", EngineeringTypeDeadEnd},
+		{"deadend", EngineeringTypeDeadEnd},
+		{"dead_ends", EngineeringTypeDeadEnd},
+		{" Dead_End ", EngineeringTypeDeadEnd},
+	}
+	for _, c := range cases {
+		got, err := ValidateEngineeringType(c.in, false)
+		if err != nil {
+			t.Fatalf("ValidateEngineeringType(%q) err: %v", c.in, err)
+		}
+		if got != c.want {
+			t.Fatalf("ValidateEngineeringType(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestDefaultStorageTypeForEngineeringType_DeadEnd(t *testing.T) {
+	if got := DefaultStorageTypeForEngineeringType(EngineeringTypeDeadEnd); got != TypeSemantic {
+		t.Fatalf("DefaultStorageTypeForEngineeringType(dead_end) = %q, want %q", got, TypeSemantic)
+	}
+}
+
+func TestInferEngineeringTypeFromTags_DeadEnd(t *testing.T) {
+	tags := []string{"service:api", "dead_end", "topic:migration"}
+	if got := inferEngineeringTypeFromTags(tags); got != EngineeringTypeDeadEnd {
+		t.Fatalf("inferEngineeringTypeFromTags(%v) = %q, want %q", tags, got, EngineeringTypeDeadEnd)
+	}
+	tags2 := []string{"service:api", "dead-end"}
+	if got := inferEngineeringTypeFromTags(tags2); got != EngineeringTypeDeadEnd {
+		t.Fatalf("inferEngineeringTypeFromTags(%v) = %q, want %q", tags2, got, EngineeringTypeDeadEnd)
+	}
+}
+
 func TestReviewRequiredReducesTrustConfidence(t *testing.T) {
 	now := time.Now()
 	base := &Memory{

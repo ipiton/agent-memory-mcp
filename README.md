@@ -654,6 +654,7 @@ For shared HTTP mode:
 | `recall_similar_incidents` | Recall similar incidents from memory and indexed postmortems |
 | `end_task` | Consolidate memory for an archived task slug: outdate working/procedural entries, route high-importance ones to the review queue |
 | `sweep_archive` | Pull-mode scan over `MCP_TASK_ARCHIVE_ROOTS` that runs `end_task` on every archived slug |
+| `store_dead_end` | Record an attempted approach that failed (plus the why and the alternative used) so retrieval can surface it as a pitfall warning on related queries |
 | `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
 | `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue |
 
@@ -741,6 +742,11 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_CHECKPOINT_DEDUP_DISABLED` | `false` | Escape hatch: disable checkpoint-hook deduplication entirely |
 | `MCP_TASK_ARCHIVE_ROOTS` | - | Colon-separated archive roots for `sweep-archive` / `end-task` (e.g. `/home/you/tasks/archive`). Empty disables the feature |
 | `MCP_TASK_SLUG_PATTERN` | - | Optional regex filtering archive subdirectory names; invalid regex fails config load |
+| `MCP_RERANK_ENABLED` | `false` | Enable neural reranker after hybrid search; feature-flagged, default off |
+| `MCP_RERANK_PROVIDER` | `disabled` | Reranker provider: `jina` or `disabled` |
+| `JINA_RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Jina reranker model id |
+| `MCP_RERANK_TIMEOUT` | `5s` | Hard timeout for one rerank call; on timeout the hybrid order is kept and `rerank_failed:timeout` is added to debug signals |
+| `MCP_RERANK_TOP_N` | `40` | Number of top hybrid candidates sent to the reranker; clamped to `100` at call time |
 
 ### Data paths
 

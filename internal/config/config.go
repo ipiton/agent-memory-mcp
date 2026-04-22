@@ -103,6 +103,15 @@ type Config struct {
 	// matches a slug are marked outdated (high-importance ones go to review queue).
 	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
 	TaskSlugPattern  *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
+
+	// Neural reranker (T44) — opt-in cross-encoder that re-orders the top-N
+	// hybrid-search candidates. Disabled by default; the retrieval pipeline
+	// must degrade gracefully on timeout or provider error.
+	RerankEnabled     bool          // MCP_RERANK_ENABLED (default: false)
+	RerankProvider    string        // MCP_RERANK_PROVIDER: "jina" or "disabled" (default: "disabled")
+	JinaRerankerModel string        // JINA_RERANKER_MODEL (default: jina-reranker-v2-base-multilingual)
+	RerankTimeout     time.Duration // MCP_RERANK_TIMEOUT (default: 5s)
+	RerankTopN        int           // MCP_RERANK_TOP_N (default: 40)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -170,6 +179,11 @@ type envValues struct {
 	checkpointDedupMinChars          int
 	taskArchiveRoots                 string
 	taskSlugPattern                  string
+	rerankEnabled                    bool
+	rerankProvider                   string
+	jinaRerankerModel                string
+	rerankTimeout                    string
+	rerankTopN                       int
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -237,6 +251,11 @@ func readEnvValues() (envValues, error) {
 		checkpointDedupMinChars:          EnvInt("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
 		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
 		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
+		rerankEnabled:                    EnvBool("MCP_RERANK_ENABLED", false),
+		rerankProvider:                   EnvOrDefault("MCP_RERANK_PROVIDER", "disabled"),
+		jinaRerankerModel:                EnvOrDefault("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
+		rerankTimeout:                    EnvOrDefault("MCP_RERANK_TIMEOUT", "5s"),
+		rerankTopN:                       EnvInt("MCP_RERANK_TOP_N", 40),
 	}, nil
 }
 
@@ -363,6 +382,12 @@ func resolvePaths(ev envValues) (Config, error) {
 		CheckpointDedupMinChars:  ev.checkpointDedupMinChars,
 
 		TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+
+		RerankEnabled:     ev.rerankEnabled,
+		RerankProvider:    ev.rerankProvider,
+		JinaRerankerModel: ev.jinaRerankerModel,
+		RerankTimeout:     parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
+		RerankTopN:        ev.rerankTopN,
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
 		re, err := regexp.Compile(slugPattern)
