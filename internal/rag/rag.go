@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -858,12 +859,12 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to load keyword candidates: %w", err)
 	}
 
-	searchResults, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
+	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
 
 	// Neural reranker pass — strictly opt-in. Any error or timeout falls
 	// back to hybrid ordering without bubbling an error to the caller.
 	if vs.config.Reranker != nil && len(searchResults) > 1 {
-		searchResults = vs.applyReranker(ctx, query.Query, searchResults, debugInfo)
+		searchResults = vs.applyReranker(ctx, query.Query, searchResults, contents, debugInfo)
 	}
 
 	return &SearchResponse{
@@ -875,6 +876,12 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	}, nil
 }
 
+// maxRerankTopN caps how many candidates we send to the reranker provider.
+// Jina's /v1/rerank endpoint documents a 100-document-per-request limit;
+// exceeding it trips a 400 at the provider and we fall back to hybrid, so
+// clamp locally and log once per request when the clamp fires.
+const maxRerankTopN = 100
+
 // applyReranker runs the cross-encoder over the top-N hybrid candidates,
 // reorders them by the returned relevance scores, and decorates debug output.
 //
@@ -885,11 +892,14 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 //     signal to the debug trace.
 //   - Tail items beyond top-N are never touched; they keep their hybrid
 //     final_score and their relative order.
-//   - For the reranked head, we *replace* final_score with the rerank score
-//     (scaled to the hybrid-score range so graphs don't shift axes). The
-//     original hybrid score is still visible via ScoreBreakdown.FinalScore
-//     because buildHybridSearchResults wrote it there before we reordered.
-func (vs *vectorService) applyReranker(ctx context.Context, query string, results []SearchResult, debugInfo *SearchDebug) []SearchResult {
+//   - For the reranked head, FinalScore is replaced with the rerank score
+//     (0..1). The tail keeps its hybrid FinalScore. ScoreBreakdown still
+//     carries the original hybrid signals for downstream comparisons.
+//
+// contents[i] is the full chunk text for results[i] — we pass the full
+// content (not the 200-char display snippet) to the reranker so the
+// cross-encoder's ~8k token window is actually used.
+func (vs *vectorService) applyReranker(ctx context.Context, query string, results []SearchResult, contents []string, debugInfo *SearchDebug) []SearchResult {
 	topN := vs.config.RerankTopN
 	if topN <= 0 {
 		topN = 40
@@ -897,13 +907,24 @@ func (vs *vectorService) applyReranker(ctx context.Context, query string, result
 	if topN > len(results) {
 		topN = len(results)
 	}
+	if topN > maxRerankTopN {
+		vs.logger.Warn("rerank top_n clamped",
+			zap.Int("requested", topN),
+			zap.Int("applied", maxRerankTopN),
+		)
+		topN = maxRerankTopN
+	}
 
 	candidates := make([]reranker.Candidate, topN)
 	for i, r := range results[:topN] {
+		content := r.Snippet
+		if i < len(contents) && contents[i] != "" {
+			content = contents[i]
+		}
 		candidates[i] = reranker.Candidate{
 			ID:      r.ID,
 			Title:   r.Title,
-			Content: r.Snippet,
+			Content: content,
 		}
 	}
 
@@ -943,26 +964,30 @@ func (vs *vectorService) applyReranker(ctx context.Context, query string, result
 // branch on this string.
 func rerankErrorReason(err error) string {
 	if err == nil {
-		return "unknown"
+		return ""
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
-	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "timeout"
+		}
 		return "canceled"
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	switch {
-	case containsFold(msg, "deadline"), containsFold(msg, "timeout"):
+	case strings.Contains(msg, "deadline"), strings.Contains(msg, "timeout"):
 		return "timeout"
-	case containsFold(msg, "decode"):
+	case strings.Contains(msg, "canceled"), strings.Contains(msg, "cancelled"):
+		return "canceled"
+	case strings.Contains(msg, "decode"):
 		return "decode"
-	case containsFold(msg, "out of range"):
+	case strings.Contains(msg, "bad_index"), strings.Contains(msg, "out of range"):
 		return "bad_index"
-	case containsFold(msg, "status"):
+	case strings.Contains(msg, "http") && strings.Contains(msg, "status"):
 		return "http_error"
+	case strings.Contains(msg, "error"):
+		return "error"
 	}
-	return "error"
+	return "unknown"
 }
 
 // applyRerankScores reorders the top-N slice of results by the rerank scores
@@ -1048,33 +1073,6 @@ func applyRerankScores(results []SearchResult, scored []reranker.Scored, topN in
 	final = append(final, newHead...)
 	final = append(final, tail...)
 	return final
-}
-
-func containsFold(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i+len(substr) <= len(s); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			a := s[i+j]
-			b := substr[j]
-			if a >= 'A' && a <= 'Z' {
-				a += 'a' - 'A'
-			}
-			if b >= 'A' && b <= 'Z' {
-				b += 'a' - 'A'
-			}
-			if a != b {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
 }
 
 func (vs *vectorService) indexDocuments(ctx context.Context, docs []document) (*indexResult, error) {

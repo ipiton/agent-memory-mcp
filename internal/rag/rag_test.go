@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,7 +408,7 @@ func TestBuildHybridSearchResultsIncludesTrustMetadata(t *testing.T) {
 			Embedding:    []float32{1, 0},
 		},
 	}
-	results, debugInfo := buildHybridSearchResults(
+	results, _, debugInfo := buildHybridSearchResults(
 		"cache invalidation",
 		"",
 		searchResultsWithScores(chunks, map[string]float64{
@@ -539,7 +540,7 @@ func TestBuildHybridSearchResultsKeywordBoostsRunbook(t *testing.T) {
 			Embedding:    []float32{0.2, 0.98, 0},
 		},
 	}
-	results, debug := buildHybridSearchResults(
+	results, _, debug := buildHybridSearchResults(
 		"rollback ingress",
 		"",
 		searchResultsWithScores(chunks, map[string]float64{
@@ -603,7 +604,7 @@ func TestBuildHybridSearchResultsAppliesRecencyBoost(t *testing.T) {
 			Embedding:    []float32{1, 0, 0},
 		},
 	}
-	results, debug := buildHybridSearchResults(
+	results, _, debug := buildHybridSearchResults(
 		"release migration",
 		"changelog",
 		searchResultsWithScores(chunks, map[string]float64{
@@ -656,7 +657,7 @@ func TestBuildHybridSearchResultsFiltersBySourceType(t *testing.T) {
 			Embedding: []float32{1, 0, 0},
 		},
 	}
-	results, debug := buildHybridSearchResults(
+	results, _, debug := buildHybridSearchResults(
 		"rollback ingress",
 		"runbook",
 		searchResultsWithScores(chunks, map[string]float64{
@@ -936,11 +937,12 @@ func TestRerankErrorReason(t *testing.T) {
 	}{
 		{"deadline", context.DeadlineExceeded, "timeout"},
 		{"canceled", context.Canceled, "canceled"},
-		{"http 500", errors.New("jina returned status 500"), "http_error"},
+		{"http 500", errors.New("jina returned http status 500"), "http_error"},
 		{"decode", errors.New("failed to decode response"), "decode"},
 		{"bad index", errors.New("index 42 out of range"), "bad_index"},
-		{"nil", nil, "unknown"},
-		{"generic", errors.New("network flap"), "error"},
+		{"nil", nil, ""},
+		{"generic", errors.New("network flap error"), "error"},
+		{"unknown", errors.New("network flap"), "unknown"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -948,5 +950,134 @@ func TestRerankErrorReason(t *testing.T) {
 				t.Fatalf("rerankErrorReason(%v) = %q, want %q", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// captureReranker records the candidates it is asked to rerank so tests can
+// assert what was actually handed to the reranker (Content length, count, ...).
+type captureReranker struct {
+	mu       sync.Mutex
+	received []reranker.Candidate
+	score    func(id string) float64
+}
+
+func (c *captureReranker) Rerank(_ context.Context, _ string, candidates []reranker.Candidate) ([]reranker.Scored, error) {
+	c.mu.Lock()
+	c.received = append([]reranker.Candidate(nil), candidates...)
+	c.mu.Unlock()
+	out := make([]reranker.Scored, 0, len(candidates))
+	for _, cd := range candidates {
+		s := 0.0
+		if c.score != nil {
+			s = c.score(cd.ID)
+		}
+		out = append(out, reranker.Scored{ID: cd.ID, Score: s})
+	}
+	return out, nil
+}
+
+// TestSearchRerankerReceivesFullContent verifies Fix 1 (code review): the
+// reranker must be fed the full chunk content, not the 200-char snippet.
+// Jina cross-encoder has an 8k token window — truncating to 200 chars
+// wastes most of the signal the model can use.
+func TestSearchRerankerReceivesFullContent(t *testing.T) {
+	// Build a chunk whose Content is comfortably longer than the 200-char
+	// snippet cap so we can detect snippet vs full-content routing.
+	longContent := strings.Repeat("alpha beta gamma delta epsilon. ", 40) // ~1.2 KB
+	if len(longContent) <= 200 {
+		t.Fatalf("fixture content must exceed 200 chars, got %d", len(longContent))
+	}
+
+	now := time.Now()
+	chunks := []vectorstore.Chunk{
+		{ID: "long", DocPath: "docs/long.md", Title: "Long", Content: longContent, LastModified: now, Embedding: []float32{0.9, 0.1}},
+		{ID: "short", DocPath: "docs/short.md", Title: "Short", Content: "alpha beta", LastModified: now, Embedding: []float32{0.8, 0.2}},
+	}
+	engine := newRerankTestEngine(t, chunks)
+
+	cap := &captureReranker{
+		score: func(id string) float64 {
+			if id == "long" {
+				return 0.9
+			}
+			return 0.1
+		},
+	}
+	engine.SetReranker(cap)
+
+	if _, err := engine.Search(context.Background(), "alpha", 5, "", true); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if len(cap.received) == 0 {
+		t.Fatal("reranker received 0 candidates, want ≥1")
+	}
+	var longCand *reranker.Candidate
+	for i := range cap.received {
+		if cap.received[i].ID == "long" {
+			longCand = &cap.received[i]
+			break
+		}
+	}
+	if longCand == nil {
+		t.Fatalf("reranker did not receive the 'long' candidate; received IDs: %v", candidateIDs(cap.received))
+	}
+	// The snippet cap is 200 chars + "..." — assert we got the full content,
+	// not the snippet-truncated version.
+	if len(longCand.Content) <= 203 {
+		t.Fatalf("Content len = %d, want > 203 (full chunk, not 200-char snippet)", len(longCand.Content))
+	}
+	if longCand.Content != longContent {
+		t.Fatalf("Content mismatch: got %d bytes, want %d bytes exact match", len(longCand.Content), len(longContent))
+	}
+}
+
+func candidateIDs(cands []reranker.Candidate) []string {
+	ids := make([]string, 0, len(cands))
+	for _, c := range cands {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
+// TestApplyReranker_ClampsTopN_To_100 verifies Fix 4 (code review): the
+// reranker call must cap top_n at 100 even if configured higher, because
+// Jina's API caps at 100 documents per request.
+func TestApplyReranker_ClampsTopN_To_100(t *testing.T) {
+	now := time.Now()
+	chunks := make([]vectorstore.Chunk, 0, 150)
+	for i := 0; i < 150; i++ {
+		chunks = append(chunks, vectorstore.Chunk{
+			ID:           fmt.Sprintf("doc-%03d", i),
+			DocPath:      fmt.Sprintf("docs/doc-%03d.md", i),
+			Title:        fmt.Sprintf("Doc %03d", i),
+			Content:      fmt.Sprintf("alpha content for document %d", i),
+			LastModified: now,
+			Embedding:    []float32{float32(i%10) / 10.0, float32((i+1)%10) / 10.0},
+		})
+	}
+	engine := newRerankTestEngine(t, chunks)
+	// Bump MaxResults/RerankTopN well above the clamp so the clamp is the
+	// only thing that can limit the candidate count.
+	engine.config.RAGMaxResults = 150
+	engine.vecService.config.MaxResults = 150
+	engine.vecService.config.RerankTopN = 200
+
+	cap := &captureReranker{score: func(id string) float64 { return 0 }}
+	engine.SetReranker(cap)
+
+	if _, err := engine.Search(context.Background(), "alpha", 150, "", false); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if len(cap.received) > 100 {
+		t.Fatalf("reranker received %d candidates, want ≤ 100 (Jina cap)", len(cap.received))
+	}
+	if len(cap.received) < 100 {
+		t.Fatalf("reranker received %d candidates, want exactly 100 (clamp should apply)", len(cap.received))
 	}
 }

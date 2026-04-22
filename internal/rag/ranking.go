@@ -192,7 +192,15 @@ func confidenceBoost(confidence float64) float64 {
 	return math.Max(0, (confidence-0.50)*0.05)
 }
 
-func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool) ([]SearchResult, *SearchDebug) {
+// buildHybridSearchResults fuses semantic+keyword candidates into ordered
+// SearchResult rows and returns a parallel slice of full chunk content keyed
+// by index. The parallel content slice is consumed by the neural reranker
+// path (see vectorService.applyReranker) which needs the full chunk text —
+// the snippet in SearchResult is already truncated to 200 chars for display.
+//
+// The content slice always has the same length and ordering as the returned
+// []SearchResult, so content[i] is the full text for results[i].
+func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool) ([]SearchResult, []string, *SearchDebug) {
 	now := time.Now()
 	normalizedFilter := normalizeSourceType(sourceTypeFilter)
 
@@ -249,7 +257,14 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		candidates = append(candidates, *candidate)
 	}
 
-	searchResults := make([]SearchResult, 0, len(candidates))
+	// We keep full chunk content in a parallel slice to searchResults so the
+	// public SearchResult shape stays snippet-only (no JSON drift for API
+	// consumers) while the internal reranker path still gets the full text.
+	type resultWithContent struct {
+		result  SearchResult
+		content string
+	}
+	rows := make([]resultWithContent, 0, len(candidates))
 	for _, candidate := range candidates {
 		keywordComponent := 0.0
 		if maxKeywordScore > 0 {
@@ -262,7 +277,8 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 			score += 0.05
 		}
 
-		snippet := candidate.chunk.Content
+		fullContent := candidate.chunk.Content
+		snippet := fullContent
 		if len(snippet) > 200 {
 			snippet = snippet[:200] + "..."
 		}
@@ -291,22 +307,29 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 				AppliedBoosts: appliedBoosts(candidate, keywordComponent, confidenceComponent),
 			}
 		}
-		searchResults = append(searchResults, result)
+		rows = append(rows, resultWithContent{result: result, content: fullContent})
 	}
 
-	sort.Slice(searchResults, func(i, j int) bool {
-		if searchResults[i].Score == searchResults[j].Score {
-			return searchResults[i].LastModified.After(searchResults[j].LastModified)
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].result.Score == rows[j].result.Score {
+			return rows[i].result.LastModified.After(rows[j].result.LastModified)
 		}
-		return searchResults[i].Score > searchResults[j].Score
+		return rows[i].result.Score > rows[j].result.Score
 	})
 
-	if len(searchResults) > limit {
-		searchResults = searchResults[:limit]
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	searchResults := make([]SearchResult, len(rows))
+	contents := make([]string, len(rows))
+	for i, row := range rows {
+		searchResults[i] = row.result
+		contents[i] = row.content
 	}
 
 	if !debug {
-		return searchResults, nil
+		return searchResults, contents, nil
 	}
 
 	debugInfo := &SearchDebug{
@@ -329,7 +352,7 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		debugInfo.AppliedFilters = []string{fmt.Sprintf("source_type=%s", normalizedFilter)}
 	}
 
-	return searchResults, debugInfo
+	return searchResults, contents, debugInfo
 }
 
 func appliedBoosts(candidate hybridCandidate, keywordComponent float64, confidenceComponent float64) []string {
