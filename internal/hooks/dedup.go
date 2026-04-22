@@ -13,18 +13,33 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+)
+
+// Reason values returned in DedupResult.Reason and passed to
+// Store.IncrementDedupSkipped. Exported so callers (hooks CLI, tests) do
+// not hardcode string literals.
+const (
+	// ReasonSimilar indicates the candidate summary's Jaccard similarity
+	// against the most recent session-checkpoint in the same context
+	// was at or above cfg.Threshold.
+	ReasonSimilar = "similar"
+	// ReasonEmpty indicates the candidate summary was shorter than
+	// cfg.MinContentChars after whitespace trimming, or was entirely
+	// whitespace (which is always skipped regardless of MinContentChars).
+	ReasonEmpty = "empty"
 )
 
 // DedupResult describes the decision made by Check.
 type DedupResult struct {
 	// Skip is true when the caller should NOT persist the new record.
 	Skip bool
-	// Reason is one of "empty" | "similar" | "" (no skip).
+	// Reason is one of ReasonEmpty | ReasonSimilar | "" (no skip).
 	Reason string
 	// SimilarID is the ID of the most recent previous record that
-	// triggered a "similar" skip; empty for "empty" or no-skip.
+	// triggered a ReasonSimilar skip; empty for ReasonEmpty or no-skip.
 	SimilarID string
 	// Similarity is the Jaccard score vs. the previous record (0..1).
 	Similarity float64
@@ -45,22 +60,27 @@ type DedupConfig struct {
 	Window time.Duration
 }
 
-// Check decides whether a pre-store hook invocation should skip persisting
-// the summary. It is cheap: a single context-indexed read + Jaccard over
-// lowercased whitespace-and-punctuation tokens. No embedder calls.
-//
-// The function is read-only on the store (RLock via snapshotForContext).
+// Check compares the candidate summary against the most recent session-checkpoint
+// in the same context within cfg.Window. It is cheap: a read-locked cache snapshot +
+// a single Store.Get + Jaccard similarity on token sets. No embedder calls.
 //
 // If cfg.Threshold <= 0 the similarity gate is disabled and Check only
-// honours the empty-content filter (when MinContentChars > 0).
+// honours the empty-content filter. Empty/whitespace-only summaries are
+// always skipped with ReasonEmpty regardless of cfg.MinContentChars.
 func Check(ctx context.Context, store *memory.Store, summary memory.SessionSummary, cfg DedupConfig) (DedupResult, error) {
 	if store == nil {
 		return DedupResult{}, nil
 	}
 
 	trimmed := strings.TrimSpace(summary.Summary)
+	// Whitespace-only summaries are never useful to persist: short-circuit
+	// regardless of MinContentChars so downstream Jaccard isn't forced to
+	// handle an empty token set.
+	if trimmed == "" {
+		return DedupResult{Skip: true, Reason: ReasonEmpty}, nil
+	}
 	if cfg.MinContentChars > 0 && len(trimmed) < cfg.MinContentChars {
-		return DedupResult{Skip: true, Reason: "empty"}, nil
+		return DedupResult{Skip: true, Reason: ReasonEmpty}, nil
 	}
 
 	if cfg.Threshold <= 0 {
@@ -86,7 +106,7 @@ func Check(ctx context.Context, store *memory.Store, summary memory.SessionSumma
 	if score >= cfg.Threshold {
 		return DedupResult{
 			Skip:       true,
-			Reason:     "similar",
+			Reason:     ReasonSimilar,
 			SimilarID:  last.ID,
 			Similarity: score,
 		}, nil
@@ -95,9 +115,10 @@ func Check(ctx context.Context, store *memory.Store, summary memory.SessionSumma
 }
 
 // JaccardSimilarity computes the Jaccard index over lowercased word-like
-// tokens extracted from a and b. Tokenisation splits on whitespace and
-// the common punctuation characters ",.;:!?\"'()[]{}<>/\\`~" so that
-// phrases like "foo, bar." tokenise to {"foo","bar"}.
+// tokens extracted from a and b. Tokenisation splits on any Unicode
+// whitespace, punctuation, or symbol rune — so phrases like "foo, bar."
+// or "Исправил баг — обновил конфиг, закоммитил" tokenise to the
+// expected word set without typographic punctuation leaking into tokens.
 //
 // Returns 0 when either side has no tokens.
 func JaccardSimilarity(a, b string) float64 {
@@ -145,14 +166,11 @@ func tokenSet(s string) map[string]struct{} {
 	return out
 }
 
+// isTokenSeparator reports whether r should break token boundaries.
+// Uses Unicode categories so typographic punctuation («»—„"‚‘' etc.),
+// Cyrillic/other-script whitespace, and currency/math symbols are all
+// treated as separators. This keeps Russian-language summaries with
+// em-dashes and typographic quotes from producing spurious tokens.
 func isTokenSeparator(r rune) bool {
-	switch r {
-	case ' ', '\t', '\n', '\r', '\v', '\f':
-		return true
-	case ',', '.', ';', ':', '!', '?', '"', '\'',
-		'(', ')', '[', ']', '{', '}', '<', '>',
-		'/', '\\', '`', '~':
-		return true
-	}
-	return false
+	return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
 }

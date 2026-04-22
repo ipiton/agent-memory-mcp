@@ -21,12 +21,12 @@ func newTestStore(t *testing.T) *memory.Store {
 	return store
 }
 
-func storeCheckpoint(t *testing.T, store *memory.Store, context, content string) string {
+func storeCheckpoint(t *testing.T, store *memory.Store, ctxName, content string) string {
 	t.Helper()
 	m := &memory.Memory{
 		Content: content,
 		Type:    memory.TypeEpisodic,
-		Context: context,
+		Context: ctxName,
 		Tags:    []string{"session-checkpoint"},
 		Metadata: map[string]string{
 			memory.MetadataRecordKind:      memory.RecordKindSessionCheckpoint,
@@ -34,13 +34,11 @@ func storeCheckpoint(t *testing.T, store *memory.Store, context, content string)
 			memory.MetadataSessionOrigin:   "hook_checkpoint",
 		},
 	}
-	if err := store.Store(context2ctx(), m); err != nil {
+	if err := store.Store(context.Background(), m); err != nil {
 		t.Fatalf("store: %v", err)
 	}
 	return m.ID
 }
-
-func context2ctx() context.Context { return context.Background() }
 
 func newSummary(ctxName, body string) memory.SessionSummary {
 	return memory.SessionSummary{
@@ -69,7 +67,7 @@ func TestCheck_IdenticalContent_Skip(t *testing.T) {
 	if !result.Skip {
 		t.Fatalf("expected Skip=true for identical content, got %+v", result)
 	}
-	if result.Reason != "similar" {
+	if result.Reason != ReasonSimilar {
 		t.Fatalf("expected reason=similar, got %q", result.Reason)
 	}
 	if result.SimilarID != id {
@@ -102,7 +100,7 @@ func TestCheck_EmptyContent_SkipEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if !result.Skip || result.Reason != "empty" {
+	if !result.Skip || result.Reason != ReasonEmpty {
 		t.Fatalf("expected Skip=true reason=empty, got %+v", result)
 	}
 }
@@ -114,7 +112,7 @@ func TestCheck_ShortContent_SkipEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if !result.Skip || result.Reason != "empty" {
+	if !result.Skip || result.Reason != ReasonEmpty {
 		t.Fatalf("expected Skip=true reason=empty for short content, got %+v", result)
 	}
 }
@@ -216,5 +214,46 @@ func TestJaccardSimilarity(t *testing.T) {
 				t.Fatalf("got %f want %f", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestJaccardSimilarity_UnicodeRussianPunctuation verifies that the tokenizer
+// correctly treats typographic punctuation (em-dash, typographic quotes,
+// typographic comma) as separators for non-ASCII (Cyrillic) text. Before the
+// unicode-aware tokenizer fix, these separators leaked into tokens and drove
+// similarity below 1.0 for otherwise-identical Russian summaries.
+func TestJaccardSimilarity_UnicodeRussianPunctuation(t *testing.T) {
+	summary1 := "Исправил баг — обновил конфиг, закоммитил"
+	summary2 := "Исправил баг, обновил конфиг — закоммитил"
+
+	got := JaccardSimilarity(summary1, summary2)
+	if got < 0.9 {
+		t.Fatalf("expected similarity > 0.9 for Russian text with different punctuation, got %f", got)
+	}
+}
+
+// TestCheck_MinCharsZero_ShortContentPassesEmptyCheck documents the behaviour
+// that a zero-byte (whitespace-only) summary is still skipped with
+// reason=empty even when MinContentChars == 0. Rationale: empty content is
+// never useful to persist; any tokenless summary would also produce an
+// undefined Jaccard score downstream, so we short-circuit here.
+func TestCheck_MinCharsZero_ShortContentPassesEmptyCheck(t *testing.T) {
+	store := newTestStore(t)
+
+	cfg := DedupConfig{
+		Threshold:       0.9,
+		MinContentChars: 0,
+		Window:          10 * time.Minute,
+	}
+
+	result, err := Check(context.Background(), store, newSummary("proj-x", "   \n\t  "), cfg)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !result.Skip {
+		t.Fatalf("expected Skip=true for empty content even with MinContentChars=0, got %+v", result)
+	}
+	if result.Reason != ReasonEmpty {
+		t.Fatalf("expected reason=empty, got %q", result.Reason)
 	}
 }

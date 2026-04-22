@@ -279,12 +279,19 @@ func runAutoCapture(args []string) {
 		},
 	}
 
-	if dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg)); err == nil && dedup.Skip {
+	// Note: LastInContext only matches session-checkpoint records, so in the
+	// auto-capture path this effectively guards only the "empty" case. If we
+	// want to dedup auto-capture summaries too, extend LastInContext with a
+	// recordKind parameter.
+	dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
+	} else if dedup.Skip {
 		store.IncrementDedupSkipped(dedup.Reason)
 		switch dedup.Reason {
-		case "similar":
+		case hooks.ReasonSimilar:
 			fmt.Printf("Auto-capture skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
-		case "empty":
+		case hooks.ReasonEmpty:
 			fmt.Println("Auto-capture skipped: content too short")
 		default:
 			fmt.Println("Auto-capture skipped")
@@ -358,12 +365,15 @@ func runCheckpoint(args []string) {
 		extraTags = append(extraTags, boundaryValue)
 	}
 
-	if dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg)); err == nil && dedup.Skip {
+	dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
+	} else if dedup.Skip {
 		store.IncrementDedupSkipped(dedup.Reason)
 		switch dedup.Reason {
-		case "similar":
+		case hooks.ReasonSimilar:
 			fmt.Printf("Checkpoint skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
-		case "empty":
+		case hooks.ReasonEmpty:
 			fmt.Println("Checkpoint skipped: content too short")
 		default:
 			fmt.Println("Checkpoint skipped")
