@@ -12,6 +12,11 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 )
 
+// sourceBoostSecondary is the retrieval boost applied to secondary knowledge
+// artifacts (dead_end, changelog, adr, etc.) when the query matches their
+// keyword profile. Runbooks/postmortems use the stronger primary boost (0.08).
+const sourceBoostSecondary = 0.07
+
 type hybridCandidate struct {
 	chunk         vectorstore.Chunk
 	sourceType    string
@@ -94,8 +99,10 @@ func sourceAwareBoost(query string, sourceType string) float64 {
 			return 0.07
 		}
 	case "dead_end":
-		if scoring.ContainsAny(queryLower, "how to", "approach", "try", "failed", "pitfall", "why not", "lesson", "avoid") {
-			return 0.07
+		// Pass the raw query — IsPitfallQuery handles case-insensitivity and
+		// uses word-boundary matching so "retry storm" won't fire "try".
+		if scoring.IsPitfallQuery(query) {
+			return sourceBoostSecondary
 		}
 	}
 

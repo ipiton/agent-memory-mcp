@@ -271,6 +271,7 @@ func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
 		prefixedLine("Decision", decision), prefixedLine("Rationale", mustString(args, "rationale")),
 		prefixedLine("Consequences", mustString(args, "consequences")), prefixedLine("Service", mustString(args, "service")),
 		prefixedLine("Owner", owner), prefixedLine("Status", mustString(args, "status")),
+		prefixedLine("Avoided dead end", mustString(args, "avoided_dead_end_id")),
 	)
 	extraMeta := map[string]string{"owner": owner}
 	if avoidedID := strings.TrimSpace(mustString(args, "avoided_dead_end_id")); avoidedID != "" {

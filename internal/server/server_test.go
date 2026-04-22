@@ -671,6 +671,21 @@ func TestCallRecallMemoryBlendsDeadEndOnPitfallKeyword(t *testing.T) {
 	if !deadEndInResults && !suggested {
 		t.Fatalf("expected dead_end either in results or as suggestion, got:\n%s", text)
 	}
+
+	// Regression: the blend must not mutate stored tags. The
+	// `suggestion:dead_end` marker may appear in the returned output but must
+	// never be persisted on the stored memory itself.
+	all, err := s.memoryStore.List(context.Background(), memory.Filters{}, 100)
+	if err != nil {
+		t.Fatalf("List after blend: %v", err)
+	}
+	for _, m := range all {
+		for _, tag := range m.Tags {
+			if tag == "suggestion:dead_end" {
+				t.Fatalf("stored memory %q tags mutated with suggestion marker: %v", m.ID, m.Tags)
+			}
+		}
+	}
 }
 
 func TestCallRecallMemoryNoBlendWhenQueryHasNoPitfallKeyword(t *testing.T) {
@@ -724,6 +739,13 @@ func TestIsDeadEndKeywordQueryTable(t *testing.T) {
 		{"", false},
 		{"catalog service public API schema", false},
 		{"how much memory does ingester use", false}, // near-miss: "how " without "how to"
+		// Regression: word-boundary matching must suppress substring hits.
+		{"retry storm diagnosis", false},    // "retry" must not fire "try"
+		{"country code validator", false},   // "country" must not fire "try"
+		{"entry point config", false},       // "entry" must not fire "try"
+		{"unavoidable dependency", false},   // "unavoidable" must not fire "avoid"
+		{"devoid of tests", false},          // "devoid" must not fire "avoid"
+		{"poultry counting service", false}, // "poultry" must not fire "try"
 	}
 	for _, c := range cases {
 		got := isDeadEndKeywordQuery(c.q)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -130,19 +131,10 @@ func (s *MCPServer) callRecallMemory(args map[string]any) (any, *rpcError) {
 }
 
 // isDeadEndKeywordQuery reports whether the query hints at trying an approach
-// that may already be recorded as a dead_end. Substring match on a small
-// curated list of pitfall keywords.
+// that may already be recorded as a dead_end. Thin wrapper around
+// scoring.IsPitfallQuery so tests and call sites stay local to this package.
 func isDeadEndKeywordQuery(q string) bool {
-	q = strings.ToLower(strings.TrimSpace(q))
-	if q == "" {
-		return false
-	}
-	for _, kw := range []string{"how to", "approach", "try", "failed", "pitfall", "why not", "lesson", "avoid"} {
-		if strings.Contains(q, kw) {
-			return true
-		}
-	}
-	return false
+	return scoring.IsPitfallQuery(q)
 }
 
 func containsDeadEndResult(results []*memory.SearchResult) bool {

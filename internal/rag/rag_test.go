@@ -509,6 +509,13 @@ func TestSourceAwareBoostDeadEnd(t *testing.T) {
 	if got := sourceAwareBoost("", "dead_end"); got != 0 {
 		t.Fatalf("sourceAwareBoost dead_end empty query = %.3f, want 0", got)
 	}
+	// Regression: word-boundary matching must suppress "try" inside "retry".
+	if got := sourceAwareBoost("retry storm", "dead_end"); got != 0 {
+		t.Fatalf("sourceAwareBoost dead_end on 'retry storm' = %.3f, want 0 (substring false positive)", got)
+	}
+	if got := sourceAwareBoost("unavoidable dependency graph", "dead_end"); got != 0 {
+		t.Fatalf("sourceAwareBoost dead_end on 'unavoidable dependency graph' = %.3f, want 0 (substring false positive)", got)
+	}
 }
 
 func TestBuildHybridSearchResultsKeywordBoostsRunbook(t *testing.T) {
