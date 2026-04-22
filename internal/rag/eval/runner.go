@@ -119,7 +119,7 @@ func (h *Harness) RunAll(ctx context.Context) ([]QAResult, *EvalMetrics, error) 
 // RunQuery runs a single QAQuery through the engine and returns the matched
 // QAResult including rank of the first expected doc ID.
 func (h *Harness) RunQuery(ctx context.Context, q QAQuery) (QAResult, error) {
-	resp, err := h.engine.Search(ctx, q.Question, h.k, q.SourceType, false)
+	resp, err := h.engine.Search(ctx, q.Question, h.k, q.SourceType, true)
 	if err != nil {
 		return QAResult{Query: q, FirstHit: -1}, err
 	}
