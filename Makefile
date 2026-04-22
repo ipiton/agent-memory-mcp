@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet local-smoke eval eval-update
+.PHONY: build run test vet local-smoke eval eval-update eval-rerank
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/agent-memory-mcp
@@ -27,3 +27,8 @@ eval:
 # caused the metrics to move.
 eval-update:
 	go test -tags=eval ./internal/rag/eval/ -args -update-baseline
+
+# Run the T44 rerank eval variant that compares no-rerank, oracle, and
+# reversing rerankers on the same corpus. Logs MRR deltas for inspection.
+eval-rerank:
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run TestRetrievalEval_WithRerankMock

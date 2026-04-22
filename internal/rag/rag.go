@@ -3,6 +3,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 	"github.com/ipiton/agent-memory-mcp/internal/logger"
+	"github.com/ipiton/agent-memory-mcp/internal/reranker"
 	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
@@ -55,6 +57,13 @@ type ScoreBreakdown struct {
 	SourceBoost       float64 `json:"source_boost"`
 	ConfidenceBoost   float64 `json:"confidence_boost"`
 	FinalScore        float64 `json:"final_score"`
+	// RerankScore is the neural reranker's relevance score for this result
+	// when reranking was applied; 0 for hybrid-only / tail items. Present
+	// only when SearchDebug.RankingSignals contains "+ neural_reranker".
+	RerankScore float64 `json:"rerank_score,omitempty"`
+	// RerankTimeMs is the total wall time of the reranker HTTP call, copied
+	// onto every reranked result for convenience when debugging latency.
+	RerankTimeMs int64 `json:"rerank_time_ms,omitempty"`
 }
 
 // SearchDebug explains filters and ranking signals applied to the whole response.
@@ -97,6 +106,13 @@ type vecServiceConfig struct {
 	IndexPath  string
 	Embedder   *embedder.Embedder
 	MaxResults int
+	// Reranker is optional. When nil the search path skips the rerank step
+	// entirely. When non-nil, the top-RerankTopN hybrid candidates are passed
+	// to Reranker.Rerank with a RerankTimeout-scoped context; any error or
+	// timeout falls back to the hybrid ordering.
+	Reranker       reranker.Reranker
+	RerankTopN     int
+	RerankTimeout  time.Duration
 }
 
 type document struct {
@@ -185,10 +201,48 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		return nil
 	}
 
+	// Build optional neural reranker. A disabled provider (empty or
+	// "disabled") returns ErrDisabled which we treat as non-fatal: the
+	// pipeline falls back to hybrid-only ranking. An unknown provider is
+	// logged at Warn but also degrades gracefully — we do not want to break
+	// the RAG engine over a misconfigured optional feature.
+	var rerankProv reranker.Reranker
+	if cfg.RerankEnabled {
+		rp, rerr := reranker.New(reranker.Config{
+			Provider: cfg.RerankProvider,
+			Model:    cfg.JinaRerankerModel,
+			APIKey:   cfg.JinaAPIKey,
+			Timeout:  cfg.RerankTimeout,
+			TopN:     cfg.RerankTopN,
+		}, zapLogger)
+		switch {
+		case rerr == nil:
+			rerankProv = rp
+			zapLogger.Info("Neural reranker enabled",
+				zap.String("provider", cfg.RerankProvider),
+				zap.String("model", cfg.JinaRerankerModel),
+				zap.Duration("timeout", cfg.RerankTimeout),
+				zap.Int("top_n", cfg.RerankTopN),
+			)
+		case errors.Is(rerr, reranker.ErrDisabled):
+			zapLogger.Info("Neural reranker disabled by provider config",
+				zap.String("provider", cfg.RerankProvider),
+			)
+		default:
+			zapLogger.Warn("Neural reranker init failed, falling back to hybrid-only",
+				zap.Error(rerr),
+				zap.String("provider", cfg.RerankProvider),
+			)
+		}
+	}
+
 	vecSvc, err := newVectorService(vecServiceConfig{
-		IndexPath:  cfg.RAGIndexPath,
-		Embedder:   emb,
-		MaxResults: cfg.RAGMaxResults,
+		IndexPath:     cfg.RAGIndexPath,
+		Embedder:      emb,
+		MaxResults:    cfg.RAGMaxResults,
+		Reranker:      rerankProv,
+		RerankTopN:    cfg.RerankTopN,
+		RerankTimeout: cfg.RerankTimeout,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {
@@ -672,6 +726,25 @@ func (re *Engine) indexWithLock(trigger string) {
 	}
 }
 
+// SetReranker replaces the engine's neural reranker at runtime. It is
+// intended for tests and harness wiring — production configures the reranker
+// via config.Config. Passing nil disables the rerank step.
+//
+// The default timeout/top_n values kick in when they were never configured
+// (zero on the underlying vecServiceConfig): 5 seconds and 40 candidates.
+func (re *Engine) SetReranker(r reranker.Reranker) {
+	if re == nil || re.vecService == nil {
+		return
+	}
+	re.vecService.config.Reranker = r
+	if re.vecService.config.RerankTimeout <= 0 {
+		re.vecService.config.RerankTimeout = 5 * time.Second
+	}
+	if re.vecService.config.RerankTopN <= 0 {
+		re.vecService.config.RerankTopN = 40
+	}
+}
+
 // Stop gracefully stops the Engine, terminating the file watcher
 // and waiting for background goroutines to finish.
 func (re *Engine) Stop() {
@@ -787,6 +860,12 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 
 	searchResults, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
 
+	// Neural reranker pass — strictly opt-in. Any error or timeout falls
+	// back to hybrid ordering without bubbling an error to the caller.
+	if vs.config.Reranker != nil && len(searchResults) > 1 {
+		searchResults = vs.applyReranker(ctx, query.Query, searchResults, debugInfo)
+	}
+
 	return &SearchResponse{
 		Query:      query.Query,
 		Results:    searchResults,
@@ -794,6 +873,208 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		SearchTime: time.Since(startTime).Milliseconds(),
 		Debug:      debugInfo,
 	}, nil
+}
+
+// applyReranker runs the cross-encoder over the top-N hybrid candidates,
+// reorders them by the returned relevance scores, and decorates debug output.
+//
+// Fallback rules (CRITICAL — must stay intact so search stays alive under
+// provider outages):
+//   - If Reranker.Rerank returns an error or the context deadline fires, we
+//     keep the original hybrid ordering and append a "rerank_failed:<reason>"
+//     signal to the debug trace.
+//   - Tail items beyond top-N are never touched; they keep their hybrid
+//     final_score and their relative order.
+//   - For the reranked head, we *replace* final_score with the rerank score
+//     (scaled to the hybrid-score range so graphs don't shift axes). The
+//     original hybrid score is still visible via ScoreBreakdown.FinalScore
+//     because buildHybridSearchResults wrote it there before we reordered.
+func (vs *vectorService) applyReranker(ctx context.Context, query string, results []SearchResult, debugInfo *SearchDebug) []SearchResult {
+	topN := vs.config.RerankTopN
+	if topN <= 0 {
+		topN = 40
+	}
+	if topN > len(results) {
+		topN = len(results)
+	}
+
+	candidates := make([]reranker.Candidate, topN)
+	for i, r := range results[:topN] {
+		candidates[i] = reranker.Candidate{
+			ID:      r.ID,
+			Title:   r.Title,
+			Content: r.Snippet,
+		}
+	}
+
+	timeout := vs.config.RerankTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	started := time.Now()
+	scored, err := vs.config.Reranker.Rerank(rctx, query, candidates)
+	elapsed := time.Since(started).Milliseconds()
+
+	if err != nil {
+		vs.logger.Warn("Rerank failed, falling back to hybrid ordering",
+			zap.Error(err),
+			zap.Int64("elapsed_ms", elapsed),
+			zap.Int("top_n", topN),
+		)
+		if debugInfo != nil {
+			debugInfo.RankingSignals = append(debugInfo.RankingSignals, "rerank_failed:"+rerankErrorReason(err))
+		}
+		return results
+	}
+
+	reordered := applyRerankScores(results, scored, topN, elapsed)
+	if debugInfo != nil {
+		debugInfo.RankingSignals = append(debugInfo.RankingSignals, "+ neural_reranker")
+	}
+	return reordered
+}
+
+// rerankErrorReason compresses an error into a short, lowercase token that
+// can be safely embedded in the debug trace (e.g. "timeout", "http_error",
+// "decode"). Used for observability, not for logic — callers must never
+// branch on this string.
+func rerankErrorReason(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	msg := err.Error()
+	switch {
+	case containsFold(msg, "deadline"), containsFold(msg, "timeout"):
+		return "timeout"
+	case containsFold(msg, "decode"):
+		return "decode"
+	case containsFold(msg, "out of range"):
+		return "bad_index"
+	case containsFold(msg, "status"):
+		return "http_error"
+	}
+	return "error"
+}
+
+// applyRerankScores reorders the top-N slice of results by the rerank scores
+// (higher first), appends the untouched tail, and populates per-result
+// RerankScore / RerankTimeMs in debug breakdowns.
+//
+// Candidates present in the rerank response but missing from results (should
+// never happen) are ignored; candidates present in results but missing from
+// the rerank response are placed after the scored ones in their original
+// order so no result is ever dropped.
+//
+// We explicitly sort the head by rerank score (descending) rather than
+// trusting the response order. The Jina API documents a score-sorted
+// response, but a stable sort keyed on score keeps us robust against
+// provider drift and simplifies in-process mock rerankers that return
+// candidates in input order.
+func applyRerankScores(results []SearchResult, scored []reranker.Scored, topN int, elapsedMs int64) []SearchResult {
+	if topN <= 0 || len(results) == 0 {
+		return results
+	}
+	if topN > len(results) {
+		topN = len(results)
+	}
+
+	head := results[:topN]
+	tail := results[topN:]
+
+	byID := make(map[string]int, len(head))
+	for i, r := range head {
+		byID[r.ID] = i
+	}
+
+	type scoredItem struct {
+		id    string
+		score float64
+		pos   int // original head position, used as tiebreaker
+	}
+
+	items := make([]scoredItem, 0, len(scored))
+	scoreByID := make(map[string]float64, len(scored))
+	for _, s := range scored {
+		idx, ok := byID[s.ID]
+		if !ok {
+			continue
+		}
+		if _, dup := scoreByID[s.ID]; dup {
+			continue
+		}
+		scoreByID[s.ID] = s.Score
+		items = append(items, scoredItem{id: s.ID, score: s.Score, pos: idx})
+	}
+
+	// Stable sort: higher score first; ties keep original head order.
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].score == items[j].score {
+			return items[i].pos < items[j].pos
+		}
+		return items[i].score > items[j].score
+	})
+
+	// Rebuild head in rerank order, then append any head items the reranker
+	// skipped (in their original order).
+	seen := make(map[string]struct{}, len(items))
+	newHead := make([]SearchResult, 0, topN)
+	for _, it := range items {
+		item := head[it.pos]
+		item.Score = it.score
+		if item.Debug != nil {
+			item.Debug.Breakdown.RerankScore = it.score
+			item.Debug.Breakdown.RerankTimeMs = elapsedMs
+		}
+		newHead = append(newHead, item)
+		seen[it.id] = struct{}{}
+	}
+	for _, r := range head {
+		if _, done := seen[r.ID]; done {
+			continue
+		}
+		newHead = append(newHead, r)
+	}
+
+	final := make([]SearchResult, 0, len(results))
+	final = append(final, newHead...)
+	final = append(final, tail...)
+	return final
+}
+
+func containsFold(s, substr string) bool {
+	if len(substr) > len(s) {
+		return false
+	}
+	for i := 0; i+len(substr) <= len(s); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			a := s[i+j]
+			b := substr[j]
+			if a >= 'A' && a <= 'Z' {
+				a += 'a' - 'A'
+			}
+			if b >= 'A' && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
 
 func (vs *vectorService) indexDocuments(ctx context.Context, docs []document) (*indexResult, error) {

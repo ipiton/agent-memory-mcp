@@ -19,6 +19,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
+	"github.com/ipiton/agent-memory-mcp/internal/reranker"
 )
 
 // HarnessConfig controls where the harness sources corpus/QA data and how it
@@ -28,6 +29,11 @@ type HarnessConfig struct {
 	QAPath       string
 	BaselinePath string
 	K            int
+	// Reranker, when non-nil, is injected into the engine via
+	// rag.Engine.SetReranker after indexing. Used by T44 eval tests to
+	// compare oracle/reversing/no-rerank retrieval quality. Production
+	// plumbing goes through config.Config and does not touch this field.
+	Reranker reranker.Reranker
 }
 
 // Harness wires up a temporary RAG engine against a test corpus and exposes
@@ -92,6 +98,10 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 
 	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatalf("index documents: %v", err)
+	}
+
+	if cfg.Reranker != nil {
+		engine.SetReranker(cfg.Reranker)
 	}
 
 	return &Harness{

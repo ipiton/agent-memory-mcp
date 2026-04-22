@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
+	"github.com/ipiton/agent-memory-mcp/internal/reranker"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
 )
@@ -687,5 +689,264 @@ func TestBuildHybridSearchResultsFiltersBySourceType(t *testing.T) {
 	}
 	if results[0].Path != "runbooks/ingress-rollback.md" {
 		t.Fatalf("Path = %q, want runbooks/ingress-rollback.md", results[0].Path)
+	}
+}
+
+// --- T44 neural reranker integration tests ---
+
+// fakeReranker is an in-process Reranker that rewrites scores according to
+// the ordering fn provided by the test. Used to verify the integration path
+// in vectorService.search end-to-end.
+type fakeReranker struct {
+	score func(id string) float64
+	// blockFor makes Rerank wait this long before responding. Used to
+	// simulate a provider that misses its deadline.
+	blockFor time.Duration
+	// fail, when set, makes Rerank return an error instead.
+	fail error
+}
+
+func (f *fakeReranker) Rerank(ctx context.Context, _ string, candidates []reranker.Candidate) ([]reranker.Scored, error) {
+	if f.blockFor > 0 {
+		select {
+		case <-time.After(f.blockFor):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	out := make([]reranker.Scored, 0, len(candidates))
+	for _, c := range candidates {
+		out = append(out, reranker.Scored{ID: c.ID, Score: f.score(c.ID)})
+	}
+	return out, nil
+}
+
+// newRerankTestEngine builds a minimal engine with a seeded in-memory
+// vector store and a stubbed embedder that the deterministic-embedding
+// helper already handles. Use SetReranker to inject the fake.
+func newRerankTestEngine(t *testing.T, chunks []vectorstore.Chunk) *Engine {
+	t.Helper()
+
+	embeddingServer := newTestEmbeddingServer(t)
+	t.Cleanup(embeddingServer.Close)
+
+	emb, err := embedder.New(embedder.Config{
+		OllamaBaseURL: embeddingServer.URL,
+		Dimension:     2,
+		Mode:          "local-only",
+		MaxRetries:    0,
+		Timeout:       time.Second,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("embedder.New: %v", err)
+	}
+
+	store, err := vectorstore.NewSQLiteStore(filepath.Join(t.TempDir(), "vectors.db"), 2, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.Upsert(chunks); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	return &Engine{
+		config: config.Config{
+			RAGMaxResults: 10,
+		},
+		logger: zap.NewNop(),
+		vecService: &vectorService{
+			config: vecServiceConfig{
+				Embedder:      emb,
+				MaxResults:    10,
+				RerankTopN:    40,
+				RerankTimeout: time.Second,
+			},
+			logger: zap.NewNop(),
+			store:  store,
+		},
+		stopWatcher: make(chan struct{}),
+	}
+}
+
+// rerankTestChunks returns a fixture where hybrid search returns them in
+// natural ID order; a reranker that inverts the score lets us verify reorder.
+func rerankTestChunks() []vectorstore.Chunk {
+	now := time.Now()
+	return []vectorstore.Chunk{
+		{ID: "first", DocPath: "docs/first.md", Title: "First", Content: "alpha beta gamma", LastModified: now, Embedding: []float32{0.9, 0.1}},
+		{ID: "second", DocPath: "docs/second.md", Title: "Second", Content: "alpha beta", LastModified: now, Embedding: []float32{0.8, 0.2}},
+		{ID: "third", DocPath: "docs/third.md", Title: "Third", Content: "alpha", LastModified: now, Embedding: []float32{0.7, 0.3}},
+	}
+}
+
+func TestSearchAppliesReranker(t *testing.T) {
+	engine := newRerankTestEngine(t, rerankTestChunks())
+
+	// Reranker makes "third" the new top (highest score). Without rerank,
+	// "third" would rank last (worst keyword/semantic overlap).
+	engine.SetReranker(&fakeReranker{
+		score: func(id string) float64 {
+			switch id {
+			case "third":
+				return 0.99
+			case "second":
+				return 0.50
+			default:
+				return 0.10
+			}
+		},
+	})
+
+	resp, err := engine.Search(context.Background(), "alpha", 5, "", true)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(resp.Results) < 2 {
+		t.Fatalf("results = %d, want ≥2", len(resp.Results))
+	}
+	if resp.Results[0].ID != "third" {
+		t.Fatalf("top result = %q, want %q (reranker should have promoted it)", resp.Results[0].ID, "third")
+	}
+	if resp.Debug == nil {
+		t.Fatal("Debug = nil, want populated debug info")
+	}
+	signals := strings.Join(resp.Debug.RankingSignals, ",")
+	if !strings.Contains(signals, "+ neural_reranker") {
+		t.Fatalf("ranking signals = %v, want '+ neural_reranker'", resp.Debug.RankingSignals)
+	}
+	if resp.Results[0].Debug == nil || resp.Results[0].Debug.Breakdown.RerankScore <= 0 {
+		t.Fatalf("expected RerankScore > 0 on top result, got %+v", resp.Results[0].Debug)
+	}
+}
+
+func TestSearchFallsBackOnRerankTimeout(t *testing.T) {
+	engine := newRerankTestEngine(t, rerankTestChunks())
+
+	// Tighten the timeout so we can fail fast without slowing CI.
+	engine.vecService.config.RerankTimeout = 50 * time.Millisecond
+
+	engine.SetReranker(&fakeReranker{
+		blockFor: 2 * time.Second, // well past the 50ms timeout above
+		score:    func(id string) float64 { return 0 },
+	})
+
+	started := time.Now()
+	resp, err := engine.Search(context.Background(), "alpha", 5, "", true)
+	elapsed := time.Since(started)
+
+	if err != nil {
+		t.Fatalf("Search should fall back on rerank timeout, got error: %v", err)
+	}
+	// Hybrid fallback must finish within roughly the rerank timeout plus
+	// bookkeeping — certainly well under the reranker's blockFor.
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("Search took %v, want fast fallback (<1.5s)", elapsed)
+	}
+	if resp.Debug == nil {
+		t.Fatal("Debug = nil")
+	}
+	signals := strings.Join(resp.Debug.RankingSignals, ",")
+	if !strings.Contains(signals, "rerank_failed:") {
+		t.Fatalf("ranking signals = %v, want rerank_failed marker", resp.Debug.RankingSignals)
+	}
+	if strings.Contains(signals, "+ neural_reranker") {
+		t.Fatalf("ranking signals = %v, should NOT claim neural_reranker applied on failure", resp.Debug.RankingSignals)
+	}
+}
+
+func TestSearchSkipsRerankWhenDisabled(t *testing.T) {
+	engine := newRerankTestEngine(t, rerankTestChunks())
+	// Deliberately no SetReranker call — feature off.
+
+	resp, err := engine.Search(context.Background(), "alpha", 5, "", true)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if resp.Debug == nil {
+		t.Fatal("Debug = nil")
+	}
+	signals := strings.Join(resp.Debug.RankingSignals, ",")
+	if strings.Contains(signals, "+ neural_reranker") {
+		t.Fatalf("ranking signals = %v, want NO neural_reranker signal when disabled", resp.Debug.RankingSignals)
+	}
+	if strings.Contains(signals, "rerank_failed") {
+		t.Fatalf("ranking signals = %v, want NO rerank_failed signal when disabled", resp.Debug.RankingSignals)
+	}
+}
+
+func TestSearchRerankNonTimeoutError(t *testing.T) {
+	engine := newRerankTestEngine(t, rerankTestChunks())
+	engine.SetReranker(&fakeReranker{
+		fail: errors.New("bogus json"),
+	})
+
+	resp, err := engine.Search(context.Background(), "alpha", 5, "", true)
+	if err != nil {
+		t.Fatalf("Search should fall back on rerank error, got: %v", err)
+	}
+	signals := strings.Join(resp.Debug.RankingSignals, ",")
+	if !strings.Contains(signals, "rerank_failed") {
+		t.Fatalf("ranking signals = %v, want rerank_failed marker on non-timeout error", resp.Debug.RankingSignals)
+	}
+}
+
+func TestApplyRerankScoresPreservesTail(t *testing.T) {
+	results := []SearchResult{
+		{ID: "a", Score: 0.5, Debug: &ResultDebug{}},
+		{ID: "b", Score: 0.4, Debug: &ResultDebug{}},
+		{ID: "c", Score: 0.3, Debug: &ResultDebug{}},
+		{ID: "d", Score: 0.2, Debug: &ResultDebug{}},
+	}
+	scored := []reranker.Scored{
+		{ID: "b", Score: 0.9},
+		{ID: "a", Score: 0.8},
+	}
+
+	reordered := applyRerankScores(results, scored, 2, 12)
+	if len(reordered) != 4 {
+		t.Fatalf("len = %d, want 4 (no item should be dropped)", len(reordered))
+	}
+	if reordered[0].ID != "b" || reordered[1].ID != "a" {
+		t.Fatalf("head order = [%s, %s], want [b, a]", reordered[0].ID, reordered[1].ID)
+	}
+	if reordered[2].ID != "c" || reordered[3].ID != "d" {
+		t.Fatalf("tail order = [%s, %s], want [c, d] preserved", reordered[2].ID, reordered[3].ID)
+	}
+	if reordered[0].Debug.Breakdown.RerankScore != 0.9 {
+		t.Fatalf("RerankScore[0] = %v, want 0.9", reordered[0].Debug.Breakdown.RerankScore)
+	}
+	if reordered[0].Debug.Breakdown.RerankTimeMs != 12 {
+		t.Fatalf("RerankTimeMs[0] = %v, want 12", reordered[0].Debug.Breakdown.RerankTimeMs)
+	}
+	if reordered[2].Debug.Breakdown.RerankScore != 0 {
+		t.Fatalf("tail item RerankScore = %v, want 0 (untouched)", reordered[2].Debug.Breakdown.RerankScore)
+	}
+}
+
+func TestRerankErrorReason(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"deadline", context.DeadlineExceeded, "timeout"},
+		{"canceled", context.Canceled, "canceled"},
+		{"http 500", errors.New("jina returned status 500"), "http_error"},
+		{"decode", errors.New("failed to decode response"), "decode"},
+		{"bad index", errors.New("index 42 out of range"), "bad_index"},
+		{"nil", nil, "unknown"},
+		{"generic", errors.New("network flap"), "error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rerankErrorReason(tc.err); got != tc.want {
+				t.Fatalf("rerankErrorReason(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
 	}
 }
