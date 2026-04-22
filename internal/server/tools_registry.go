@@ -631,6 +631,89 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 			},
 		},
 		{
+			Name:        "end_task",
+			Description: "Consolidate working memories tied to a specific archived task slug: mark low-importance ones as outdated and queue high-importance ones for review (does NOT auto-promote)",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"context_slug": map[string]any{
+						"type":        "string",
+						"description": "Task slug whose working memories should be consolidated (must exist under a configured archive root)",
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "Preview actions without modifying memories",
+					},
+					"roots": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Optional override for archive roots (falls back to MCP_TASK_ARCHIVE_ROOTS)",
+					},
+					"promotion_threshold": map[string]any{
+						"type":        "number",
+						"minimum":     0,
+						"maximum":     1,
+						"default":     0.7,
+						"description": "Importance at/above which a memory becomes a promotion candidate instead of being marked outdated",
+					},
+					"keep_tag": map[string]any{
+						"type":        "string",
+						"default":     "keep-after-archive",
+						"description": "Tag that opts a memory out of the sweep",
+					},
+					"format": map[string]any{
+						"type":        "string",
+						"enum":        []string{"text", "json"},
+						"default":     "text",
+						"description": "Return a human-readable summary or structured JSON",
+					},
+				},
+				"required": []string{"context_slug"},
+			},
+		},
+		{
+			Name:        "sweep_archive",
+			Description: "Enumerate all archived task slugs and consolidate their working memories in one pass (pull-mode; iterates MCP_TASK_ARCHIVE_ROOTS)",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"roots": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "string"},
+						"description": "Optional override for archive roots (falls back to MCP_TASK_ARCHIVE_ROOTS)",
+					},
+					"slug_pattern": map[string]any{
+						"type":        "string",
+						"description": "Optional regex that slug basenames must match (falls back to MCP_TASK_SLUG_PATTERN)",
+					},
+					"dry_run": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "Preview actions without modifying memories",
+					},
+					"promotion_threshold": map[string]any{
+						"type":        "number",
+						"minimum":     0,
+						"maximum":     1,
+						"default":     0.7,
+						"description": "Importance at/above which a memory becomes a promotion candidate",
+					},
+					"keep_tag": map[string]any{
+						"type":        "string",
+						"default":     "keep-after-archive",
+						"description": "Tag that opts a memory out of the sweep",
+					},
+					"format": map[string]any{
+						"type":        "string",
+						"enum":        []string{"text", "json"},
+						"default":     "text",
+						"description": "Return a human-readable summary or structured JSON",
+					},
+				},
+			},
+		},
+		{
 			Name:        "resolve_review_queue",
 			Description: "Bulk-resolve pending review queue items by IDs or filter criteria, with optional dry-run to preview which items would be affected",
 			InputSchema: map[string]any{
@@ -1092,6 +1175,8 @@ var memoryTools = map[string]bool{
 	"accept_session_changes":     true,
 	"resolve_review_item":        true,
 	"resolve_review_queue":       true,
+	"end_task":                   true,
+	"sweep_archive":              true,
 	"store_decision":             true,
 	"store_incident":             true,
 	"store_runbook":              true,
@@ -1135,6 +1220,8 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"accept_session_changes":     s.callAcceptSessionChanges,
 		"resolve_review_item":        s.callResolveReviewItem,
 		"resolve_review_queue":       s.callResolveReviewQueue,
+		"end_task":                   s.callEndTask,
+		"sweep_archive":              s.callSweepArchive,
 		"store_decision":             s.callStoreDecision,
 		"store_incident":             s.callStoreIncident,
 		"store_runbook":              s.callStoreRunbook,

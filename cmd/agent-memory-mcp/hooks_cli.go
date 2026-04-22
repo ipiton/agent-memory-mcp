@@ -10,11 +10,28 @@ import (
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 
 	_ "modernc.org/sqlite"
 )
+
+// dedupConfigFrom builds a hooks.DedupConfig from the loaded runtime config.
+// When MCP_CHECKPOINT_DEDUP_DISABLED=true the returned config has Threshold=0
+// and MinContentChars=0, so hooks.Check short-circuits to a no-skip result for
+// any non-whitespace candidate. Whitespace-only summaries are still dropped as
+// ReasonEmpty regardless (see hooks.Check godoc).
+func dedupConfigFrom(cfg config.Config) hooks.DedupConfig {
+	if cfg.CheckpointDedupDisabled {
+		return hooks.DedupConfig{}
+	}
+	return hooks.DedupConfig{
+		Threshold:       cfg.CheckpointDedupThreshold,
+		MinContentChars: cfg.CheckpointDedupMinChars,
+		Window:          cfg.CheckpointDedupWindow,
+	}
+}
 
 // contextInjectRow holds the minimal fields needed for context-inject output.
 type contextInjectRow struct {
@@ -263,6 +280,26 @@ func runAutoCapture(args []string) {
 		},
 	}
 
+	// Note: LastInContext only matches session-checkpoint records, so in the
+	// auto-capture path this effectively guards only the "empty" case. If we
+	// want to dedup auto-capture summaries too, extend LastInContext with a
+	// recordKind parameter.
+	dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
+	} else if dedup.Skip {
+		store.IncrementDedupSkipped(dedup.Reason)
+		switch dedup.Reason {
+		case hooks.ReasonSimilar:
+			fmt.Printf("Auto-capture skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
+		case hooks.ReasonEmpty:
+			fmt.Println("Auto-capture skipped: content too short")
+		default:
+			fmt.Println("Auto-capture skipped")
+		}
+		return
+	}
+
 	result, err := svc.Analyze(context.Background(), sessionclose.AnalyzeRequest{
 		Summary:          sessionSummary,
 		DryRun:           *dryRun,
@@ -327,6 +364,22 @@ func runCheckpoint(args []string) {
 	extraTags := []string{"session-checkpoint"}
 	if boundaryValue != "checkpoint" {
 		extraTags = append(extraTags, boundaryValue)
+	}
+
+	dedup, err := hooks.Check(context.Background(), store, sessionSummary, dedupConfigFrom(cfg))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
+	} else if dedup.Skip {
+		store.IncrementDedupSkipped(dedup.Reason)
+		switch dedup.Reason {
+		case hooks.ReasonSimilar:
+			fmt.Printf("Checkpoint skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
+		case hooks.ReasonEmpty:
+			fmt.Println("Checkpoint skipped: content too short")
+		default:
+			fmt.Println("Checkpoint skipped")
+		}
+		return
 	}
 
 	rawID, err := svc.SaveRawSummaryWithOptions(context.Background(), sessionSummary, sessionclose.RawSaveOptions{

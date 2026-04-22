@@ -3,8 +3,10 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -81,12 +83,26 @@ type Config struct {
 	SessionMinEvents          int           // Minimum observed tool events before auto-close
 
 	// Stewardship configuration
-	StewardEnabled             bool    // Enable knowledge stewardship service
-	StewardMode                string  // Policy mode: off, manual, scheduled, event_driven
-	StewardScheduleInterval    string  // Schedule interval (e.g. "24h")
-	StewardDuplicateThreshold  float64 // Similarity threshold for duplicate detection (default: 0.85)
-	StewardStaleDays           int     // Days before a memory is considered stale (default: 30)
-	StewardCanonicalMinConf    float64 // Minimum confidence for canonical promotion (default: 0.80)
+	StewardEnabled            bool    // Enable knowledge stewardship service
+	StewardMode               string  // Policy mode: off, manual, scheduled, event_driven
+	StewardScheduleInterval   string  // Schedule interval (e.g. "24h")
+	StewardDuplicateThreshold float64 // Similarity threshold for duplicate detection (default: 0.85)
+	StewardStaleDays          int     // Days before a memory is considered stale (default: 30)
+	StewardCanonicalMinConf   float64 // Minimum confidence for canonical promotion (default: 0.80)
+
+	// Hooks CLI dedup (T45) — prevents flood of near-duplicate session-checkpoint
+	// records coming from the `auto-capture` and `checkpoint` hook CLI paths.
+	// MCP programmatic `store_memory` is unaffected.
+	CheckpointDedupDisabled  bool          // Escape hatch — true disables the filter
+	CheckpointDedupThreshold float64       // Jaccard similarity at/above which a record is considered a duplicate (default: 0.9)
+	CheckpointDedupWindow    time.Duration // How far back to scan for a recent duplicate (default: 10m)
+	CheckpointDedupMinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
+
+	// Task archive sweep (T47) — pull-mode archive consolidation. Each root is
+	// scanned for subdirectories (task slugs); working memories whose Context
+	// matches a slug are marked outdated (high-importance ones go to review queue).
+	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
+	TaskSlugPattern  *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -148,6 +164,12 @@ type envValues struct {
 	stewardDuplicateThreshold        float64
 	stewardStaleDays                 int
 	stewardCanonicalMinConf          float64
+	checkpointDedupDisabled          bool
+	checkpointDedupThreshold         float64
+	checkpointDedupWindow            string
+	checkpointDedupMinChars          int
+	taskArchiveRoots                 string
+	taskSlugPattern                  string
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -209,6 +231,12 @@ func readEnvValues() (envValues, error) {
 		stewardDuplicateThreshold:        EnvFloat("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
 		stewardStaleDays:                 EnvInt("MCP_STEWARD_STALE_DAYS", 30),
 		stewardCanonicalMinConf:          EnvFloat("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
+		checkpointDedupDisabled:          EnvBool("MCP_CHECKPOINT_DEDUP_DISABLED", false),
+		checkpointDedupThreshold:         EnvFloat("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
+		checkpointDedupWindow:            EnvOrDefault("MCP_CHECKPOINT_DEDUP_WINDOW", "10m"),
+		checkpointDedupMinChars:          EnvInt("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
+		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
+		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
 	}, nil
 }
 
@@ -328,11 +356,58 @@ func resolvePaths(ev envValues) (Config, error) {
 		StewardDuplicateThreshold: ev.stewardDuplicateThreshold,
 		StewardStaleDays:          ev.stewardStaleDays,
 		StewardCanonicalMinConf:   ev.stewardCanonicalMinConf,
+
+		CheckpointDedupDisabled:  ev.checkpointDedupDisabled,
+		CheckpointDedupThreshold: ev.checkpointDedupThreshold,
+		CheckpointDedupWindow:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
+		CheckpointDedupMinChars:  ev.checkpointDedupMinChars,
+
+		TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+	}
+	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
+		re, err := regexp.Compile(slugPattern)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid MCP_TASK_SLUG_PATTERN %q: %w", slugPattern, err)
+		}
+		cfg.TaskSlugPattern = re
 	}
 	if err := validateResolvedConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// parseArchiveRoots splits a colon-separated (PATH-style) list of archive roots
+// and resolves each to an absolute path, relative to `root` if needed.
+// Empty entries are skipped; duplicates (after resolution) are dropped while
+// preserving the first occurrence. Returns nil for empty input (sweep disabled).
+func parseArchiveRoots(raw string, root string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ":")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(root, p)
+		}
+		p = filepath.Clean(p)
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // LoadFromEnv reads configuration only from environment variables (no flag parsing).

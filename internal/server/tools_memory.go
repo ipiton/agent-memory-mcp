@@ -283,6 +283,16 @@ func (s *MCPServer) callMemoryStats(_ map[string]any) (any, *rpcError) {
 		}
 	}
 
+	if dedupSkips := s.memoryStore.DedupSkippedByReason(); len(dedupSkips) > 0 {
+		buf.WriteString("\nHook dedup skips:\n")
+		if v := dedupSkips["similar"]; v > 0 {
+			fmt.Fprintf(&buf, "- similar: %d\n", v)
+		}
+		if v := dedupSkips["empty"]; v > 0 {
+			fmt.Fprintf(&buf, "- empty: %d\n", v)
+		}
+	}
+
 	return toolResultText(buf.String()), nil
 }
 

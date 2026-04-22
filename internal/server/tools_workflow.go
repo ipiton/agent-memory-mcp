@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/lifecycle"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
 	"github.com/ipiton/agent-memory-mcp/internal/review"
@@ -701,12 +703,12 @@ type taggedItem interface {
 type taggedSearchResult struct{ r *memory.SearchResult }
 
 func (t taggedSearchResult) itemTags() []string  { return t.r.Memory.Tags }
-func (t taggedSearchResult) itemService() string  { return "" }
+func (t taggedSearchResult) itemService() string { return "" }
 
 type taggedCanonical struct{ e *memory.CanonicalKnowledge }
 
 func (t taggedCanonical) itemTags() []string  { return t.e.Tags }
-func (t taggedCanonical) itemService() string  { return t.e.Service }
+func (t taggedCanonical) itemService() string { return t.e.Service }
 
 func filterByTags[T any](items []T, wrap func(T) (taggedItem, bool), service string, tags []string, limit int) []T {
 	requiredTags := append([]string(nil), tags...)
@@ -794,3 +796,91 @@ func toMemories(results []*memory.SearchResult) []*memory.Memory {
 	return memories
 }
 
+// callEndTask is the MCP tool entry point for explicit single-slug consolidation.
+func (srv *MCPServer) callEndTask(args map[string]any) (any, *rpcError) {
+	if err := srv.requireMemoryStore(); err != nil {
+		return nil, err
+	}
+	slug := strings.TrimSpace(mustString(args, "context_slug"))
+	if slug == "" {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "context_slug parameter is required"}
+	}
+	dryRun, _ := getBool(args, "dry_run")
+
+	sweepCfg, rErr := srv.buildSweepConfigFromArgs(args, dryRun)
+	if rErr != nil {
+		return nil, rErr
+	}
+
+	sweeper := lifecycle.NewSweeper(srv.memoryStore)
+	result, err := sweeper.EndTask(context.Background(), slug, sweepCfg)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "end_task failed", Data: err.Error()}
+	}
+
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
+	if format == "text" {
+		return toolResultText(lifecycle.FormatSweepResult(result)), nil
+	}
+	return toolResultJSON(result), nil
+}
+
+// callSweepArchive is the MCP tool entry point for pull-mode archive sweeps.
+func (srv *MCPServer) callSweepArchive(args map[string]any) (any, *rpcError) {
+	if err := srv.requireMemoryStore(); err != nil {
+		return nil, err
+	}
+	dryRun, _ := getBool(args, "dry_run")
+
+	sweepCfg, rErr := srv.buildSweepConfigFromArgs(args, dryRun)
+	if rErr != nil {
+		return nil, rErr
+	}
+
+	sweeper := lifecycle.NewSweeper(srv.memoryStore)
+	result, err := sweeper.SweepArchive(context.Background(), sweepCfg)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "sweep_archive failed", Data: err.Error()}
+	}
+
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
+	if format == "text" {
+		return toolResultText(lifecycle.FormatSweepResult(result)), nil
+	}
+	return toolResultJSON(result), nil
+}
+
+// buildSweepConfigFromArgs resolves the ArchiveSweepConfig from MCP args,
+// falling back to the server's loaded config for roots and slug pattern.
+func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool) (lifecycle.ArchiveSweepConfig, *rpcError) {
+	sweepCfg := lifecycle.ArchiveSweepConfig{
+		Roots:              append([]string(nil), srv.config.TaskArchiveRoots...),
+		SlugPattern:        srv.config.TaskSlugPattern,
+		DryRun:             dryRun,
+		PromotionThreshold: lifecycle.DefaultPromotionThreshold,
+		KeepTag:            lifecycle.KeepAfterArchiveTag,
+	}
+	if argRoots := getStringSlice(args, "roots"); len(argRoots) > 0 {
+		sweepCfg.Roots = argRoots
+	}
+	if pat := strings.TrimSpace(mustString(args, "slug_pattern")); pat != "" {
+		re, err := regexp.Compile(pat)
+		if err != nil {
+			return sweepCfg, &rpcError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("invalid slug_pattern: %v", err)}
+		}
+		sweepCfg.SlugPattern = re
+	}
+	if v, ok := args["promotion_threshold"].(float64); ok && v > 0 {
+		sweepCfg.PromotionThreshold = v
+	}
+	if kt := strings.TrimSpace(mustString(args, "keep_tag")); kt != "" {
+		sweepCfg.KeepTag = kt
+	}
+	return sweepCfg, nil
+}

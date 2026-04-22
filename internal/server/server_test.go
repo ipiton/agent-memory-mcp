@@ -354,6 +354,8 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"accept_session_changes",
 		"resolve_review_item",
 		"resolve_review_queue",
+		"end_task",
+		"sweep_archive",
 		"store_decision",
 		"store_incident",
 		"store_runbook",
