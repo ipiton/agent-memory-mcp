@@ -7,6 +7,16 @@ import (
 
 func buildProjectBankSections(view ProjectBankView, items []*ProjectBankItem, limit int) []ProjectBankSection {
 	switch view {
+	case ProjectBankViewSedimentCandidates:
+		candidates := collectProjectBankItems(items, limit, projectBankIsSedimentCandidate, sortProjectBankRecentItems)
+		return []ProjectBankSection{
+			{
+				Key:         "sediment_candidates",
+				Title:       "Sediment candidates",
+				Description: "Pending sediment-cycle promotions awaiting review (non-trivial transitions).",
+				Items:       candidates,
+			},
+		}
 	case ProjectBankViewCanonicalOverview:
 		canonical := collectProjectBankItems(items, limit, projectBankIsCanonicalItem, sortProjectBankCanonicalItems)
 		sessionDeltas := collectProjectBankItems(items, limit, projectBankIsSessionDelta, sortProjectBankRecentItems)
@@ -123,6 +133,23 @@ func projectBankIsReviewQueueItem(item *ProjectBankItem) bool {
 		return false
 	}
 	return item.RecordKind == RecordKindReviewQueueItem && item.ReviewRequired
+}
+
+// projectBankIsSedimentCandidate reports whether the item is a pending
+// sediment-cycle review-queue item (i.e. review_source == sediment_cycle,
+// review_required == true). Items are routed through the same
+// review_queue_item record kind as archive-sweep promotion candidates;
+// filtering by the explicit tag+source combination keeps them distinct.
+func projectBankIsSedimentCandidate(item *ProjectBankItem) bool {
+	if item == nil || item.RecordKind != RecordKindReviewQueueItem || !item.ReviewRequired {
+		return false
+	}
+	for _, tag := range item.Tags {
+		if strings.EqualFold(strings.TrimSpace(tag), "sediment-cycle") {
+			return true
+		}
+	}
+	return false
 }
 
 func projectBankNeedsAttention(item *ProjectBankItem) bool {
@@ -291,6 +318,8 @@ func projectBankViewTitle(view ProjectBankView) string {
 		return "Migration bank"
 	case ProjectBankViewReviewQueue:
 		return "Review queue"
+	case ProjectBankViewSedimentCandidates:
+		return "Sediment candidates"
 	default:
 		return "Project bank"
 	}
@@ -310,6 +339,8 @@ func projectBankViewDescription(view ProjectBankView) string {
 		return "Migration notes, cutover guidance, and rollout constraints."
 	case ProjectBankViewReviewQueue:
 		return "Pending review items from background session consolidation."
+	case ProjectBankViewSedimentCandidates:
+		return "Pending sediment-cycle promotions awaiting review."
 	default:
 		return ""
 	}

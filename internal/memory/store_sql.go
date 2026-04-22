@@ -71,13 +71,14 @@ func insertMemoryRow(exec sqlExecutor, m *Memory) error {
 	if _, err := exec.Exec(`
 		INSERT INTO memories (id, content, type, title, tags, context, importance, metadata,
 		                      embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
-		                      valid_from, valid_until, superseded_by, replaces, observed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                      valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.ID, m.Content, m.Type, m.Title, tagsJSON, m.Context,
 		m.Importance, metadataJSON, m.EmbeddingModel, embeddingBlob,
 		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
 		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
+		sedimentLayerValue(m.SedimentLayer),
 	); err != nil {
 		return fmt.Errorf("failed to store memory: %w", err)
 	}
@@ -95,19 +96,32 @@ func updateMemoryRow(exec sqlExecutor, m *Memory) error {
 		UPDATE memories SET content = ?, type = ?, title = ?, tags = ?, context = ?,
 		                    importance = ?, metadata = ?, embedding_model = ?, embedding = ?,
 		                    created_at = ?, updated_at = ?, accessed_at = ?, access_count = ?,
-		                    valid_from = ?, valid_until = ?, superseded_by = ?, replaces = ?, observed_at = ?
+		                    valid_from = ?, valid_until = ?, superseded_by = ?, replaces = ?, observed_at = ?,
+		                    sediment_layer = ?
 		WHERE id = ?
 	`,
 		m.Content, m.Type, m.Title, tagsJSON, m.Context,
 		m.Importance, metadataJSON, m.EmbeddingModel, embeddingBlob,
 		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
 		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
+		sedimentLayerValue(m.SedimentLayer),
 		m.ID,
 	); err != nil {
 		return fmt.Errorf("failed to update memory: %w", err)
 	}
 
 	return nil
+}
+
+// sedimentLayerValue returns the canonical string for the sediment_layer
+// column, defaulting to "surface" when the layer is empty or invalid. Keeps
+// the NOT NULL constraint satisfied.
+func sedimentLayerValue(raw string) string {
+	layer := NormalizeSedimentLayer(raw)
+	if layer == "" {
+		layer = DefaultSedimentLayer
+	}
+	return string(layer)
 }
 
 func nullTime(t *time.Time) any {

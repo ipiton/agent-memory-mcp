@@ -50,6 +50,12 @@ type Memory struct {
 	SupersededBy string     `json:"superseded_by,omitempty"` // ID of the entry that replaced this one
 	Replaces     string     `json:"replaces,omitempty"`      // ID of the entry this one replaced
 	ObservedAt   *time.Time `json:"observed_at,omitempty"`   // when first observed (may differ from created_at)
+
+	// Sedimentation layer (T48) — orthogonal to Type, governs retrieval
+	// priority: surface (session-scoped) → episodic → semantic → character
+	// (always-surfaced). Stored in column `sediment_layer` with default
+	// "surface". See internal/memory/sediment.go for transition rules.
+	SedimentLayer string `json:"sediment_layer,omitempty"`
 }
 
 // Validate ensures the memory entry is consistent and ready for storage.
@@ -85,6 +91,19 @@ func (m *Memory) Validate() error {
 		return &ErrValidation{Message: "importance must be between 0.0 and 1.0"}
 	}
 
+	// Sediment layer (T48): coerce to canonical form; empty defaults to
+	// surface. Invalid explicit values are rejected to prevent arbitrary
+	// strings from sneaking into the column.
+	if m.SedimentLayer != "" {
+		layer := NormalizeSedimentLayer(m.SedimentLayer)
+		if layer == "" {
+			return &ErrValidation{Message: fmt.Sprintf("invalid sediment layer %q", m.SedimentLayer)}
+		}
+		m.SedimentLayer = string(layer)
+	} else {
+		m.SedimentLayer = string(DefaultSedimentLayer)
+	}
+
 	return nil
 }
 
@@ -110,6 +129,7 @@ type cachedMemory struct {
 	ValidFrom      *time.Time
 	ValidUntil     *time.Time
 	SupersededBy   string
+	SedimentLayer  SedimentLayer // T48 — layer-aware retrieval priority
 }
 
 // Store provides persistent memory storage backed by SQLite with in-memory vector search.
@@ -136,6 +156,23 @@ type Store struct {
 	// invariant (writeMu → mu) documented above on the Store.
 	dedupSkippedSimilar atomic.Int64
 	dedupSkippedEmpty   atomic.Int64
+
+	// sedimentEnabled toggles T48 layer-aware retrieval scoring. Writers
+	// should set via SetSedimentEnabled; retrieval reads the atomic without
+	// a lock. Default (false) preserves pre-T48 Recall behaviour verbatim.
+	sedimentEnabled atomic.Bool
+}
+
+// SetSedimentEnabled toggles the T48 layer-aware retrieval path. Idempotent;
+// safe to call from any goroutine. Should be set once during server startup
+// from config.SedimentEnabled.
+func (ms *Store) SetSedimentEnabled(enabled bool) {
+	ms.sedimentEnabled.Store(enabled)
+}
+
+// SedimentEnabled reports whether the T48 feature flag is active.
+func (ms *Store) SedimentEnabled() bool {
+	return ms.sedimentEnabled.Load()
 }
 
 // NewStore creates a new Store backed by a SQLite database at dbPath.
@@ -168,7 +205,8 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		accessed_at DATETIME NOT NULL,
-		access_count INTEGER DEFAULT 0
+		access_count INTEGER DEFAULT 0,
+		sediment_layer TEXT NOT NULL DEFAULT 'surface'
 	);
 	CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
 	CREATE INDEX IF NOT EXISTS idx_memories_context ON memories(context);
@@ -218,7 +256,7 @@ func (ms *Store) loadMemoriesToCache() error {
 	rows, err := ms.db.Query(`
 		SELECT id, content, type, title, tags, context, importance, metadata,
 		       embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by
+		       valid_from, valid_until, superseded_by, sediment_layer
 		FROM memories
 	`)
 	if err != nil {
@@ -240,12 +278,13 @@ func (ms *Store) loadMemoriesToCache() error {
 		var createdAt, updatedAt, accessedAt sql.NullTime
 		var validFrom, validUntil sql.NullTime
 		var supersededBy sql.NullString
+		var sedimentLayer sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
-			&validFrom, &validUntil, &supersededBy,
+			&validFrom, &validUntil, &supersededBy, &sedimentLayer,
 		)
 		if err != nil {
 			ms.logger.Warn("Failed to scan memory", zap.Error(err))
@@ -301,6 +340,12 @@ func (ms *Store) loadMemoriesToCache() error {
 		if supersededBy.Valid {
 			m.SupersededBy = supersededBy.String
 		}
+		if sedimentLayer.Valid {
+			m.SedimentLayer = NormalizeSedimentLayer(sedimentLayer.String)
+		}
+		if m.SedimentLayer == "" {
+			m.SedimentLayer = DefaultSedimentLayer
+		}
 
 		ms.cacheSetLocked(&m)
 	}
@@ -329,6 +374,10 @@ func (ms *Store) cacheSetLocked(m *cachedMemory) {
 }
 
 func toCachedMemory(m *Memory) *cachedMemory {
+	layer := NormalizeSedimentLayer(m.SedimentLayer)
+	if layer == "" {
+		layer = DefaultSedimentLayer
+	}
 	cm := &cachedMemory{
 		ID:             m.ID,
 		Content:        m.Content,
@@ -346,6 +395,7 @@ func toCachedMemory(m *Memory) *cachedMemory {
 		ValidFrom:      m.ValidFrom,
 		ValidUntil:     m.ValidUntil,
 		SupersededBy:   m.SupersededBy,
+		SedimentLayer:  layer,
 	}
 	deriveCachedFields(cm, m.Metadata, m.Type)
 	return cm
@@ -537,7 +587,97 @@ func ensureMemorySchema(db *sql.DB) error {
 		return err
 	}
 
+	// T48 sedimentation column + index. Idempotent: ADD COLUMN only if absent;
+	// the index creation uses IF NOT EXISTS; the backfill only touches rows
+	// whose sediment_layer is literally empty (pre-existing pre-T48 rows get
+	// the DEFAULT 'surface' from ADD COLUMN, so we also backfill rows whose
+	// layer IS the default but whose derived layer differs — see
+	// backfillSedimentLayer).
+	hasSediment, err := memoryColumnExists(db, "sediment_layer")
+	if err != nil {
+		return err
+	}
+	if !hasSediment {
+		// SQLite cannot add a NOT NULL column without a default, so we add
+		// with default 'surface' and then rewrite rows whose derived layer
+		// differs (episodic/semantic/character).
+		if _, err := db.Exec(`ALTER TABLE memories ADD COLUMN sediment_layer TEXT NOT NULL DEFAULT 'surface'`); err != nil {
+			return err
+		}
+		if err := backfillSedimentLayer(db); err != nil {
+			return err
+		}
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_sediment_layer ON memories(sediment_layer)`); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// backfillSedimentLayer rewrites sediment_layer for existing rows using the
+// Go-side BackfillSedimentLayer helper. Runs ONCE per schema migration
+// (guarded by the column-existence check in ensureMemorySchema). Safe on
+// empty DBs (no rows → no-op).
+//
+// We drive this in Go rather than SQL because metadata is a JSON blob and
+// SQLite's json_extract behaviour across the versions we support (modernc/
+// sqlite) has edge cases around empty/null metadata. Go-side is 100 rows/ms
+// territory, well within the migration budget.
+func backfillSedimentLayer(db *sql.DB) error {
+	rows, err := db.Query(`SELECT id, type, metadata FROM memories`)
+	if err != nil {
+		return err
+	}
+	type backfillRow struct {
+		id      string
+		layer   SedimentLayer
+	}
+	var pending []backfillRow
+	for rows.Next() {
+		var id, typeStr string
+		var metadataJSON sql.NullString
+		if err := rows.Scan(&id, &typeStr, &metadataJSON); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		metadata := map[string]string{}
+		if metadataJSON.Valid && metadataJSON.String != "" {
+			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
+		}
+		layer := BackfillSedimentLayer(Type(typeStr), metadata)
+		// Only queue the update if the backfilled layer differs from the
+		// default 'surface' that ADD COLUMN already stamped on every row.
+		if layer != LayerSurface {
+			pending = append(pending, backfillRow{id: id, layer: layer})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+
+	if len(pending) == 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`UPDATE memories SET sediment_layer = ? WHERE id = ?`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, r := range pending {
+		if _, err := stmt.Exec(string(r.layer), r.id); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // maybeStartBackgroundReembed probes the current embedding model and compares it

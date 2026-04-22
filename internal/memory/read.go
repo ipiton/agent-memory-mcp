@@ -127,7 +127,16 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		importanceW = 0.35
 		confidenceW = 0.20
 		freshnessW  = 0.03
+
+		// T48 layer boosts — applied ONLY when ms.sedimentEnabled is true.
+		// Character is always-surfaced (+0.15 and no minScore cutoff below).
+		// Episodic pays a small demotion (-0.05). Surface is excluded unless
+		// filters.Context matches m.Context.
+		layerCharacterBoost = 0.15
+		layerEpisodicBoost  = -0.05
 	)
+
+	sedimentOn := ms.sedimentEnabled.Load()
 
 	var results []*SearchResult
 	useHeap := limit > 0
@@ -145,6 +154,18 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
+		// T48 layer-aware filtering: when the flag is on, surface memories
+		// are invisible outside their originating Context. This prevents
+		// session scratch state from leaking into unrelated recall calls.
+		if sedimentOn {
+			layer := NormalizeSedimentLayer(string(m.SedimentLayer))
+			if layer == LayerSurface {
+				if filters.Context == "" || filters.Context != m.Context {
+					continue
+				}
+			}
+		}
+
 		trust := deriveTrustMetadataFromCached(m, now)
 
 		var score float64
@@ -158,7 +179,22 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 
 		weightedScore := score*(baseW+m.Importance*importanceW+trust.Confidence*confidenceW) + trust.FreshnessScore*freshnessW
-		if weightedScore < minScore {
+
+		// T48 layer boost. Character memories are always-surfaced — they
+		// skip the minScore cutoff below so even unrelated queries see
+		// them. Episodic pays a small tax; semantic/surface are neutral
+		// (surface already got the context-gate above).
+		isCharacter := false
+		if sedimentOn {
+			switch NormalizeSedimentLayer(string(m.SedimentLayer)) {
+			case LayerCharacter:
+				weightedScore += layerCharacterBoost
+				isCharacter = true
+			case LayerEpisodic:
+				weightedScore += layerEpisodicBoost
+			}
+		}
+		if weightedScore < minScore && !isCharacter {
 			continue
 		}
 
@@ -383,7 +419,7 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	row := ms.db.QueryRow(`
 		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
 		       embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by, replaces, observed_at
+		       valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer
 		FROM memories WHERE id = ?
 	`, id)
 
@@ -393,12 +429,13 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	var createdAt, updatedAt, accessedAt sql.NullTime
 	var validFrom, validUntil, observedAt sql.NullTime
 	var supersededBy, replaces sql.NullString
+	var sedimentLayer sql.NullString
 
 	err := row.Scan(
 		&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 		&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 		&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
-		&validFrom, &validUntil, &supersededBy, &replaces, &observedAt,
+		&validFrom, &validUntil, &supersededBy, &replaces, &observedAt, &sedimentLayer,
 	)
 	if err == sql.ErrNoRows {
 		return nil, &ErrNotFound{ID: id}
@@ -443,6 +480,12 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	if observedAt.Valid {
 		m.ObservedAt = &observedAt.Time
 	}
+	if sedimentLayer.Valid {
+		m.SedimentLayer = string(NormalizeSedimentLayer(sedimentLayer.String))
+	}
+	if m.SedimentLayer == "" {
+		m.SedimentLayer = string(DefaultSedimentLayer)
+	}
 
 	return &m, nil
 }
@@ -460,7 +503,7 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 	query := fmt.Sprintf(`
 		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
 		       embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by, replaces, observed_at
+		       valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer
 		FROM memories WHERE id IN (%s)
 	`, strings.Join(placeholders, ","))
 
@@ -478,12 +521,13 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		var createdAt, updatedAt, accessedAt sql.NullTime
 		var validFrom, validUntil, observedAt sql.NullTime
 		var supersededBy, replaces sql.NullString
+		var sedimentLayer sql.NullString
 
 		err := rows.Scan(
 			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
-			&validFrom, &validUntil, &supersededBy, &replaces, &observedAt,
+			&validFrom, &validUntil, &supersededBy, &replaces, &observedAt, &sedimentLayer,
 		)
 		if err != nil {
 			continue
@@ -523,6 +567,12 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		}
 		if observedAt.Valid {
 			m.ObservedAt = &observedAt.Time
+		}
+		if sedimentLayer.Valid {
+			m.SedimentLayer = string(NormalizeSedimentLayer(sedimentLayer.String))
+		}
+		if m.SedimentLayer == "" {
+			m.SedimentLayer = string(DefaultSedimentLayer)
 		}
 		result[m.ID] = &m
 	}
@@ -634,6 +684,14 @@ func (ms *Store) CountByEmbeddingModel() map[string]int {
 // Callers must not close the returned connection.
 func (ms *Store) DB() *sql.DB {
 	return ms.db
+}
+
+// ReloadCache forces the in-memory cache to resync with the database.
+// Intended for test helpers that bypass the normal write path (e.g. direct
+// SQL to backdate rows for cycle testing). Safe to call concurrently with
+// other reads because loadMemoriesToCache acquires mu.
+func (ms *Store) ReloadCache() error {
+	return ms.loadMemoriesToCache()
 }
 
 // Close shuts down the access stats worker and closes the database connection.
