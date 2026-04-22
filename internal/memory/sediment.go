@@ -50,13 +50,17 @@ const DefaultSedimentLayer = LayerSurface
 // the memory becomes a non-auto promotion candidate to character.
 const MetadataReferencedByCount = "referenced_by_count"
 
-// Sediment metadata keys for review-queue items produced by the cycle.
+// Review-queue metadata keys shared across lifecycle consolidation sources
+// (archive sweep T47, sediment cycle T48). Stored on review_queue_item memories
+// so dedup / navigation can route back to the originating source and target.
 const (
 	MetadataReviewSource         = "review_source"
 	MetadataReviewTargetMemoryID = "review_target_memory_id"
 	MetadataReviewTargetLayer    = "review_target_layer"
+	MetadataReviewSlug           = "review_slug"
 
 	ReviewSourceSedimentCycle = "sediment_cycle"
+	ReviewSourceArchiveSweep  = "archive_sweep"
 )
 
 // Default sediment policy thresholds. Chosen conservatively given the T48

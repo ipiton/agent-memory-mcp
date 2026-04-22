@@ -475,12 +475,12 @@ func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memor
 			"slug:" + slug,
 		},
 		Metadata: map[string]string{
-			memory.MetadataRecordKind:     memory.RecordKindReviewQueueItem,
-			memory.MetadataReviewRequired: "true",
-			memory.MetadataReviewReason:   "archive_sweep_promotion_candidate",
-			"review_target_memory_id":     m.ID,
-			"review_source":               "archive_sweep",
-			"review_slug":                 slug,
+			memory.MetadataRecordKind:           memory.RecordKindReviewQueueItem,
+			memory.MetadataReviewRequired:       "true",
+			memory.MetadataReviewReason:         "archive_sweep_promotion_candidate",
+			memory.MetadataReviewTargetMemoryID: m.ID,
+			memory.MetadataReviewSource:         memory.ReviewSourceArchiveSweep,
+			memory.MetadataReviewSlug:           slug,
 		},
 	}
 	return sw.store.Store(ctx, reviewMem)
@@ -499,8 +499,8 @@ func (sw *Sweeper) reviewItemExists(ctx context.Context, slug, targetID string) 
 		if m == nil || !memory.IsReviewQueueMemory(m) {
 			continue
 		}
-		if m.Metadata["review_target_memory_id"] == targetID &&
-			m.Metadata["review_source"] == "archive_sweep" {
+		if m.Metadata[memory.MetadataReviewTargetMemoryID] == targetID &&
+			m.Metadata[memory.MetadataReviewSource] == memory.ReviewSourceArchiveSweep {
 			return true, nil
 		}
 	}
