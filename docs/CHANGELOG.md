@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Wave 1 hygiene** — T45 checkpoint-hook content-similarity filter (`MCP_CHECKPOINT_DEDUP_*`, Jaccard dedup over session-checkpoint records); T47 task-lifecycle archive sweep (`sweep-archive` / `end-task` CLI + MCP tools, `MCP_TASK_ARCHIVE_ROOTS`).
+- **Wave 2 quality** — T43 RAG eval suite with baseline regression gate (`//go:build eval`, `make eval`, `docs/RAG_EVAL.md`); T46 dead-end tracking (`EngineeringTypeDeadEnd`, `store_dead_end` MCP tool, `mark-dead-end` CLI, retrieval boost + blend on pitfall keywords via `scoring.IsPitfallQuery`); T44 Jina v2 neural reranker (`internal/reranker`, `MCP_RERANK_*`, `JINA_RERANKER_MODEL`, 5s timeout with graceful fallback, `docs/RERANKER_LOCAL.md`).
+- **Wave 3 architecture** — T48 memory sedimentation (`sediment_layer` column, `promote_sediment` / `demote_sediment` / `sediment_cycle` MCP tools, `sediment-cycle` CLI, `project_bank_view(view=sediment_candidates)`, `MCP_SEDIMENT_ENABLED`, `docs/SEDIMENTATION.md`).
+
 ## [0.6.0] - 2026-04-07
 
 ### Added

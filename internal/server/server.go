@@ -152,6 +152,9 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 					zap.String("memory_db_path", cfg.MemoryDBPath),
 				)
 			}
+			// T48: propagate the sediment feature flag into the store so
+			// Recall knows whether to apply layer-aware scoring.
+			memoryStore.SetSedimentEnabled(cfg.SedimentEnabled)
 		}
 	}
 

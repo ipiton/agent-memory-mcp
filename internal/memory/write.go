@@ -399,6 +399,128 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	}, nil
 }
 
+// PromoteSedimentResult reports the outcome of a PromoteSediment call.
+type PromoteSedimentResult struct {
+	ID       string        `json:"id"`
+	From     SedimentLayer `json:"from"`
+	To       SedimentLayer `json:"to"`
+	Layer    SedimentLayer `json:"layer"` // alias for To for symmetry with PromoteToCanonicalResult
+	Reason   string        `json:"reason,omitempty"`
+	Affected bool          `json:"affected"` // false when From == To (no-op)
+}
+
+// DemoteSedimentResult reports the outcome of a DemoteSediment call.
+type DemoteSedimentResult struct {
+	ID       string        `json:"id"`
+	From     SedimentLayer `json:"from"`
+	To       SedimentLayer `json:"to"`
+	Layer    SedimentLayer `json:"layer"`
+	Reason   string        `json:"reason,omitempty"`
+	Affected bool          `json:"affected"`
+}
+
+// PromoteSediment updates the memory's sediment_layer to target and returns
+// the before/after state. Lock order: writeMu → mu (via Update path we'd
+// otherwise incur double-embed). We write the row directly and refresh the
+// cache under mu to avoid re-embedding.
+//
+// target must be a valid SedimentLayer; callers should validate with
+// IsValidSedimentLayer before invoking.
+func (ms *Store) PromoteSediment(ctx context.Context, id string, target SedimentLayer) (*PromoteSedimentResult, error) {
+	target = NormalizeSedimentLayer(string(target))
+	if target == "" {
+		return nil, &ErrValidation{Message: "invalid target sediment layer"}
+	}
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+
+	current, err := ms.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	from := NormalizeSedimentLayer(current.SedimentLayer)
+	if from == "" {
+		from = DefaultSedimentLayer
+	}
+	if from == target {
+		return &PromoteSedimentResult{
+			ID: id, From: from, To: target, Layer: target, Affected: false,
+		}, nil
+	}
+
+	// Direct column update — no Validate() round-trip, no embedding churn.
+	if _, err := ms.db.Exec(
+		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
+		string(target), time.Now(), id,
+	); err != nil {
+		return nil, fmt.Errorf("promote_sediment: update failed: %w", err)
+	}
+
+	ms.mu.Lock()
+	if cm, ok := ms.memories[id]; ok {
+		cm.SedimentLayer = target
+		cm.UpdatedAt = time.Now()
+	}
+	ms.mu.Unlock()
+
+	ms.logger.Info("Sediment layer promoted",
+		zap.String("id", id),
+		zap.String("from", string(from)),
+		zap.String("to", string(target)),
+	)
+
+	return &PromoteSedimentResult{
+		ID: id, From: from, To: target, Layer: target, Affected: true,
+	}, nil
+}
+
+// DemoteSediment moves the memory one layer closer to surface. No-op when
+// already at surface (returns Affected=false).
+func (ms *Store) DemoteSediment(ctx context.Context, id string) (*DemoteSedimentResult, error) {
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+
+	current, err := ms.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	from := NormalizeSedimentLayer(current.SedimentLayer)
+	if from == "" {
+		from = DefaultSedimentLayer
+	}
+	to := DemoteOneStep(from)
+	if to == "" {
+		// Already at surface — no further demotion.
+		return &DemoteSedimentResult{
+			ID: id, From: from, To: from, Layer: from, Reason: "already-at-surface", Affected: false,
+		}, nil
+	}
+
+	if _, err := ms.db.Exec(
+		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
+		string(to), time.Now(), id,
+	); err != nil {
+		return nil, fmt.Errorf("demote_sediment: update failed: %w", err)
+	}
+
+	ms.mu.Lock()
+	if cm, ok := ms.memories[id]; ok {
+		cm.SedimentLayer = to
+		cm.UpdatedAt = time.Now()
+	}
+	ms.mu.Unlock()
+
+	ms.logger.Info("Sediment layer demoted",
+		zap.String("id", id),
+		zap.String("from", string(from)),
+		zap.String("to", string(to)),
+	)
+
+	return &DemoteSedimentResult{
+		ID: id, From: from, To: to, Layer: to, Affected: true,
+	}, nil
+}
+
 type ReembedResult struct {
 	Total              int               `json:"total"`
 	Reembedded         int               `json:"reembedded"`

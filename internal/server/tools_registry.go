@@ -919,13 +919,13 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		},
 		{
 			Name:        "project_bank_view",
-			Description: "Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue",
+			Description: "Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, the review queue, or sediment candidates",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"view": map[string]any{
 						"type":        "string",
-						"enum":        []string{"canonical_overview", "overview", "decisions", "runbooks", "incidents", "caveats", "migrations", "review_queue"},
+						"enum":        []string{"canonical_overview", "overview", "decisions", "runbooks", "incidents", "caveats", "migrations", "review_queue", "sediment_candidates"},
 						"default":     "canonical_overview",
 						"description": "Which project bank view to render",
 					},
@@ -988,6 +988,49 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 					"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
 				},
 				"required": []string{"query"},
+			},
+		},
+		// Sedimentation tools (T48).
+		{
+			Name:        "promote_sediment",
+			Description: "Move a memory to the specified sediment layer (surface, episodic, semantic, or character). Used by reviewers to accept sediment-cycle proposals.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string", "description": "Memory ID to promote"},
+					"target_layer": map[string]any{
+						"type":        "string",
+						"enum":        []string{"surface", "episodic", "semantic", "character"},
+						"description": "Target sediment layer",
+					},
+					"format": map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
+				"required": []string{"id", "target_layer"},
+			},
+		},
+		{
+			Name:        "demote_sediment",
+			Description: "Demote a memory one sediment layer toward surface. No-op if already at surface.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":     map[string]any{"type": "string", "description": "Memory ID to demote"},
+					"format": map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
+				"required": []string{"id"},
+			},
+		},
+		{
+			Name:        "sediment_cycle",
+			Description: "Run the sediment-cycle job: auto-apply trivial transitions (surface→episodic by age) and queue non-trivial ones for review",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"dry_run":    map[string]any{"type": "boolean", "default": false, "description": "Preview only; AutoApplied and ReviewQueued in result count proposed transitions, not mutations"},
+					"since_days": map[string]any{"type": "integer", "minimum": 0, "description": "Only consider memories OLDER than N days (0 = all). Useful for limiting cycle scope to stable memories."},
+					"limit":      map[string]any{"type": "integer", "minimum": 0, "description": "Cap on transitions per run (0 = no limit)"},
+					"format":     map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
 			},
 		},
 	}
@@ -1205,6 +1248,9 @@ var memoryTools = map[string]bool{
 	"project_bank_view":          true,
 	"recall_as_of":               true,
 	"knowledge_timeline":         true,
+	"promote_sediment":           true,
+	"demote_sediment":            true,
+	"sediment_cycle":             true,
 }
 
 // hybridTools require at least one of memoryStore or ragEngine.
@@ -1263,6 +1309,9 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"steward_inbox_resolve":      s.callStewardInboxResolve,
 		"recall_as_of":               s.callRecallAsOf,
 		"knowledge_timeline":         s.callKnowledgeTimeline,
+		"promote_sediment":           s.callPromoteSediment,
+		"demote_sediment":            s.callDemoteSediment,
+		"sediment_cycle":             s.callSedimentCycle,
 	}
 }
 

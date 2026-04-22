@@ -376,6 +376,9 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"steward_inbox_resolve",
 		"recall_as_of",
 		"knowledge_timeline",
+		"promote_sediment",
+		"demote_sediment",
+		"sediment_cycle",
 	}
 
 	for _, tool := range expectedTools {

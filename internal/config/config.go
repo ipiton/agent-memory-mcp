@@ -112,6 +112,12 @@ type Config struct {
 	JinaRerankerModel string        // JINA_RERANKER_MODEL (default: jina-reranker-v2-base-multilingual)
 	RerankTimeout     time.Duration // MCP_RERANK_TIMEOUT (default: 5s)
 	RerankTopN        int           // MCP_RERANK_TOP_N (default: 40)
+
+	// Memory sedimentation (T48) — feature flag governing transition rules
+	// and layer-aware retrieval weighting. When false, the sediment_layer
+	// column still exists (migration is mandatory) but recall and cycle do
+	// not change behaviour.
+	SedimentEnabled bool // MCP_SEDIMENT_ENABLED (default: false)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -184,6 +190,7 @@ type envValues struct {
 	jinaRerankerModel                string
 	rerankTimeout                    string
 	rerankTopN                       int
+	sedimentEnabled                  bool
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -256,6 +263,7 @@ func readEnvValues() (envValues, error) {
 		jinaRerankerModel:                EnvOrDefault("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
 		rerankTimeout:                    EnvOrDefault("MCP_RERANK_TIMEOUT", "5s"),
 		rerankTopN:                       EnvInt("MCP_RERANK_TOP_N", 40),
+		sedimentEnabled:                  EnvBool("MCP_SEDIMENT_ENABLED", false),
 	}, nil
 }
 
@@ -388,6 +396,8 @@ func resolvePaths(ev envValues) (Config, error) {
 		JinaRerankerModel: ev.jinaRerankerModel,
 		RerankTimeout:     parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
 		RerankTopN:        ev.rerankTopN,
+
+		SedimentEnabled: ev.sedimentEnabled,
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
 		re, err := regexp.Compile(slugPattern)

@@ -12,13 +12,14 @@ import (
 type ProjectBankView string
 
 const (
-	ProjectBankViewCanonicalOverview ProjectBankView = "canonical_overview"
-	ProjectBankViewDecisions         ProjectBankView = "decisions"
-	ProjectBankViewRunbooks          ProjectBankView = "runbooks"
-	ProjectBankViewIncidents         ProjectBankView = "incidents"
-	ProjectBankViewCaveats           ProjectBankView = "caveats"
-	ProjectBankViewMigrations        ProjectBankView = "migrations"
-	ProjectBankViewReviewQueue       ProjectBankView = "review_queue"
+	ProjectBankViewCanonicalOverview  ProjectBankView = "canonical_overview"
+	ProjectBankViewDecisions          ProjectBankView = "decisions"
+	ProjectBankViewRunbooks           ProjectBankView = "runbooks"
+	ProjectBankViewIncidents          ProjectBankView = "incidents"
+	ProjectBankViewCaveats            ProjectBankView = "caveats"
+	ProjectBankViewMigrations         ProjectBankView = "migrations"
+	ProjectBankViewReviewQueue        ProjectBankView = "review_queue"
+	ProjectBankViewSedimentCandidates ProjectBankView = "sediment_candidates"
 )
 
 type ProjectBankOptions struct {
@@ -44,6 +45,7 @@ type ProjectBankItem struct {
 	Lifecycle      LifecycleStatus `json:"lifecycle,omitempty"`
 	ReviewRequired bool            `json:"review_required,omitempty"`
 	KnowledgeLayer string          `json:"knowledge_layer,omitempty"`
+	SedimentLayer  string          `json:"sediment_layer,omitempty"` // T48 — sedimentation layer
 	RecordKind     string          `json:"record_kind,omitempty"`
 	SessionMode    SessionMode     `json:"session_mode,omitempty"`
 	Tags           []string        `json:"tags,omitempty"`
@@ -88,7 +90,8 @@ func ValidateProjectBankView(value string) (ProjectBankView, error) {
 		ProjectBankViewIncidents,
 		ProjectBankViewCaveats,
 		ProjectBankViewMigrations,
-		ProjectBankViewReviewQueue:
+		ProjectBankViewReviewQueue,
+		ProjectBankViewSedimentCandidates:
 		return ProjectBankView(normalized), nil
 	default:
 		return "", &ErrValidation{Message: fmt.Sprintf("invalid project bank view %q", value)}
@@ -176,6 +179,7 @@ func projectBankItemFromMemory(mem *Memory, trust *trust.Metadata) *ProjectBankI
 		Lifecycle:      LifecycleStatusOf(mem),
 		ReviewRequired: RequiresReview(mem),
 		KnowledgeLayer: memoryKnowledgeLayer(mem),
+		SedimentLayer:  string(NormalizeSedimentLayer(mem.SedimentLayer)),
 		RecordKind:     strings.TrimSpace(metadata[MetadataRecordKind]),
 		SessionMode:    SessionMode(strings.TrimSpace(metadata[MetadataSessionMode])),
 		Tags:           append([]string(nil), mem.Tags...),

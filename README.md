@@ -655,8 +655,11 @@ For shared HTTP mode:
 | `end_task` | Consolidate memory for an archived task slug: outdate working/procedural entries, route high-importance ones to the review queue |
 | `sweep_archive` | Pull-mode scan over `MCP_TASK_ARCHIVE_ROOTS` that runs `end_task` on every archived slug |
 | `store_dead_end` | Record an attempted approach that failed (plus the why and the alternative used) so retrieval can surface it as a pitfall warning on related queries |
+| `promote_sediment` | Promote a memory to a higher sediment layer (surface → episodic → semantic → character). See `docs/SEDIMENTATION.md` |
+| `demote_sediment` | Demote a memory one sediment layer down |
+| `sediment_cycle` | Run the sediment transition cycle — auto-applies trivial promotions, routes non-trivial ones to the review queue |
 | `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
-| `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue |
+| `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, the review queue, or sediment promotion candidates |
 
 ### Stewardship tools
 
@@ -747,6 +750,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `JINA_RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Jina reranker model id |
 | `MCP_RERANK_TIMEOUT` | `5s` | Hard timeout for one rerank call; on timeout the hybrid order is kept and `rerank_failed:timeout` is added to debug signals |
 | `MCP_RERANK_TOP_N` | `40` | Number of top hybrid candidates sent to the reranker; clamped to `100` at call time |
+| `MCP_SEDIMENT_ENABLED` | `false` | Enable layer-aware retrieval scoring (character always surfaced, surface excluded outside context). Schema migration + backfill always run; only retrieval weighting is gated. See `docs/SEDIMENTATION.md` |
 
 ### Data paths
 

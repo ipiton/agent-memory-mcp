@@ -77,6 +77,8 @@ func main() {
 		runEndTask(args)
 	case "mark-dead-end":
 		runMarkDeadEnd(args)
+	case "sediment-cycle":
+		runSedimentCycle(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -220,6 +222,9 @@ Task lifecycle (T47):
 
 Knowledge capture (T46):
   mark-dead-end   Record an abandoned approach with its failure rationale so future agents avoid it
+
+Memory sedimentation (T48):
+  sediment-cycle  Scan memories for layer transitions; trivial ones auto-apply, non-trivial ones queue for review
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)
