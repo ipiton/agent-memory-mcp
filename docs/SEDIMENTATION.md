@@ -150,6 +150,32 @@ Enabling/disabling the flag at runtime requires a server restart (the flag
 is stored atomically on the `Store` and set once at startup from
 `cfg.SedimentEnabled`).
 
+### Scheduling
+
+By default, the sediment cycle runs only on explicit invocation (CLI
+`sediment-cycle` or the `sediment_cycle` MCP tool).
+
+To run automatically in the background, set:
+
+```
+MCP_SEDIMENT_ENABLED=true
+MCP_SEDIMENT_SCHEDULE_INTERVAL=1h
+```
+
+The scheduler ticks at the configured interval and runs `RunSedimentCycle`
+with `DryRun=false, Limit=0`. Results are logged at Info level with
+counters (`auto_applied`, `review_queued`, `errors`) and elapsed time.
+Errors are logged at Warn and do not crash the server.
+
+The scheduler starts with the server process and stops gracefully on
+SIGINT/SIGTERM. `MCP_SEDIMENT_SCHEDULE_INTERVAL=0` (default) keeps
+scheduling disabled even when `MCP_SEDIMENT_ENABLED=true`.
+
+For production, 1h is a reasonable starting interval. Monitor the Info
+log output: if `auto_applied` grows steadily without `review_queued`
+catching up, inspect pending promotions via
+`project_bank_view(view=sediment_candidates)` and resolve them manually.
+
 ### CLI
 
 ```

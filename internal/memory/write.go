@@ -593,6 +593,24 @@ func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 	return result, nil
 }
 
+// BackdateForTest rewrites CreatedAt and AccessCount for the given memory
+// directly in SQLite, then reloads the in-memory cache. Exists solely to
+// support tests that need to simulate aged memories without waiting real
+// time — callers outside tests should never invoke it (it bypasses the
+// write path entirely). Mirrors the pattern used by the sediment
+// integration tests that reach into store.db directly.
+func (ms *Store) BackdateForTest(id string, createdAt time.Time, accessCount int) error {
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+	if _, err := ms.db.Exec(
+		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
+		createdAt, accessCount, id,
+	); err != nil {
+		return fmt.Errorf("backdate: %w", err)
+	}
+	return ms.loadMemoriesToCache()
+}
+
 func (ms *Store) updateStoredEmbedding(id string, embedding []float32, embeddingModel string) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()

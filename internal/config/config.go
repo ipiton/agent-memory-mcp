@@ -118,6 +118,11 @@ type Config struct {
 	// column still exists (migration is mandatory) but recall and cycle do
 	// not change behaviour.
 	SedimentEnabled bool // MCP_SEDIMENT_ENABLED (default: false)
+
+	// SedimentScheduleInterval — opt-in background schedule for
+	// RunSedimentCycle. Zero = never scheduled (CLI / MCP tool only).
+	// Scheduling only fires when SedimentEnabled==true AND the interval > 0.
+	SedimentScheduleInterval time.Duration // MCP_SEDIMENT_SCHEDULE_INTERVAL (default: 0 = disabled)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -191,6 +196,7 @@ type envValues struct {
 	rerankTimeout                    string
 	rerankTopN                       int
 	sedimentEnabled                  bool
+	sedimentScheduleInterval         string
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -264,6 +270,7 @@ func readEnvValues() (envValues, error) {
 		rerankTimeout:                    EnvOrDefault("MCP_RERANK_TIMEOUT", "5s"),
 		rerankTopN:                       EnvInt("MCP_RERANK_TOP_N", 40),
 		sedimentEnabled:                  EnvBool("MCP_SEDIMENT_ENABLED", false),
+		sedimentScheduleInterval:         EnvOrDefault("MCP_SEDIMENT_SCHEDULE_INTERVAL", "0"),
 	}, nil
 }
 
@@ -397,7 +404,8 @@ func resolvePaths(ev envValues) (Config, error) {
 		RerankTimeout:     parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
 		RerankTopN:        ev.rerankTopN,
 
-		SedimentEnabled: ev.sedimentEnabled,
+		SedimentEnabled:          ev.sedimentEnabled,
+		SedimentScheduleInterval: parseDurationOrDefault(ev.sedimentScheduleInterval, 0),
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
 		re, err := regexp.Compile(slugPattern)
