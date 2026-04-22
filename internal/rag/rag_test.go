@@ -485,12 +485,29 @@ func TestClassifySourceType(t *testing.T) {
 		{path: "helm/api/values.yaml", want: "helm"},
 		{path: "terraform/modules/app/main.tf", want: "terraform"},
 		{path: "k8s/ingress.yaml", want: "k8s"},
+		{path: "dead_ends/why-we-avoid-async-migration.md", want: "dead_end"},
+		{path: "notes/why-we-avoid-shared-mutable-state.md", want: "dead_end"},
 	}
 
 	for _, tc := range tests {
 		if got := classifySourceType(tc.path, "", ""); got != tc.want {
 			t.Fatalf("classifySourceType(%q) = %q, want %q", tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestSourceAwareBoostDeadEnd(t *testing.T) {
+	if got := sourceAwareBoost("how to migrate async processing safely", "dead_end"); got <= 0 {
+		t.Fatalf("sourceAwareBoost dead_end with keyword = %.3f, want >0", got)
+	}
+	if got := sourceAwareBoost("lesson learned from sharding", "dead_end"); got <= 0 {
+		t.Fatalf("sourceAwareBoost dead_end with lesson keyword = %.3f, want >0", got)
+	}
+	if got := sourceAwareBoost("catalog service schema version", "dead_end"); got != 0 {
+		t.Fatalf("sourceAwareBoost dead_end on neutral query = %.3f, want 0", got)
+	}
+	if got := sourceAwareBoost("", "dead_end"); got != 0 {
+		t.Fatalf("sourceAwareBoost dead_end empty query = %.3f, want 0", got)
 	}
 }
 

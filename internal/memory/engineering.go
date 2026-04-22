@@ -7,27 +7,27 @@ import (
 )
 
 const (
-	MetadataEntity          = "entity"
-	MetadataService         = "service"
-	MetadataSeverity        = "severity"
-	MetadataStatus          = "status"
-	MetadataLifecycleStatus = "lifecycle_status"
-	MetadataKnowledgeLayer  = "knowledge_layer"
-	MetadataOwner           = "owner"
-	MetadataLastVerifiedAt  = "last_verified_at"
-	MetadataReviewRequired  = "review_required"
-	MetadataReviewReason    = "review_reason"
-	MetadataRecordKind      = "record_kind"
-	MetadataSessionMode     = "session_mode"
-	MetadataDerivedFrom     = "derived_from"
-	MetadataSessionBoundary = "session_boundary"
-	MetadataSessionOrigin   = "session_origin"
-	MetadataSourceSessionID = "source_session_id"
-	MetadataActionKind          = "action_kind"
-	MetadataActionHandling      = "action_handling"
-	MetadataVerifiedBy          = "verified_by"
-	MetadataVerificationMethod  = "verification_method"
-	MetadataVerificationStatus  = "verification_status"
+	MetadataEntity             = "entity"
+	MetadataService            = "service"
+	MetadataSeverity           = "severity"
+	MetadataStatus             = "status"
+	MetadataLifecycleStatus    = "lifecycle_status"
+	MetadataKnowledgeLayer     = "knowledge_layer"
+	MetadataOwner              = "owner"
+	MetadataLastVerifiedAt     = "last_verified_at"
+	MetadataReviewRequired     = "review_required"
+	MetadataReviewReason       = "review_reason"
+	MetadataRecordKind         = "record_kind"
+	MetadataSessionMode        = "session_mode"
+	MetadataDerivedFrom        = "derived_from"
+	MetadataSessionBoundary    = "session_boundary"
+	MetadataSessionOrigin      = "session_origin"
+	MetadataSourceSessionID    = "source_session_id"
+	MetadataActionKind         = "action_kind"
+	MetadataActionHandling     = "action_handling"
+	MetadataVerifiedBy         = "verified_by"
+	MetadataVerificationMethod = "verification_method"
+	MetadataVerificationStatus = "verification_status"
 )
 
 const (
@@ -47,6 +47,7 @@ const (
 	EngineeringTypeMigrationNote EngineeringType = "migration-note"
 	EngineeringTypeCaveat        EngineeringType = "caveat"
 	EngineeringTypeProcedure     EngineeringType = "procedure"
+	EngineeringTypeDeadEnd       EngineeringType = "dead_end"
 )
 
 type LifecycleStatus string
@@ -107,7 +108,8 @@ func ValidateEngineeringType(value string, allowEmpty bool) (EngineeringType, er
 		EngineeringTypePostmortem,
 		EngineeringTypeMigrationNote,
 		EngineeringTypeCaveat,
-		EngineeringTypeProcedure:
+		EngineeringTypeProcedure,
+		EngineeringTypeDeadEnd:
 		return normalizeEngineeringType(value), nil
 	default:
 		return "", &ErrValidation{Message: fmt.Sprintf("invalid engineering type %q", strings.TrimSpace(value))}
@@ -133,7 +135,7 @@ func DefaultStorageTypeForEngineeringType(entity EngineeringType) Type {
 		return TypeEpisodic
 	case EngineeringTypeRunbook, EngineeringTypeProcedure:
 		return TypeProcedural
-	case EngineeringTypeDecision, EngineeringTypeMigrationNote, EngineeringTypeCaveat:
+	case EngineeringTypeDecision, EngineeringTypeMigrationNote, EngineeringTypeCaveat, EngineeringTypeDeadEnd:
 		return TypeSemantic
 	default:
 		return TypeSemantic
@@ -368,6 +370,8 @@ func normalizeEngineeringType(value string) EngineeringType {
 		return EngineeringTypeCaveat
 	case "procedure", "procedures":
 		return EngineeringTypeProcedure
+	case "dead_end", "dead-end", "deadend", "dead_ends":
+		return EngineeringTypeDeadEnd
 	default:
 		return ""
 	}

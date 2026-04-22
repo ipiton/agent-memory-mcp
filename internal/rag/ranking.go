@@ -39,6 +39,8 @@ func normalizeSourceType(value string) string {
 		return "runbook"
 	case "postmortem", "postmortems", "incident":
 		return "postmortem"
+	case "dead_end", "dead-end", "deadend", "dead_ends":
+		return "dead_end"
 	case "ci", "ci_config", "workflow", "pipeline":
 		return "ci_config"
 	case "helm":
@@ -89,6 +91,10 @@ func sourceAwareBoost(query string, sourceType string) float64 {
 		}
 	case "k8s":
 		if scoring.ContainsAny(queryLower, "k8s", "kubernetes", "deployment", "ingress", "service") {
+			return 0.07
+		}
+	case "dead_end":
+		if scoring.ContainsAny(queryLower, "how to", "approach", "try", "failed", "pitfall", "why not", "lesson", "avoid") {
 			return 0.07
 		}
 	}
@@ -143,6 +149,8 @@ func documentConfidence(sourceType string) float64 {
 		return 0.94
 	case "postmortem":
 		return 0.92
+	case "dead_end":
+		return 0.90
 	case "changelog":
 		return 0.90
 	case "ci_config":
@@ -162,7 +170,7 @@ func documentOwner(sourceType string) string {
 	switch sourceType {
 	case "adr", "rfc", "docs":
 		return "engineering"
-	case "runbook", "postmortem":
+	case "runbook", "postmortem", "dead_end":
 		return "operations"
 	case "changelog":
 		return "release"

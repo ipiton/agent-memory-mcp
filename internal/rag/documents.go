@@ -205,6 +205,8 @@ func classifySourceType(docPath string, title string, content string) string {
 		return "runbook"
 	case strings.Contains(pathLower, "/postmortem") || strings.Contains(pathLower, "postmortems/") || strings.Contains(titleLower, "postmortem"):
 		return "postmortem"
+	case strings.Contains(pathLower, "/dead_end") || strings.Contains(pathLower, "dead_ends/") || strings.Contains(pathLower, "/dead-end") || strings.Contains(pathLower, "dead-ends/") || strings.Contains(titleLower, "dead end") || strings.HasPrefix(baseLower, "why-we-avoid-"):
+		return "dead_end"
 	case strings.Contains(pathLower, "/adr") || strings.HasPrefix(baseLower, "adr") || strings.Contains(titleLower, "architecture decision"):
 		return "adr"
 	case strings.Contains(pathLower, "/rfc") || strings.HasPrefix(titleLower, "rfc") || strings.Contains(baseLower, "rfc"):

@@ -778,18 +778,38 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"title":        map[string]any{"type": "string", "description": "Short title for the decision"},
-					"decision":     map[string]any{"type": "string", "description": "What was decided"},
-					"rationale":    map[string]any{"type": "string", "description": "Why the decision was made"},
-					"consequences": map[string]any{"type": "string", "description": "Expected impact or tradeoffs"},
-					"context":      map[string]any{"type": "string", "description": "Project, task, or service context"},
-					"service":      map[string]any{"type": "string", "description": "Service or component name"},
-					"owner":        map[string]any{"type": "string", "description": "Decision owner"},
-					"status":       map[string]any{"type": "string", "description": "Decision status, for example proposed or accepted"},
-					"tags":         map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Additional tags"},
-					"importance":   map[string]any{"type": "number", "minimum": 0, "maximum": 1, "default": 0.85},
+					"title":               map[string]any{"type": "string", "description": "Short title for the decision"},
+					"decision":            map[string]any{"type": "string", "description": "What was decided"},
+					"rationale":           map[string]any{"type": "string", "description": "Why the decision was made"},
+					"consequences":        map[string]any{"type": "string", "description": "Expected impact or tradeoffs"},
+					"context":             map[string]any{"type": "string", "description": "Project, task, or service context"},
+					"service":             map[string]any{"type": "string", "description": "Service or component name"},
+					"owner":               map[string]any{"type": "string", "description": "Decision owner"},
+					"status":              map[string]any{"type": "string", "description": "Decision status, for example proposed or accepted"},
+					"tags":                map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Additional tags"},
+					"importance":          map[string]any{"type": "number", "minimum": 0, "maximum": 1, "default": 0.85},
+					"avoided_dead_end_id": map[string]any{"type": "string", "description": "Optional ID of a previously recorded dead_end this decision avoids"},
 				},
 				"required": []string{"decision"},
+			},
+		},
+		{
+			Name:        "store_dead_end",
+			Description: "Store an abandoned approach with its failure rationale so future agents can avoid repeating it",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":              map[string]any{"type": "string", "description": "Short title for the dead end"},
+					"attempted_approach": map[string]any{"type": "string", "description": "Short description of the failed attempt"},
+					"why_failed":         map[string]any{"type": "string", "description": "Root cause of the failure"},
+					"alternative_used":   map[string]any{"type": "string", "description": "What was used instead"},
+					"related_task_slug":  map[string]any{"type": "string", "description": "Related task slug or session ID"},
+					"context":            map[string]any{"type": "string", "description": "Project, task, or service context"},
+					"service":            map[string]any{"type": "string", "description": "Service or component name"},
+					"tags":               map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Additional tags"},
+					"importance":         map[string]any{"type": "number", "minimum": 0, "maximum": 1, "default": 0.80},
+				},
+				"required": []string{"attempted_approach", "why_failed"},
 			},
 		},
 		{
@@ -1152,8 +1172,8 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 }
 
 var ragTools = map[string]bool{
-	"semantic_search":  true,
-	"index_documents":  true,
+	"semantic_search": true,
+	"index_documents": true,
 }
 
 var memoryTools = map[string]bool{
@@ -1181,6 +1201,7 @@ var memoryTools = map[string]bool{
 	"store_incident":             true,
 	"store_runbook":              true,
 	"store_postmortem":           true,
+	"store_dead_end":             true,
 	"project_bank_view":          true,
 	"recall_as_of":               true,
 	"knowledge_timeline":         true,
@@ -1226,6 +1247,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"store_incident":             s.callStoreIncident,
 		"store_runbook":              s.callStoreRunbook,
 		"store_postmortem":           s.callStorePostmortem,
+		"store_dead_end":             s.callStoreDeadEnd,
 		"search_runbooks":            s.callSearchRunbooks,
 		"recall_similar_incidents":   s.callRecallSimilarIncidents,
 		"summarize_project_context":  s.callSummarizeProjectContext,

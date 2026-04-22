@@ -75,6 +75,8 @@ func main() {
 		runSweepArchive(args)
 	case "end-task":
 		runEndTask(args)
+	case "mark-dead-end":
+		runMarkDeadEnd(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -215,6 +217,9 @@ Hooks (for Claude Code integration):
 Task lifecycle (T47):
   sweep-archive   Mark working memories tied to archived task slugs as outdated
   end-task        Explicitly consolidate working memories for a single archived task slug
+
+Knowledge capture (T46):
+  mark-dead-end   Record an abandoned approach with its failure rationale so future agents avoid it
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)

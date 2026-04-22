@@ -363,8 +363,16 @@ func truncateText(value string, maxLen int) string {
 
 // Memory result formatting
 
-func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchResult) string {
-	if len(results) == 0 {
+func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchResult, suggestions ...*memory.SearchResult) string {
+	// Filter out nil suggestions.
+	activeSuggestions := make([]*memory.SearchResult, 0, len(suggestions))
+	for _, sg := range suggestions {
+		if sg != nil && sg.Memory != nil {
+			activeSuggestions = append(activeSuggestions, sg)
+		}
+	}
+
+	if len(results) == 0 && len(activeSuggestions) == 0 {
 		return fmt.Sprintf("No memories found for '%s'.", query)
 	}
 
@@ -393,6 +401,22 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 		}
 		fmt.Fprintf(&buf, "   Content: %s\n", snippet)
 		fmt.Fprintf(&buf, "   Importance: %.1f | Access count: %d\n\n", m.Importance, m.AccessCount)
+	}
+
+	for _, sg := range activeSuggestions {
+		m := sg.Memory
+		entity := memory.EngineeringTypeOf(m)
+		fmt.Fprintf(&buf, "Suggestion [suggestion:%s]: **%s** (relevance: %.2f)\n", entity, memory.DisplayTitle(m, 50), sg.Score)
+		fmt.Fprintf(&buf, "   ID: `%s`\n", m.ID)
+		fmt.Fprintf(&buf, "   Type: %s\n", formatMemoryType(m.Type))
+		if len(m.Tags) > 0 {
+			fmt.Fprintf(&buf, "   Tags: %v\n", m.Tags)
+		}
+		snippet := m.Content
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		fmt.Fprintf(&buf, "   Content: %s\n\n", snippet)
 	}
 
 	return buf.String()
