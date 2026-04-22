@@ -652,6 +652,8 @@ For shared HTTP mode:
 | `resolve_review_item` | Resolve a pending review queue item so it disappears from the active inbox while keeping an audit trail |
 | `search_runbooks` | Search runbook memories plus indexed runbook docs |
 | `recall_similar_incidents` | Recall similar incidents from memory and indexed postmortems |
+| `end_task` | Consolidate memory for an archived task slug: outdate working/procedural entries, route high-importance ones to the review queue |
+| `sweep_archive` | Pull-mode scan over `MCP_TASK_ARCHIVE_ROOTS` that runs `end_task` on every archived slug |
 | `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
 | `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, or the review queue |
 
@@ -733,6 +735,12 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_STEWARD_DUPLICATE_THRESHOLD` | `0.85` | Similarity threshold for duplicate detection |
 | `MCP_STEWARD_STALE_DAYS` | `30` | Days before a memory is considered stale |
 | `MCP_STEWARD_CANONICAL_MIN_CONFIDENCE` | `0.80` | Minimum confidence for canonical promotion candidates |
+| `MCP_CHECKPOINT_DEDUP_THRESHOLD` | `0.9` | Jaccard similarity threshold above which a checkpoint is considered a duplicate of the previous one in the same context |
+| `MCP_CHECKPOINT_DEDUP_WINDOW` | `10m` | Time window for the dedup lookup — only checkpoints newer than this are compared |
+| `MCP_CHECKPOINT_DEDUP_MIN_CHARS` | `100` | Minimum content length (chars) before a checkpoint is eligible to be saved; shorter content is dropped as empty |
+| `MCP_CHECKPOINT_DEDUP_DISABLED` | `false` | Escape hatch: disable checkpoint-hook deduplication entirely |
+| `MCP_TASK_ARCHIVE_ROOTS` | - | Colon-separated archive roots for `sweep-archive` / `end-task` (e.g. `/home/you/tasks/archive`). Empty disables the feature |
+| `MCP_TASK_SLUG_PATTERN` | - | Optional regex filtering archive subdirectory names; invalid regex fails config load |
 
 ### Data paths
 
