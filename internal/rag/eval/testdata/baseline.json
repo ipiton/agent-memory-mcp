@@ -1,0 +1,27 @@
+{
+  "total_queries": 22,
+  "hit_rate_at_5": 1,
+  "mrr": 0.9106060606060605,
+  "per_type": {
+    "conditional": {
+      "count": 6,
+      "hit_rate_at_5": 1,
+      "mrr": 1
+    },
+    "multi-hop": {
+      "count": 5,
+      "hit_rate_at_5": 1,
+      "mrr": 1
+    },
+    "set": {
+      "count": 5,
+      "hit_rate_at_5": 1,
+      "mrr": 0.74
+    },
+    "simple": {
+      "count": 6,
+      "hit_rate_at_5": 1,
+      "mrr": 0.888888888888889
+    }
+  }
+}
