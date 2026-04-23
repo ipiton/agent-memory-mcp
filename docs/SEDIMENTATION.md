@@ -218,8 +218,52 @@ Transitions:
 - `demote_sediment(id)` — move one layer closer to surface. No-op at surface.
 - `sediment_cycle(dry_run, since_days, limit)` — run the cycle from the MCP surface.
 - `project_bank_view(view="sediment_candidates")` — enumerate pending sediment review-queue items for a reviewer.
+- `recount_references(dry_run)` — backfill `referenced_by_count` metadata from existing `avoided_dead_end_id` and `superseded_by` edges. Idempotent. See [Reference counting](#reference-counting).
 
-All four require `memory_store` to be available; they return RPC errors if it is not.
+All five require `memory_store` to be available; they return RPC errors if it is not.
+
+### Reference counting
+
+The `semantic → character` rule fires on `referenced_by_count >= 20`
+(`SedimentPolicy.SemanticToCharacterRefs`). This counter lives in the
+target memory's `metadata["referenced_by_count"]` field and is populated
+atomically by the Store whenever another memory creates a reference:
+
+| Edge                                   | Live-path writer                                |
+|----------------------------------------|-------------------------------------------------|
+| `metadata["avoided_dead_end_id"]`      | `store_decision` tool when the arg is set (T46) |
+| `memories.superseded_by` column        | `MarkOutdated(id, reason, supersededBy)`        |
+
+Both writers call `Store.IncrementReferencedByCount(ctx, targetID)` after
+the originating write succeeds. Failures are logged at Warn and never
+fail the originating Store call — the counter is a best-effort
+observability signal, not a correctness invariant. Decrement on memory
+deletion is deliberately **not** implemented (rare, complex to get right
+against a concurrent cycle scanner). Counts are therefore monotonic in
+practice; operators who need a fresh tally can re-run backfill.
+
+#### Backfill for existing corpora
+
+For databases that existed before the live-path increment landed, run the
+one-time backfill to bootstrap counters from the stored edges:
+
+```
+agent-memory-mcp recount-refs [--dry-run] [--json] [--verbose]
+```
+
+Or via MCP:
+
+```
+recount_references(dry_run=true)   # preview
+recount_references(dry_run=false)  # apply
+```
+
+The tool scans every memory, derives a tally from `avoided_dead_end_id`
+metadata and the `superseded_by` column, then rewrites
+`referenced_by_count` only for rows whose stored value differs from the
+tally. It is **idempotent**: a second run on an already-synced corpus
+reports `Updated=0`. The inverse `replaces` column is NOT counted
+separately (it is the other side of the same edge and would double-count).
 
 ### Monitoring the cycle
 

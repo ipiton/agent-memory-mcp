@@ -195,10 +195,17 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 		ms.logger.Warn("Failed to set temporal fields on outdated entry", zap.String("id", id), zap.Error(err))
 	}
 
-	// If superseding entry exists, link it back.
+	// If superseding entry exists, link it back and bump its
+	// referenced_by_count so the T48 semantic→character "by refs" rule
+	// eventually fires. Best-effort — logging Warn on failure does not
+	// undo the supersession.
 	if supersededBy != "" {
 		if err := ms.SetTemporalFields(ctx, supersededBy, &now, nil, "", id); err != nil {
 			ms.logger.Warn("Failed to set temporal fields on superseding entry", zap.String("id", supersededBy), zap.Error(err))
+		}
+		if err := ms.IncrementReferencedByCount(ctx, supersededBy); err != nil {
+			ms.logger.Warn("Failed to increment referenced_by_count on superseding entry",
+				zap.String("id", supersededBy), zap.Error(err))
 		}
 	}
 
