@@ -13,6 +13,7 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/review"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
+	"go.uber.org/zap"
 )
 
 type sessionAnalysisOptions struct {
@@ -274,10 +275,21 @@ func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
 		prefixedLine("Avoided dead end", mustString(args, "avoided_dead_end_id")),
 	)
 	extraMeta := map[string]string{"owner": owner}
-	if avoidedID := strings.TrimSpace(mustString(args, "avoided_dead_end_id")); avoidedID != "" {
+	avoidedID := strings.TrimSpace(mustString(args, "avoided_dead_end_id"))
+	if avoidedID != "" {
 		extraMeta["avoided_dead_end_id"] = avoidedID
 	}
-	return s.storeEngineeringMemory(args, memory.EngineeringTypeDecision, "Decision", content, decision, 0.85, nil, extraMeta)
+	result, rpcErr := s.storeEngineeringMemory(args, memory.EngineeringTypeDecision, "Decision", content, decision, 0.85, nil, extraMeta)
+	if rpcErr == nil && avoidedID != "" && s.memoryStore != nil {
+		// Best-effort observability counter: never fail the originating
+		// Store call if the increment errors. Feeds the T48 semantic→
+		// character "by refs" promotion rule.
+		if err := s.memoryStore.IncrementReferencedByCount(context.Background(), avoidedID); err != nil && s.fileLogger != nil {
+			s.fileLogger.Warn("failed to increment referenced_by_count on avoided dead end",
+				zap.String("target", avoidedID), zap.Error(err))
+		}
+	}
+	return result, rpcErr
 }
 
 // callStoreDeadEnd persists an abandoned approach with its failure rationale.
@@ -346,6 +358,45 @@ func (s *MCPServer) callStorePostmortem(args map[string]any) (any, *rpcError) {
 		prefixedLine("Severity", mustString(args, "severity")),
 	)
 	return s.storeEngineeringMemory(args, memory.EngineeringTypePostmortem, "Postmortem", content, summary, 0.85, []string{"incident"}, nil)
+}
+
+// callRecountReferences exposes Store.RecountReferences as an MCP tool.
+// One-time backfill to bootstrap the referenced_by_count counter from
+// existing data (avoided_dead_end_id metadata + superseded_by column).
+// Idempotent — re-running reports Updated=0 once counters match.
+func (s *MCPServer) callRecountReferences(args map[string]any) (any, *rpcError) {
+	if err := s.requireMemoryStore(); err != nil {
+		return nil, err
+	}
+
+	dryRun, _ := getBool(args, "dry_run")
+	result, err := s.memoryStore.RecountReferences(context.Background(), dryRun)
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "recount references failed", Data: err.Error()}
+	}
+
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
+	if format == "text" {
+		mode := "live"
+		if result.DryRun {
+			mode = "dry-run"
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Recount references (%s):\n", mode)
+		fmt.Fprintf(&b, "- Scanned: %d\n", result.Scanned)
+		fmt.Fprintf(&b, "- Updated: %d\n", result.Updated)
+		if len(result.Counts) > 0 && result.Updated <= 20 {
+			b.WriteString("\nChanges:\n")
+			for id, count := range result.Counts {
+				fmt.Fprintf(&b, "- %s → %d\n", id, count)
+			}
+		}
+		return toolResultText(b.String()), nil
+	}
+	return toolResultJSON(result), nil
 }
 
 func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {

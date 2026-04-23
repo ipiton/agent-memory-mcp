@@ -67,10 +67,11 @@ type MCPServer struct {
 	memoryStore      *memory.Store
 	embedder         *embedder.Embedder
 	fileLogger       *logger.FileLogger
-	sessionTracker   *sessionTracker
-	stewardService   *steward.Service
-	stewardScheduler *steward.Scheduler
-	toolHandlers     map[string]toolHandler
+	sessionTracker    *sessionTracker
+	stewardService    *steward.Service
+	stewardScheduler  *steward.Scheduler
+	sedimentScheduler *sedimentScheduler
+	toolHandlers      map[string]toolHandler
 }
 
 // New creates a new MCPServer with the given configuration and path guard.
@@ -202,18 +203,24 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	}
 
 	srv := &MCPServer{
-		config:           cfg,
-		pathGuard:        guard,
-		outputMode:       cfg.OutputMode,
-		stats:            stats.NewLogger(cfg),
-		ragEngine:        ragEngine,
-		memoryStore:      memoryStore,
-		embedder:         emb,
-		fileLogger:       fileLogger,
-		sessionTracker:   newSessionTracker(cfg, memoryStore, fileLogger),
-		stewardService:   stewardSvc,
-		stewardScheduler: stewardSched,
+		config:            cfg,
+		pathGuard:         guard,
+		outputMode:        cfg.OutputMode,
+		stats:             stats.NewLogger(cfg),
+		ragEngine:         ragEngine,
+		memoryStore:       memoryStore,
+		embedder:          emb,
+		fileLogger:        fileLogger,
+		sessionTracker:    newSessionTracker(cfg, memoryStore, fileLogger),
+		stewardService:    stewardSvc,
+		stewardScheduler:  stewardSched,
+		sedimentScheduler: newSedimentScheduler(memoryStore, fileLogger, cfg.SedimentEnabled, cfg.SedimentScheduleInterval),
 	}
+	// Start the sediment background loop now so it runs regardless of
+	// transport (stdio or HTTP). newSedimentScheduler returns nil when
+	// the feature flag is off or the interval is zero, so Start() is a
+	// no-op in that case.
+	srv.sedimentScheduler.Start()
 	// Wire session close event to steward scheduler.
 	if srv.sessionTracker != nil && stewardSched != nil {
 		srv.sessionTracker.onSessionClose = func() {
@@ -425,6 +432,9 @@ func (s *MCPServer) ReloadRAG(newCfg config.Config) {
 func (s *MCPServer) Shutdown() {
 	if s.stewardScheduler != nil {
 		s.stewardScheduler.Stop()
+	}
+	if s.sedimentScheduler != nil {
+		s.sedimentScheduler.Close()
 	}
 	if s.sessionTracker != nil {
 		s.sessionTracker.Close()

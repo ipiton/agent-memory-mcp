@@ -379,6 +379,7 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"promote_sediment",
 		"demote_sediment",
 		"sediment_cycle",
+		"recount_references",
 	}
 
 	for _, tool := range expectedTools {
@@ -623,6 +624,81 @@ func TestCallStoreDecisionRecordsAvoidedDeadEndID(t *testing.T) {
 	}
 	if got := memories[0].Metadata["avoided_dead_end_id"]; got != "mem-dead-001" {
 		t.Fatalf("avoided_dead_end_id metadata = %q, want mem-dead-001", got)
+	}
+}
+
+// TestCallStoreDecision_IncrementsReferencedByCountOnAvoidedDeadEnd asserts
+// that callStoreDecision with a real avoided_dead_end_id bumps the
+// referenced_by_count on the dead-end memory. Activates the T48 semantic→
+// character "by refs" rule.
+func TestCallStoreDecision_IncrementsReferencedByCountOnAvoidedDeadEnd(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	// Seed a real dead-end first so its ID is addressable by the decision.
+	deadEnd := &memory.Memory{
+		Title:      "Dead end A",
+		Content:    "abandoned because foo",
+		Type:       memory.TypeSemantic,
+		Importance: 0.5,
+	}
+	if err := s.memoryStore.Store(context.Background(), deadEnd); err != nil {
+		t.Fatalf("Store dead-end: %v", err)
+	}
+
+	_, rErr := s.callStoreDecision(map[string]any{
+		"decision":            "use approach X",
+		"rationale":           "avoids the pitfall documented in dead-end A",
+		"service":             "catalog",
+		"status":              "accepted",
+		"avoided_dead_end_id": deadEnd.ID,
+	})
+	if rErr != nil {
+		t.Fatalf("callStoreDecision: %+v", rErr)
+	}
+
+	after, err := s.memoryStore.Get(deadEnd.ID)
+	if err != nil {
+		t.Fatalf("Get dead-end: %v", err)
+	}
+	if got := after.Metadata[memory.MetadataReferencedByCount]; got != "1" {
+		t.Fatalf("referenced_by_count = %q, want 1", got)
+	}
+}
+
+// TestCallStoreDecision_NoIncrement_WhenAvoidedDeadEndIDEmpty verifies that
+// when avoided_dead_end_id is omitted/empty, no counter increment side
+// effect touches any existing memory.
+func TestCallStoreDecision_NoIncrement_WhenAvoidedDeadEndIDEmpty(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	existing := &memory.Memory{
+		Title:      "Unrelated",
+		Content:    "does not participate in the graph edge",
+		Type:       memory.TypeSemantic,
+		Importance: 0.5,
+	}
+	if err := s.memoryStore.Store(context.Background(), existing); err != nil {
+		t.Fatalf("Store existing: %v", err)
+	}
+
+	_, rErr := s.callStoreDecision(map[string]any{
+		"decision":  "ship it",
+		"rationale": "no blockers",
+		"service":   "catalog",
+		"status":    "accepted",
+	})
+	if rErr != nil {
+		t.Fatalf("callStoreDecision: %+v", rErr)
+	}
+
+	after, err := s.memoryStore.Get(existing.ID)
+	if err != nil {
+		t.Fatalf("Get existing: %v", err)
+	}
+	// No avoided_dead_end_id → no edge → no counter bump on any
+	// pre-existing memory.
+	if got := after.Metadata[memory.MetadataReferencedByCount]; got != "" {
+		t.Fatalf("referenced_by_count = %q, want empty", got)
 	}
 }
 

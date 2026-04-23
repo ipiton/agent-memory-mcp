@@ -79,6 +79,8 @@ func main() {
 		runMarkDeadEnd(args)
 	case "sediment-cycle":
 		runSedimentCycle(args)
+	case "recount-refs":
+		runRecountRefs(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -225,6 +227,7 @@ Knowledge capture (T46):
 
 Memory sedimentation (T48):
   sediment-cycle  Scan memories for layer transitions; trivial ones auto-apply, non-trivial ones queue for review
+  recount-refs    Backfill referenced_by_count metadata from existing cross-memory edges (idempotent)
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)

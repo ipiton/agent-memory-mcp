@@ -1033,6 +1033,17 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 				},
 			},
 		},
+		{
+			Name:        "recount_references",
+			Description: "Backfill referenced_by_count metadata from existing data (avoided_dead_end_id and superseded_by edges). Idempotent; feeds the T48 semantic→character 'by refs' promotion rule.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"dry_run": map[string]any{"type": "boolean", "default": false, "description": "Preview changes without writing. Updated counts rows that would change."},
+					"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},
+				},
+			},
+		},
 	}
 
 	// Steward tools — only registered when steward service is enabled.
@@ -1251,6 +1262,7 @@ var memoryTools = map[string]bool{
 	"promote_sediment":           true,
 	"demote_sediment":            true,
 	"sediment_cycle":             true,
+	"recount_references":         true,
 }
 
 // hybridTools require at least one of memoryStore or ragEngine.
@@ -1312,6 +1324,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"promote_sediment":           s.callPromoteSediment,
 		"demote_sediment":            s.callDemoteSediment,
 		"sediment_cycle":             s.callSedimentCycle,
+		"recount_references":         s.callRecountReferences,
 	}
 }
 

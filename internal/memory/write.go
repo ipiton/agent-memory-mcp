@@ -195,10 +195,17 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 		ms.logger.Warn("Failed to set temporal fields on outdated entry", zap.String("id", id), zap.Error(err))
 	}
 
-	// If superseding entry exists, link it back.
+	// If superseding entry exists, link it back and bump its
+	// referenced_by_count so the T48 semantic→character "by refs" rule
+	// eventually fires. Best-effort — logging Warn on failure does not
+	// undo the supersession.
 	if supersededBy != "" {
 		if err := ms.SetTemporalFields(ctx, supersededBy, &now, nil, "", id); err != nil {
 			ms.logger.Warn("Failed to set temporal fields on superseding entry", zap.String("id", supersededBy), zap.Error(err))
+		}
+		if err := ms.IncrementReferencedByCount(ctx, supersededBy); err != nil {
+			ms.logger.Warn("Failed to increment referenced_by_count on superseding entry",
+				zap.String("id", supersededBy), zap.Error(err))
 		}
 	}
 
@@ -591,6 +598,24 @@ func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 	}
 
 	return result, nil
+}
+
+// BackdateForTest rewrites CreatedAt and AccessCount for the given memory
+// directly in SQLite, then reloads the in-memory cache. Exists solely to
+// support tests that need to simulate aged memories without waiting real
+// time — callers outside tests should never invoke it (it bypasses the
+// write path entirely). Mirrors the pattern used by the sediment
+// integration tests that reach into store.db directly.
+func (ms *Store) BackdateForTest(id string, createdAt time.Time, accessCount int) error {
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+	if _, err := ms.db.Exec(
+		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
+		createdAt, accessCount, id,
+	); err != nil {
+		return fmt.Errorf("backdate: %w", err)
+	}
+	return ms.loadMemoriesToCache()
 }
 
 func (ms *Store) updateStoredEmbedding(id string, embedding []float32, embeddingModel string) error {
