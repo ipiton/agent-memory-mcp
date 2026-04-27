@@ -274,6 +274,8 @@ func actionToInboxKind(kind ActionKind) InboxItemKind {
 		return InboxContradictionCandidate
 	case ActionMarkStale:
 		return InboxStaleEntry
+	case ActionDeleteExpiredWorking:
+		return InboxStaleEntry
 	case ActionPromoteCanonical:
 		return InboxPromotionCandidate
 	default:

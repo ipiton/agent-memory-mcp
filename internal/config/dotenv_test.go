@@ -7,11 +7,12 @@ import (
 )
 
 func TestLoadDotEnvSetsMissingValues(t *testing.T) {
-	t.Cleanup(func() {
-		_ = os.Unsetenv("MCP_ROOT")
-		_ = os.Unsetenv("MCP_DATA_PATH")
-		_ = os.Unsetenv("OPENAI_BASE_URL")
-	})
+	// Hermetic setup: clear vars that may be set in the developer's shell
+	// (homebrew install of agent-memory-mcp pre-sets MCP_DATA_PATH, for example).
+	// loadDotEnv only fills missing values, so a pre-set var would block .env.
+	t.Setenv("MCP_ROOT", "")
+	t.Setenv("MCP_DATA_PATH", "")
+	t.Setenv("OPENAI_BASE_URL", "")
 
 	envFile := filepath.Join(t.TempDir(), ".env")
 	content := "MCP_ROOT=.\nMCP_DATA_PATH=.agent-memory\nOPENAI_BASE_URL=\"https://example.test/v1\"\n"

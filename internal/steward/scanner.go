@@ -70,6 +70,7 @@ func RunScanners(ctx context.Context, store *memory.Store, policy Policy, scope 
 		scanConflicts(active, result)
 		scanSemanticConflicts(active, policy, result)
 		scanStale(active, policy, now, result)
+		scanExpiredWorking(active, policy, now, result)
 		scanCanonicalCandidates(active, policy, result)
 	case ScopeDuplicates:
 		scanDuplicates(active, policy, result)
@@ -79,6 +80,8 @@ func RunScanners(ctx context.Context, store *memory.Store, policy Policy, scope 
 		scanSemanticConflicts(active, policy, result)
 	case ScopeStale:
 		scanStale(active, policy, now, result)
+	case ScopeWorkingTTL:
+		scanExpiredWorking(active, policy, now, result)
 	case ScopeCanonical:
 		scanCanonicalCandidates(active, policy, result)
 		result.CanonicalHealth = scanCanonicalHealth(active, policy, now)
@@ -238,6 +241,71 @@ func scanStale(memories []*memory.Memory, policy Policy, now time.Time, result *
 			Rationale:  fmt.Sprintf("Last verified %d days ago (threshold: %d days)", daysSince, policy.StaleDays),
 			Evidence:   []string{fmt.Sprintf("last_verified=%s", verified.Format(time.DateOnly))},
 			Confidence: 0.70,
+		})
+	}
+}
+
+// scanExpiredWorking finds working-memory entries older than the configured TTL.
+// Working memory is short-lived by design (transient task state, session-extracted
+// noise) — entries past TTL get auto-deleted unless they exceed the importance
+// cutoff or look like canonical promotion candidates, in which case they go to
+// review queue.
+func scanExpiredWorking(memories []*memory.Memory, policy Policy, now time.Time, result *ScanResult) {
+	ttlDays := policy.EffectiveWorkingTTLDays()
+	if ttlDays <= 0 {
+		return
+	}
+	threshold := now.AddDate(0, 0, -ttlDays)
+	cutoff := policy.EffectiveWorkingDeleteImportanceCutoff()
+
+	// Recently verified entries (within 7 days) get a grace period — somebody
+	// touched them, they're still relevant working state.
+	graceThreshold := now.AddDate(0, 0, -7)
+
+	for _, m := range memories {
+		if m.Type != memory.TypeWorking {
+			continue
+		}
+
+		// Use Updated as the recency anchor; falls back to verified.
+		anchor := m.UpdatedAt
+		if anchor.IsZero() {
+			anchor = memory.LastVerifiedAt(m)
+		}
+		if anchor.After(threshold) {
+			continue
+		}
+		if memory.LastVerifiedAt(m).After(graceThreshold) {
+			continue
+		}
+
+		// Decide handling based on importance.
+		// - Below cutoff → safe_auto_apply (delete the noise)
+		// - At or above cutoff → review_required (could be promotion candidate)
+		handling := HandlingSafeAutoApply
+		if m.Importance >= cutoff {
+			handling = HandlingReviewRequired
+		}
+		// AutoDelete kill-switch: when disabled, all entries go to review.
+		if !policy.AutoDeleteExpiredWorking {
+			handling = HandlingReviewRequired
+		}
+
+		title := displayTitle(m, 60)
+		daysSince := int(now.Sub(anchor).Hours() / 24)
+
+		result.Actions = append(result.Actions, Action{
+			Kind:      ActionDeleteExpiredWorking,
+			Handling:  handling,
+			State:     StatePlanned,
+			TargetIDs: []string{m.ID},
+			Title:     fmt.Sprintf("Expired working: %s", title),
+			Rationale: fmt.Sprintf("Working entry idle %d days (TTL: %d days, importance: %.2f)", daysSince, ttlDays, m.Importance),
+			Evidence: []string{
+				fmt.Sprintf("anchor=%s", anchor.Format(time.DateOnly)),
+				fmt.Sprintf("importance=%.2f", m.Importance),
+			},
+			Confidence: 0.75,
 		})
 	}
 }
