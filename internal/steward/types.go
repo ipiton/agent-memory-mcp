@@ -18,6 +18,7 @@ const (
 	ScopeStale             RunScope = "stale"
 	ScopeCanonical         RunScope = "canonical"
 	ScopeSemanticConflicts RunScope = "semantic_conflicts"
+	ScopeWorkingTTL        RunScope = "working_ttl"
 )
 
 // PolicyMode controls when stewardship runs execute.
@@ -34,12 +35,13 @@ const (
 type ActionKind string
 
 const (
-	ActionMergeDuplicates    ActionKind = "merge_duplicates"
-	ActionMarkStale          ActionKind = "mark_stale"
-	ActionPromoteCanonical   ActionKind = "promote_canonical"
-	ActionRefreshFreshness   ActionKind = "refresh_freshness"
-	ActionFlagConflict       ActionKind = "flag_conflict"
-	ActionFlagContradiction  ActionKind = "flag_contradiction"
+	ActionMergeDuplicates       ActionKind = "merge_duplicates"
+	ActionMarkStale             ActionKind = "mark_stale"
+	ActionPromoteCanonical      ActionKind = "promote_canonical"
+	ActionRefreshFreshness      ActionKind = "refresh_freshness"
+	ActionFlagConflict          ActionKind = "flag_conflict"
+	ActionFlagContradiction     ActionKind = "flag_contradiction"
+	ActionDeleteExpiredWorking  ActionKind = "delete_expired_working"
 )
 
 // ActionHandling indicates whether an action can be auto-applied.
@@ -74,10 +76,16 @@ type Policy struct {
 	CanonicalMinConfidence float64 `json:"canonical_min_confidence"` // default 0.80
 	CanonicalMinEvidence   int     `json:"canonical_min_evidence"`   // default 2
 
+	// Working memory has a separate, more aggressive TTL because working entries
+	// are short-lived by design (transient task state, session-extracted noise).
+	WorkingMemoryTTLDays           int     `json:"working_memory_ttl_days"`           // 0 = disabled
+	WorkingDeleteImportanceCutoff  float64 `json:"working_delete_importance_cutoff"`  // entries above are sent to review, not auto-deleted
+
 	// Auto-apply rules — only applied when dry_run=false.
-	AutoMergeExactDuplicates   bool `json:"auto_merge_exact_duplicates"`    // default false
-	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`    // 0 = disabled
-	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"`  // default true
+	AutoMergeExactDuplicates   bool `json:"auto_merge_exact_duplicates"`     // default false
+	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`     // 0 = disabled
+	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"`   // default true
+	AutoDeleteExpiredWorking   bool `json:"auto_delete_expired_working"`     // default true
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -90,20 +98,42 @@ func (p Policy) EffectiveStaleDays() int {
 	return p.StaleDays
 }
 
+// EffectiveWorkingTTLDays returns WorkingMemoryTTLDays with a fallback to 14 days
+// if not set. 0 means "disabled" only when explicitly set via SetPolicy with
+// the field absent from JSON; new installations get 14 via DefaultPolicy.
+func (p Policy) EffectiveWorkingTTLDays() int {
+	if p.WorkingMemoryTTLDays <= 0 {
+		return 14
+	}
+	return p.WorkingMemoryTTLDays
+}
+
+// EffectiveWorkingDeleteImportanceCutoff returns the importance threshold above
+// which expired working entries go to review queue instead of auto-delete.
+func (p Policy) EffectiveWorkingDeleteImportanceCutoff() float64 {
+	if p.WorkingDeleteImportanceCutoff <= 0 {
+		return 0.5
+	}
+	return p.WorkingDeleteImportanceCutoff
+}
+
 // DefaultPolicy returns the starting policy for new installations.
 func DefaultPolicy() Policy {
 	return Policy{
-		Mode:                       PolicyModeManual,
-		ScheduleInterval:           "24h",
-		EventTriggers:              []string{"session_close"},
-		DuplicateSimilarity:        0.85,
-		StaleDays:                  30,
-		CanonicalMinConfidence:     0.80,
-		CanonicalMinEvidence:       2,
-		AutoMergeExactDuplicates:   false,
-		AutoMarkStaleBeyondDays:    0,
-		AutoRefreshFreshnessScores: true,
-		UpdatedAt:                  time.Now().UTC(),
+		Mode:                          PolicyModeManual,
+		ScheduleInterval:              "24h",
+		EventTriggers:                 []string{"session_close"},
+		DuplicateSimilarity:           0.85,
+		StaleDays:                     30,
+		CanonicalMinConfidence:        0.80,
+		CanonicalMinEvidence:          2,
+		WorkingMemoryTTLDays:          14,
+		WorkingDeleteImportanceCutoff: 0.5,
+		AutoMergeExactDuplicates:      false,
+		AutoMarkStaleBeyondDays:       0,
+		AutoRefreshFreshnessScores:    true,
+		AutoDeleteExpiredWorking:      true,
+		UpdatedAt:                     time.Now().UTC(),
 	}
 }
 
@@ -126,6 +156,7 @@ type RunStats struct {
 	ConflictsFound        int `json:"conflicts_found"`
 	ContradictionsFound   int `json:"contradictions_found"`
 	StaleFound            int `json:"stale_found"`
+	ExpiredWorkingFound   int `json:"expired_working_found"`
 	PromotionCandidates   int `json:"promotion_candidates"`
 	ActionsApplied        int `json:"actions_applied"`
 	ActionsPendingReview  int `json:"actions_pending_review"`
@@ -203,7 +234,7 @@ type RunBrief struct {
 // ValidateRunScope validates and normalizes a scope string.
 func ValidateRunScope(s string) (RunScope, error) {
 	switch RunScope(s) {
-	case ScopeFull, ScopeDuplicates, ScopeConflicts, ScopeStale, ScopeCanonical, ScopeSemanticConflicts:
+	case ScopeFull, ScopeDuplicates, ScopeConflicts, ScopeStale, ScopeCanonical, ScopeSemanticConflicts, ScopeWorkingTTL:
 		return RunScope(s), nil
 	case "":
 		return ScopeFull, nil

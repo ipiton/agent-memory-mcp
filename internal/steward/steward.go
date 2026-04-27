@@ -155,6 +155,8 @@ func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
 			stats.ContradictionsFound++
 		case ActionMarkStale:
 			stats.StaleFound++
+		case ActionDeleteExpiredWorking:
+			stats.ExpiredWorkingFound++
 		case ActionPromoteCanonical:
 			stats.PromotionCandidates++
 		}
@@ -249,6 +251,12 @@ func (s *Service) applyAction(ctx context.Context, a *Action, runID string) erro
 		}
 		_, err := s.store.PromoteToCanonical(ctx, a.TargetIDs[0], "steward")
 		return err
+
+	case ActionDeleteExpiredWorking:
+		if len(a.TargetIDs) == 0 {
+			return fmt.Errorf("no target IDs")
+		}
+		return s.store.Delete(ctx, a.TargetIDs[0])
 
 	default:
 		return fmt.Errorf("unsupported action kind: %s", a.Kind)

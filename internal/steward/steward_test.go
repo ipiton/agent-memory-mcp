@@ -209,6 +209,126 @@ func TestStaleDetection(t *testing.T) {
 	}
 }
 
+func TestWorkingMemoryTTL_AutoDeletesLowImportance(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	p := svc.Policy()
+	p.WorkingMemoryTTLDays = 7
+	p.WorkingDeleteImportanceCutoff = 0.5
+	p.AutoDeleteExpiredWorking = true
+	_ = svc.SetPolicy(p)
+
+	m := &memory.Memory{
+		Content:    "Task started: stale-task",
+		Type:       memory.TypeWorking,
+		Title:      "Task started: stale-task",
+		Importance: 0.2,
+	}
+	_ = store.Store(ctx, m)
+
+	db := store.DB()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if _, err := db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
+		old, "Task started: stale-task"); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := svc.Run(ctx, RunParams{Scope: ScopeWorkingTTL, DryRun: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Stats.ExpiredWorkingFound == 0 {
+		t.Fatal("expected an expired working entry to be flagged")
+	}
+	if report.Stats.ActionsApplied == 0 {
+		t.Fatal("expected the low-importance entry to be auto-deleted")
+	}
+	if got, _ := store.Get(m.ID); got != nil {
+		t.Errorf("expected entry to be deleted, but it still exists")
+	}
+}
+
+func TestWorkingMemoryTTL_RespectsImportanceCutoff(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	p := svc.Policy()
+	p.WorkingMemoryTTLDays = 7
+	p.WorkingDeleteImportanceCutoff = 0.5
+	p.AutoDeleteExpiredWorking = true
+	_ = svc.SetPolicy(p)
+
+	m := &memory.Memory{
+		Content:    "High-value working entry",
+		Type:       memory.TypeWorking,
+		Title:      "Important working note",
+		Importance: 0.8, // above cutoff
+	}
+	_ = store.Store(ctx, m)
+
+	db := store.DB()
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	if _, err := db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
+		old, "Important working note"); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := svc.Run(ctx, RunParams{Scope: ScopeWorkingTTL, DryRun: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Stats.ExpiredWorkingFound == 0 {
+		t.Fatal("expected the entry to be flagged as expired")
+	}
+	if report.Stats.ActionsApplied != 0 {
+		t.Errorf("expected importance-cutoff to block auto-delete, got %d applied", report.Stats.ActionsApplied)
+	}
+
+	got, _ := store.Get(m.ID)
+	if got == nil {
+		t.Errorf("expected high-importance entry to survive auto-delete")
+	}
+}
+
+func TestWorkingMemoryTTL_IgnoresNonWorkingTypes(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	p := svc.Policy()
+	p.WorkingMemoryTTLDays = 1
+	p.AutoDeleteExpiredWorking = true
+	_ = svc.SetPolicy(p)
+
+	for _, typ := range []memory.Type{memory.TypeSemantic, memory.TypeProcedural, memory.TypeEpisodic} {
+		m := &memory.Memory{
+			Content:    "Long-lived knowledge: " + string(typ),
+			Type:       typ,
+			Title:      "kept-" + string(typ),
+			Importance: 0.2,
+		}
+		_ = store.Store(ctx, m)
+
+		db := store.DB()
+		old := time.Now().Add(-90 * 24 * time.Hour)
+		if _, err := db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
+			old, "kept-"+string(typ)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := svc.Run(ctx, RunParams{Scope: ScopeWorkingTTL, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Stats.ExpiredWorkingFound != 0 {
+		t.Errorf("non-working types must not be flagged by working-ttl scanner, got %d", report.Stats.ExpiredWorkingFound)
+	}
+}
+
 func TestReportPersistence(t *testing.T) {
 	store := newTestStore(t)
 	svc := newTestService(t, store)
