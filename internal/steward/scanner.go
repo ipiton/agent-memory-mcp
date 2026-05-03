@@ -572,17 +572,25 @@ func contradictionConfidence(similarity float64) float64 {
 
 // groupKey builds a composite key for grouping memories by entity, service, context, and subject.
 // Used by both duplicate and conflict scanners.
+//
+// T51 guard: when entity, service AND context are all empty the subject
+// alone is too weak a signal to identify duplicates — generic working
+// records like "Session close" would otherwise hash 29-record clusters
+// (real evidence on a v0.7.0 steward run) of unrelated tasks. Returning
+// an empty key skips such memories from grouping; they remain
+// individually queryable via Recall but do not get proposed for merge.
 func groupKey(m *memory.Memory) string {
 	subject := subjectWords(m, 10)
 	if subject == "" {
 		return ""
 	}
-	return strings.Join([]string{
-		string(memory.EngineeringTypeOf(m)),
-		memory.MemoryService(m),
-		strings.TrimSpace(m.Context),
-		subject,
-	}, "|")
+	entity := string(memory.EngineeringTypeOf(m))
+	service := memory.MemoryService(m)
+	context := strings.TrimSpace(m.Context)
+	if entity == "" && service == "" && context == "" {
+		return ""
+	}
+	return strings.Join([]string{entity, service, context, subject}, "|")
 }
 
 func subjectKey(m *memory.Memory) string {

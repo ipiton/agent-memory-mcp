@@ -176,6 +176,80 @@ func TestDuplicateDetection(t *testing.T) {
 	}
 }
 
+// TestDuplicateDetection_GuardsAgainstEmptyContextCluster is the regression
+// test for T51: working memories without entity/service/context that share
+// only a generic subject ("session close") were being clustered together as
+// duplicate candidates with confidence=0.75 and handling=review_required.
+// On a live v0.7.0 steward run this manifested as a 29-record cluster of
+// unrelated tasks waiting for an operator to (mistakenly) approve a merge.
+//
+// The guard in groupKey rejects any memory whose entity, service AND
+// context are all empty, so generic-subject records no longer collide.
+func TestDuplicateDetection_GuardsAgainstEmptyContextCluster(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	// 5 working memories, every one a different real task, but shaped the
+	// way a sloppy auto-session writer leaves them: no entity metadata, no
+	// service, no context, only a generic "Session close" title. The pre-
+	// T51 grouping would have proposed merging all five.
+	for i, slug := range []string{"deploy-runbook", "auth-migration", "billing-spike", "kafka-tune", "infra-cleanup"} {
+		_ = store.Store(ctx, &memory.Memory{
+			Content:    "Session close for task " + slug,
+			Title:      "Session close",
+			Type:       memory.TypeWorking,
+			Importance: 0.2,
+		})
+		// Touch i to keep the linter happy without changing intent.
+		_ = i
+	}
+
+	report, err := svc.Run(ctx, RunParams{Scope: ScopeDuplicates, DryRun: true})
+	if err != nil {
+		t.Fatalf("steward run: %v", err)
+	}
+	if report.Stats.DuplicatesFound != 0 {
+		t.Errorf("empty-context cluster should not be flagged, got %d duplicate groups: %+v",
+			report.Stats.DuplicatesFound, report.Actions)
+	}
+	for _, a := range report.Actions {
+		if a.Kind == ActionMergeDuplicates {
+			t.Errorf("unexpected merge-duplicates action proposed: %+v", a)
+		}
+	}
+}
+
+// TestDuplicateDetection_KeepsLegitimateGroupsWithContext ensures the T51
+// guard does not over-suppress: when at least one of entity/service/context
+// is non-empty, the duplicate group should still be reported.
+func TestDuplicateDetection_KeepsLegitimateGroupsWithContext(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	// Two memories sharing context — guard must NOT skip them; they hash
+	// to the same key by (context, subject) and the cluster is real.
+	for i := 0; i < 2; i++ {
+		_ = store.Store(ctx, &memory.Memory{
+			Content:    "Session close for deploy-runbook task",
+			Title:      "Session close",
+			Type:       memory.TypeWorking,
+			Context:    "deploy-runbook",
+			Importance: 0.2,
+		})
+		_ = i
+	}
+
+	report, err := svc.Run(ctx, RunParams{Scope: ScopeDuplicates, DryRun: true})
+	if err != nil {
+		t.Fatalf("steward run: %v", err)
+	}
+	if report.Stats.DuplicatesFound == 0 {
+		t.Errorf("legitimate same-context cluster must still be flagged; actions=%+v", report.Actions)
+	}
+}
+
 func TestStaleDetection(t *testing.T) {
 	store := newTestStore(t)
 	svc := newTestService(t, store)

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **T51 empty-context duplicate cluster guard** — `internal/steward/scanner.go:groupKey` now returns an empty key when entity, service AND context are all blank. Generic-subject working memories (e.g. multiple "Session close" records from auto-session writers without explicit context) used to hash into one cluster; on a live v0.7.0 steward run this surfaced a 29-record cluster of unrelated tasks waiting for review-required merge — approving it would have collapsed 29 different tasks into one. The guard rejects such clusters at the grouping step so they never enter the review queue. Existing pending items from pre-fix runs can be resolved manually via `resolve_review_item`. Regression tests cover both the suppression and the legitimate same-context cluster case.
+
 ### Added
 
 - **Wave 4 retrieval depth (T49 + T50)** — structure-aware Markdown chunking and multi-hop graph recall.
