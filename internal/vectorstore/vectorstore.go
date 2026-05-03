@@ -30,6 +30,7 @@ type Store interface {
 	Search(queryEmbedding []float32, limit int) ([]SearchResult, error)
 	KeywordSearch(query string, limit int) ([]SearchResult, error)
 	AllChunks() ([]Chunk, error)
+	ChunksByDocPath(docPath string) ([]Chunk, error)
 	Count() int
 	Close() error
 	// Metadata
@@ -562,6 +563,34 @@ func (s *SQLiteStore) AllChunks() ([]Chunk, error) {
 		chunks = append(chunks, chunkCopy)
 	}
 
+	return chunks, nil
+}
+
+// ChunksByDocPath returns every chunk currently indexed for the given
+// document path. Order matches chunk ID ascending so callers can rely on
+// document order — chunk IDs are emitted as "<docPath>-<seq>" by the rag
+// package, and seq is monotonic in document order. Embeddings are included
+// for completeness but most callers that just want to reassemble the source
+// text can ignore them.
+func (s *SQLiteStore) ChunksByDocPath(docPath string) ([]Chunk, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var chunks []Chunk
+	for _, chunk := range s.chunks {
+		if chunk.DocPath != docPath {
+			continue
+		}
+		chunkCopy := *chunk
+		if chunk.Embedding != nil {
+			chunkCopy.Embedding = append([]float32(nil), chunk.Embedding...)
+		}
+		chunks = append(chunks, chunkCopy)
+	}
+
+	sort.Slice(chunks, func(i, j int) bool {
+		return chunks[i].ID < chunks[j].ID
+	})
 	return chunks, nil
 }
 

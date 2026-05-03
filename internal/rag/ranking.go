@@ -283,11 +283,23 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 			snippet = snippet[:200] + "..."
 		}
 
+		// Surface the structure-aware chunking breadcrumb (T49 slice 4)
+		// when present, so callers can request a full section expansion
+		// via ExpandSection without re-parsing chunk content.
+		var sectionPath []string
+		var sectionKey string
+		if path, _, ok := ExtractBreadcrumb(candidate.chunk.Content); ok {
+			sectionPath = path
+			sectionKey = SectionKey(path)
+		}
+
 		result := SearchResult{
 			ID:           candidate.chunk.ID,
 			Title:        candidate.chunk.Title,
 			Path:         candidate.chunk.DocPath,
 			SourceType:   candidate.sourceType,
+			SectionPath:  sectionPath,
+			SectionKey:   sectionKey,
 			Score:        score,
 			Snippet:      snippet,
 			LastModified: candidate.chunk.LastModified,

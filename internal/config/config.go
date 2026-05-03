@@ -53,6 +53,17 @@ type Config struct {
 	RedactSecrets     bool     // Redact common secret-like content before indexing
 	ChunkSize         int      // Characters per chunk (default: 2000)
 	ChunkOverlap      int      // Overlap between chunks (default: 200)
+	RagKeepNoise      bool     // MCP_RAG_KEEP_NOISE — disable noise filter (T49 slice 3)
+
+	// Knowledge-graph triple extractor (T50 slice 2). Default disabled.
+	// When enabled the Store fires an async fan-out per write, calling an
+	// OpenAI-compatible /chat/completions endpoint to derive 3-7 triples
+	// per memory. Errors degrade gracefully — extraction never blocks ingest.
+	TripleExtractorEnabled bool          // MCP_TRIPLE_EXTRACTOR_ENABLED
+	TripleExtractorBaseURL string        // MCP_TRIPLE_EXTRACTOR_BASE_URL
+	TripleExtractorAPIKey  string        // MCP_TRIPLE_EXTRACTOR_API_KEY (falls back to OPENAI_API_KEY when empty)
+	TripleExtractorModel   string        // MCP_TRIPLE_EXTRACTOR_MODEL
+	TripleExtractorTimeout time.Duration // MCP_TRIPLE_EXTRACTOR_TIMEOUT (default 30s)
 
 	// Embeddings configuration
 	JinaAPIKey         string // Jina AI API key
@@ -158,6 +169,12 @@ type envValues struct {
 	redactSecrets                    bool
 	chunkSize                        int
 	chunkOverlap                     int
+	ragKeepNoise                     bool
+	tripleExtractorEnabled           bool
+	tripleExtractorBaseURL           string
+	tripleExtractorAPIKey            string
+	tripleExtractorModel             string
+	tripleExtractorTimeout           string
 	jinaAPIKey                       string
 	openaiAPIKey                     string
 	openaiBaseURL                    string
@@ -232,6 +249,12 @@ func readEnvValues() (envValues, error) {
 		redactSecrets:                    EnvBool("MCP_REDACT_SECRETS", true),
 		chunkSize:                        EnvInt("MCP_CHUNK_SIZE", 2000),
 		chunkOverlap:                     EnvInt("MCP_CHUNK_OVERLAP", 200),
+		ragKeepNoise:                     EnvBool("MCP_RAG_KEEP_NOISE", false),
+		tripleExtractorEnabled:           EnvBool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
+		tripleExtractorBaseURL:           EnvOrDefault("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
+		tripleExtractorAPIKey:            EnvOrDefault("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
+		tripleExtractorModel:             EnvOrDefault("MCP_TRIPLE_EXTRACTOR_MODEL", ""),
+		tripleExtractorTimeout:           EnvOrDefault("MCP_TRIPLE_EXTRACTOR_TIMEOUT", "30s"),
 		jinaAPIKey:                       EnvOrDefault("JINA_API_KEY", ""),
 		openaiAPIKey:                     EnvOrDefault("OPENAI_API_KEY", ""),
 		openaiBaseURL:                    EnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -360,6 +383,13 @@ func resolvePaths(ev envValues) (Config, error) {
 		RedactSecrets:     ev.redactSecrets,
 		ChunkSize:         ev.chunkSize,
 		ChunkOverlap:      ev.chunkOverlap,
+		RagKeepNoise:      ev.ragKeepNoise,
+
+		TripleExtractorEnabled: ev.tripleExtractorEnabled,
+		TripleExtractorBaseURL: ev.tripleExtractorBaseURL,
+		TripleExtractorAPIKey:  ev.tripleExtractorAPIKey,
+		TripleExtractorModel:   ev.tripleExtractorModel,
+		TripleExtractorTimeout: parseDurationOrDefault(ev.tripleExtractorTimeout, 30*time.Second),
 
 		JinaAPIKey:         ev.jinaAPIKey,
 		OpenAIAPIKey:       ev.openaiAPIKey,

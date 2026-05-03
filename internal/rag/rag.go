@@ -27,6 +27,14 @@ type SearchResult struct {
 	Title        string         `json:"title"`
 	Path         string         `json:"path"`
 	SourceType   string         `json:"source_type,omitempty"`
+	// SectionPath is the breadcrumb segments parsed from the Markdown chunk
+	// header, e.g. ["Deploy Runbook", "Rollback", "Network failure"]. Empty
+	// for chunks indexed without structure-aware chunking (non-Markdown
+	// sources, or content rewritten without a leading [breadcrumb]).
+	SectionPath []string `json:"section_path,omitempty"`
+	// SectionKey is the canonical " > "-joined string of SectionPath, suitable
+	// as input to ExpandSection. Empty when SectionPath is empty.
+	SectionKey string `json:"section_key,omitempty"`
 	Score        float64        `json:"score"`
 	Snippet      string         `json:"snippet"`
 	LastModified time.Time      `json:"last_modified"`
@@ -101,6 +109,10 @@ type docServiceConfig struct {
 	RepoRoot          string
 	ChunkSize         int
 	ChunkOverlap      int
+	// KeepNoise disables the heuristic noise filter (T49 slice 3) so
+	// Table-of-Contents / References / Changelog sections are still indexed.
+	// Default false — set via MCP_RAG_KEEP_NOISE=true.
+	KeepNoise bool
 }
 
 type vecServiceConfig struct {
@@ -170,6 +182,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		RepoRoot:          repoRoot,
 		ChunkSize:         cfg.ChunkSize,
 		ChunkOverlap:      cfg.ChunkOverlap,
+		KeepNoise:         cfg.RagKeepNoise,
 	}
 	if dsCfg.ChunkSize == 0 {
 		dsCfg.ChunkSize = 2000
@@ -336,13 +349,79 @@ func (re *Engine) Search(ctx context.Context, query string, limit int, sourceTyp
 }
 
 // IndexDocuments performs incremental indexing of documents in configured directories.
+// SectionExpansion is the result of ExpandSection: the resolved doc and
+// section, plus every chunk that belongs to the section in document order
+// (with the breadcrumb prefix stripped from each chunk so callers see only
+// the section body). FullText is the chunks joined by a blank line — useful
+// for an LLM call that wants the entire section in one go.
+type SectionExpansion struct {
+	DocPath     string   `json:"doc_path"`
+	SectionPath []string `json:"section_path"`
+	SectionKey  string   `json:"section_key"`
+	Chunks      []string `json:"chunks"`
+	FullText    string   `json:"full_text"`
+}
+
+// ExpandSection returns every chunk belonging to (docPath, sectionKey) in
+// document order. sectionKey is the canonical " > "-joined breadcrumb path
+// surfaced by SearchResult.SectionKey — pass it back unchanged.
+//
+// Intended use: caller runs Search, finds a relevant chunk, then calls
+// ExpandSection to load the whole containing section before handing context
+// to the LLM. This is the "pointer-based context" half of T49: search
+// returns a pointer (chunk + section), expansion materialises the full
+// section.
+//
+// Returns an error if the engine has no vector store. Returns a result with
+// Chunks==nil when no chunks match — callers should treat that as a
+// not-found, not an error.
+func (re *Engine) ExpandSection(_ context.Context, docPath, sectionKey string) (*SectionExpansion, error) {
+	if re == nil || re.vecService == nil || re.vecService.store == nil {
+		return nil, fmt.Errorf("RAG engine not available")
+	}
+	docPath = strings.TrimSpace(docPath)
+	sectionKey = strings.TrimSpace(sectionKey)
+	if docPath == "" || sectionKey == "" {
+		return nil, fmt.Errorf("doc_path and section_key are required")
+	}
+
+	chunks, err := re.vecService.store.ChunksByDocPath(docPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chunks for %s: %w", docPath, err)
+	}
+
+	expansion := &SectionExpansion{
+		DocPath:    docPath,
+		SectionKey: sectionKey,
+	}
+	for _, chunk := range chunks {
+		path, body, ok := ExtractBreadcrumb(chunk.Content)
+		if !ok || SectionKey(path) != sectionKey {
+			continue
+		}
+		if expansion.SectionPath == nil {
+			expansion.SectionPath = path
+		}
+		expansion.Chunks = append(expansion.Chunks, body)
+	}
+	if len(expansion.Chunks) > 0 {
+		expansion.FullText = strings.Join(expansion.Chunks, "\n\n")
+	}
+	return expansion, nil
+}
+
 func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if re == nil || re.docService == nil || re.vecService == nil {
 		return fmt.Errorf("RAG engine not available")
 	}
 
 	startTime := time.Now().UTC()
-	const chunkerVersion = "char-v1"
+	// chunkerVersion bumps trigger a full rebuild on next IndexDocuments.
+	//   char-v1     — naive char-budget splitter (initial)
+	//   skeleton-v1 — T49: Markdown skeleton tree + breadcrumb prefix +
+	//                 section-aware boundaries + heuristic noise filter.
+	// Pre-T49 indices upgrade automatically on the next index call.
+	const chunkerVersion = "skeleton-v1"
 
 	allDocs, err := re.docService.collectDocuments()
 	if err != nil {

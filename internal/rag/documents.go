@@ -126,7 +126,19 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 
 	fileHash := calculateFileHash(cleanContent)
 	modTime := ds.getFileModTime(path)
-	chunks := ds.splitIntoChunks(cleanContent)
+
+	// Markdown documents are chunked along header boundaries with a
+	// breadcrumb prefix per chunk (T49 slice 1). All other source types
+	// keep the legacy length-based splitter.
+	var chunks []string
+	if strings.EqualFold(filepath.Ext(path), ".md") {
+		chunks = splitMarkdownWithBreadcrumbs(cleanContent, title, ds.config.ChunkSize, ds.config.ChunkOverlap, ds.config.KeepNoise)
+		if len(chunks) == 0 {
+			chunks = ds.splitIntoChunks(cleanContent)
+		}
+	} else {
+		chunks = ds.splitIntoChunks(cleanContent)
+	}
 
 	var docs []document
 	for i, chunk := range chunks {
