@@ -161,6 +161,15 @@ type Store struct {
 	// should set via SetSedimentEnabled; retrieval reads the atomic without
 	// a lock. Default (false) preserves pre-T48 Recall behaviour verbatim.
 	sedimentEnabled atomic.Bool
+
+	// tripleExtractor (T50 slice 2) is an optional LLM-backed component that
+	// turns a stored memory into knowledge-graph (subj, rel, obj) triples
+	// asynchronously. Nil when MCP_TRIPLE_EXTRACTOR_ENABLED is false; the
+	// store path stays a pure write in that case. Mutated only via
+	// SetTripleExtractor at startup; subsequent reads use a sync.RWMutex
+	// snapshot so an in-flight Store can swap providers without races.
+	tripleExtractorMu sync.RWMutex
+	tripleExtractor   TripleExtractor
 }
 
 // SetSedimentEnabled toggles the T48 layer-aware retrieval path. Idempotent;
@@ -612,6 +621,46 @@ func ensureMemorySchema(db *sql.DB) error {
 		return err
 	}
 
+	if err := ensureMemoryTriplesSchema(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ensureMemoryTriplesSchema creates the memory_triples table and its indexes
+// (T50 slice 1 — knowledge graph layer foundation). Idempotent: CREATE TABLE
+// IF NOT EXISTS / CREATE INDEX IF NOT EXISTS. The FK on memory_id is declared
+// with ON DELETE CASCADE so deleting a memory automatically purges its
+// triples; SQLite enforces this only when foreign_keys=ON, which we set per
+// connection in NewStore via the connection pragma.
+func ensureMemoryTriplesSchema(db *sql.DB) error {
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS memory_triples (
+			id TEXT PRIMARY KEY,
+			subj TEXT NOT NULL,
+			rel TEXT NOT NULL,
+			obj TEXT NOT NULL,
+			memory_id TEXT NOT NULL,
+			link_type TEXT NOT NULL DEFAULT 'extracted',
+			weight REAL NOT NULL DEFAULT 1.0,
+			created_at DATETIME NOT NULL,
+			FOREIGN KEY (memory_id) REFERENCES memories(id) ON DELETE CASCADE
+		)
+	`); err != nil {
+		return err
+	}
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_triples_subj      ON memory_triples(subj)`,
+		`CREATE INDEX IF NOT EXISTS idx_triples_obj       ON memory_triples(obj)`,
+		`CREATE INDEX IF NOT EXISTS idx_triples_memory_id ON memory_triples(memory_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_triples_link_type ON memory_triples(link_type)`,
+	}
+	for _, ddl := range indexes {
+		if _, err := db.Exec(ddl); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

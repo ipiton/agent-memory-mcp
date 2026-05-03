@@ -481,6 +481,45 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 			},
 		},
 		{
+			Name:        "recall_multihop",
+			Description: "Recall memories via multi-hop knowledge-graph walk (T50). Seeds via semantic recall, expands through (subj, rel, obj) triples up to MaxHops with damping, returns memories ranked by aggregated path score plus the chain of triples that earned each result. Use for cross-memory reasoning queries (\"why did we choose X — what feedback led to it, what incidents confirmed?\") that single-hop search cannot trace.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "Free-text query that anchors the graph walk via semantic seed recall.",
+					},
+					"max_hops": map[string]any{
+						"type":        "integer",
+						"description": "BFS depth bound (1-4, default 2). Higher hops capture more distant evidence at the cost of precision.",
+						"minimum":     1,
+						"maximum":     4,
+						"default":     2,
+					},
+					"seed_k": map[string]any{
+						"type":        "integer",
+						"description": "How many memories drive the seed-entity selection (1-20, default 5).",
+						"minimum":     1,
+						"maximum":     20,
+						"default":     5,
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "Maximum number of memories to return (default 10, capped at 50).",
+						"minimum":     1,
+						"maximum":     50,
+						"default":     10,
+					},
+					"context": map[string]any{
+						"type":        "string",
+						"description": "Optional context filter applied to the seed recall step.",
+					},
+				},
+				"required": []string{"query"},
+			},
+		},
+		{
 			Name:        "recall_canonical_knowledge",
 			Description: "Recall canonical knowledge only, excluding raw memories from the result set",
 			InputSchema: map[string]any{
@@ -1263,6 +1302,7 @@ var memoryTools = map[string]bool{
 	"demote_sediment":            true,
 	"sediment_cycle":             true,
 	"recount_references":         true,
+	"recall_multihop":            true,
 }
 
 // hybridTools require at least one of memoryStore or ragEngine.
@@ -1293,6 +1333,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"conflicts_report":           s.callConflictsReport,
 		"list_canonical_knowledge":   s.callListCanonicalKnowledge,
 		"recall_canonical_knowledge": s.callRecallCanonicalKnowledge,
+		"recall_multihop":            s.callRecallMultihop,
 		"close_session":              s.callCloseSession,
 		"analyze_session":            s.callCloseSession,
 		"review_session_changes":     s.callReviewSessionChanges,

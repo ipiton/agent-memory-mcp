@@ -51,6 +51,9 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 		zap.String("type", string(m.Type)),
 		zap.String("title", m.Title))
 
+	// Async fan-out for T50 graph layer. No-op when no extractor is wired.
+	ms.fanoutTripleExtraction(m)
+
 	return nil
 }
 
@@ -125,6 +128,14 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	ms.mu.Unlock()
 
 	ms.logger.Info("Memory updated", zap.String("id", id))
+
+	// Re-extract triples whenever the content changed: stale triples
+	// from the previous content would mislead future graph walks. The
+	// fanout is a no-op when no extractor is wired.
+	if updates.Content != "" {
+		ms.fanoutTripleExtraction(m)
+	}
+
 	return nil
 }
 
@@ -139,11 +150,17 @@ type Update struct {
 }
 
 // Delete removes a memory by ID from both the database and cache.
+// Knowledge-graph triples whose provenance is this memory cascade away in the
+// same operation: the FK declaration alone is unreliable across SQLite
+// drivers / pragma settings, so we issue an explicit DELETE for portability.
 func (ms *Store) Delete(ctx context.Context, id string) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
 
-	if _, err := ms.db.Exec("DELETE FROM memories WHERE id = ?", id); err != nil {
+	if _, err := ms.db.ExecContext(ctx, "DELETE FROM memory_triples WHERE memory_id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete triples for memory: %w", err)
+	}
+	if _, err := ms.db.ExecContext(ctx, "DELETE FROM memories WHERE id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete memory: %w", err)
 	}
 

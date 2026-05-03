@@ -156,6 +156,37 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			// T48: propagate the sediment feature flag into the store so
 			// Recall knows whether to apply layer-aware scoring.
 			memoryStore.SetSedimentEnabled(cfg.SedimentEnabled)
+
+			// T50 slice 2: optional knowledge-graph triple extractor.
+			// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If
+			// configuration is incomplete we log a warning and proceed
+			// without extraction — ingest must keep working regardless.
+			if cfg.TripleExtractorEnabled {
+				apiKey := cfg.TripleExtractorAPIKey
+				if apiKey == "" {
+					apiKey = cfg.OpenAIAPIKey
+				}
+				baseURL := cfg.TripleExtractorBaseURL
+				if baseURL == "" {
+					baseURL = cfg.OpenAIBaseURL
+				}
+				extractor, exErr := memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
+					BaseURL: baseURL,
+					APIKey:  apiKey,
+					Model:   cfg.TripleExtractorModel,
+					Timeout: cfg.TripleExtractorTimeout,
+				}, zap.NewNop())
+				if exErr != nil {
+					if fileLogger != nil {
+						fileLogger.Warn("Triple extractor disabled: misconfiguration",
+							zap.Error(exErr))
+					} else {
+						fmt.Fprintf(os.Stderr, "warning: triple extractor disabled: %v\n", exErr)
+					}
+				} else {
+					memoryStore.SetTripleExtractor(extractor)
+				}
+			}
 		}
 	}
 

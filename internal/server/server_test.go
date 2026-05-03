@@ -380,6 +380,7 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"demote_sediment",
 		"sediment_cycle",
 		"recount_references",
+		"recall_multihop",
 	}
 
 	for _, tool := range expectedTools {
