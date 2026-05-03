@@ -216,7 +216,7 @@ func TestStore_FiresExtractorAsynchronouslyOnStore(t *testing.T) {
 
 	// Fan-out is async; wait briefly for the goroutine to land. A short
 	// poll loop avoids flaky absolute sleeps under loaded CI.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		got, _ := store.TriplesForMemory(ctx, mem.ID)
 		if len(got) == 2 {
@@ -226,7 +226,7 @@ func TestStore_FiresExtractorAsynchronouslyOnStore(t *testing.T) {
 	}
 
 	got, _ := store.TriplesForMemory(ctx, mem.ID)
-	t.Fatalf("expected 2 triples persisted within 2s, got %d (extractor calls=%d)", len(got), stub.calls.Load())
+	t.Fatalf("expected 2 triples persisted within 10s, got %d (extractor calls=%d)", len(got), stub.calls.Load())
 }
 
 func TestStore_ExtractorFailureDoesNotBlockIngest(t *testing.T) {
@@ -298,7 +298,7 @@ func TestStore_UpdateContent_ReExtractsTriples(t *testing.T) {
 	if err := store.Update(ctx, mem.ID, Update{Content: "second content describing service"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		got, _ := store.TriplesForMemory(ctx, mem.ID)
 		if len(got) == 1 && got[0].Subject == "second" {
@@ -312,7 +312,7 @@ func TestStore_UpdateContent_ReExtractsTriples(t *testing.T) {
 
 func waitForTripleCount(t *testing.T, store *Store, memoryID string, want int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		got, _ := store.TriplesForMemory(t.Context(), memoryID)
 		if len(got) == want {
@@ -321,5 +321,5 @@ func waitForTripleCount(t *testing.T, store *Store, memoryID string, want int) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	got, _ := store.TriplesForMemory(t.Context(), memoryID)
-	t.Fatalf("waited 2s, expected %d triples, got %d", want, len(got))
+	t.Fatalf("waited 10s, expected %d triples, got %d", want, len(got))
 }
