@@ -81,6 +81,10 @@ func main() {
 		runSedimentCycle(args)
 	case "recount-refs":
 		runRecountRefs(args)
+	case "index-triples":
+		runIndexTriples(args)
+	case "dead-ends-stale":
+		runDeadEndsStale(args)
 	default:
 		printUsage()
 		os.Exit(1)
@@ -223,11 +227,15 @@ Task lifecycle (T47):
   end-task        Explicitly consolidate working memories for a single archived task slug
 
 Knowledge capture (T46):
-  mark-dead-end   Record an abandoned approach with its failure rationale so future agents avoid it
+  mark-dead-end    Record an abandoned approach with its failure rationale so future agents avoid it
+  dead-ends-stale  List dead_end memories older than --age (default 12 months) for re-evaluation
 
 Memory sedimentation (T48):
   sediment-cycle  Scan memories for layer transitions; trivial ones auto-apply, non-trivial ones queue for review
   recount-refs    Backfill referenced_by_count metadata from existing cross-memory edges (idempotent)
+
+Knowledge graph (T50):
+  index-triples   Retrofit (subj, rel, obj) triples for memories that lack them (idempotent, --resume by default)
 
 Run "agent-memory-mcp <command> -help" for details on a command.
 `)

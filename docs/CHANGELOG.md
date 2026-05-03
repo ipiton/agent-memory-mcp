@@ -9,9 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wave 4 retrieval depth (T49 + T50)** — structure-aware Markdown chunking and multi-hop graph recall.
+  - T49 Structure-Aware Chunking: `internal/rag/skeleton.go` parses Markdown headers into a skeleton tree, prefixes every chunk with a breadcrumb `[doc > section > subsection]`, respects section boundaries, and drops noisy sections (Table of Contents / References / Changelog / etc.) at ingest. Escape hatch `MCP_RAG_KEEP_NOISE=true`. Pointer-based retrieval via `Engine.ExpandSection(docPath, sectionKey)` and `SearchResult.SectionPath` / `SectionKey`. `chunker_version` bumped to `skeleton-v1` so existing indices auto-rebuild on next index pass.
+  - T50 Multi-hop retrieval: `memory_triples` table (subj/rel/obj/memory_id/link_type/weight) with cascade-on-memory-delete; LLM-backed `TripleExtractor` interface + OpenAI-compatible HTTP impl (`MCP_TRIPLE_EXTRACTOR_{ENABLED,BASE_URL,API_KEY,MODEL,TIMEOUT}`) firing async on every `Store`/`Update` write; retrofit CLI `agent-memory-mcp index-triples [--resume|--force|--limit N|--context X|--dry-run|--json]`; `Store.RecallMultihop` weighted-BFS PPR walk with damping 0.85 and per-result triple paths; new MCP tool `recall_multihop`.
+- **T45 server-side dedup gap fix** — `internal/server/session_tracker.go` now applies the same `hooks.Check` content-similarity filter as the CLI hooks before persisting via `SaveRawSummaryWithOptions`. Closes the regression where the in-process auto-session pipeline regenerated near-duplicate session-checkpoint records within minutes of `/memory-cleanup`.
+- **T46 hygiene scan** — `Store.StaleDeadEnds(ctx, olderThan)` + `agent-memory-mcp dead-ends-stale [-age 12mo] [-limit N] [-json]` surface dead_end memories whose original constraint may no longer apply, sorted oldest-first.
 - **Wave 1 hygiene** — T45 checkpoint-hook content-similarity filter (`MCP_CHECKPOINT_DEDUP_*`, Jaccard dedup over session-checkpoint records); T47 task-lifecycle archive sweep (`sweep-archive` / `end-task` CLI + MCP tools, `MCP_TASK_ARCHIVE_ROOTS`).
 - **Wave 2 quality** — T43 RAG eval suite with baseline regression gate (`//go:build eval`, `make eval`, `docs/RAG_EVAL.md`); T46 dead-end tracking (`EngineeringTypeDeadEnd`, `store_dead_end` MCP tool, `mark-dead-end` CLI, retrieval boost + blend on pitfall keywords via `scoring.IsPitfallQuery`); T44 Jina v2 neural reranker (`internal/reranker`, `MCP_RERANK_*`, `JINA_RERANKER_MODEL`, 5s timeout with graceful fallback, `docs/RERANKER_LOCAL.md`).
 - **Wave 3 architecture** — T48 memory sedimentation (`sediment_layer` column, `promote_sediment` / `demote_sediment` / `sediment_cycle` MCP tools, `sediment-cycle` CLI, `project_bank_view(view=sediment_candidates)`, `MCP_SEDIMENT_ENABLED`, `docs/SEDIMENTATION.md`).
+
+### Migration notes
+
+- **Markdown re-indexing** — first run on an existing `data/rag-index/vectors.db` after upgrade triggers a full chunker rebuild because `chunker_version` changed from `char-v1` to `skeleton-v1`. Expect the first `index_documents` pass to reprocess every `.md` file. No action needed; auto-index handles it on startup when `MCP_RAG_AUTO_INDEX=true`.
+- **Triple graph backfill (optional)** — to populate the multi-hop graph layer for existing memories, set `MCP_TRIPLE_EXTRACTOR_ENABLED=true` along with the matching `BASE_URL`/`API_KEY`/`MODEL`, then run `agent-memory-mcp index-triples`. Idempotent; `--resume` (default) skips memories that already have triples. New writes are extracted automatically.
 
 ## [0.6.0] - 2026-04-07
 

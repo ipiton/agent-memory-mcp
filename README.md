@@ -602,6 +602,8 @@ For shared HTTP mode:
 | `reembed` | Re-generate memory embeddings with the active model (`-json`) |
 | `export` | Export all memories to JSON (`-o` file, default stdout) |
 | `import` | Import memories from JSON (positional file or stdin) |
+| `index-triples` | Retrofit (subj, rel, obj) triples for memories that lack them (`-resume`, `-force`, `-limit`, `-context`, `-dry-run`, `-progress-every`, `-json`). Powers the `recall_multihop` MCP tool — see `MCP_TRIPLE_EXTRACTOR_*` envs. |
+| `dead-ends-stale` | List dead_end memories older than `-age` (default 12 months) for re-evaluation (`-limit`, `-json`) |
 
 ## MCP tools reference
 
@@ -621,6 +623,7 @@ For shared HTTP mode:
 | `conflicts_report` | Report duplicate candidates, conflicting statuses, and multiple canonical entries |
 | `list_canonical_knowledge` | List canonical knowledge entries projected from confirmed memories |
 | `recall_canonical_knowledge` | Recall canonical knowledge only, excluding raw memories from results |
+| `recall_multihop` | Multi-hop graph-walk recall over the (subj, rel, obj) triple corpus — returns memories ranked by aggregated path score with the chain of triples that reached each result. Use for cross-memory reasoning queries that single-hop search cannot trace. Requires `MCP_TRIPLE_EXTRACTOR_*` populated; backfill via `index-triples` CLI. |
 
 ### RAG tools
 
@@ -751,6 +754,12 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_RERANK_TIMEOUT` | `5s` | Hard timeout for one rerank call; on timeout the hybrid order is kept and `rerank_failed:timeout` is added to debug signals |
 | `MCP_RERANK_TOP_N` | `40` | Number of top hybrid candidates sent to the reranker; clamped to `100` at call time |
 | `MCP_SEDIMENT_ENABLED` | `false` | Enable layer-aware retrieval scoring (character always surfaced, surface excluded outside context). Schema migration + backfill always run; only retrieval weighting is gated. See `docs/SEDIMENTATION.md` |
+| `MCP_RAG_KEEP_NOISE` | `false` | T49 escape hatch: keep noisy Markdown sections (Table of Contents / References / Changelog / etc.) in the index instead of dropping them at chunking time |
+| `MCP_TRIPLE_EXTRACTOR_ENABLED` | `false` | T50 knowledge-graph layer. Enable to fire an async LLM call on every memory write that extracts 3-7 (subj, rel, obj) triples powering `recall_multihop` |
+| `MCP_TRIPLE_EXTRACTOR_BASE_URL` | - | OpenAI-compatible `/chat/completions` endpoint (DeepSeek, Together, Groq, Qwen, …); falls back to `OPENAI_BASE_URL` when empty |
+| `MCP_TRIPLE_EXTRACTOR_API_KEY` | - | Bearer token for the extractor; falls back to `OPENAI_API_KEY` when empty |
+| `MCP_TRIPLE_EXTRACTOR_MODEL` | - | Model id passed to the extractor (e.g. `deepseek-chat`, `qwen2.5-72b-instruct`) |
+| `MCP_TRIPLE_EXTRACTOR_TIMEOUT` | `30s` | Per-request timeout for the extractor HTTP call |
 
 ### Data paths
 
