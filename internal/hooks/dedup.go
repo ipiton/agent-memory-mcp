@@ -1,12 +1,13 @@
-// Package hooks provides pre-store dedup/filtering logic used by the
-// agent-memory-mcp hooks CLI entry points (auto-capture, checkpoint).
+// Package hooks provides pre-store dedup/filtering logic shared by the
+// agent-memory-mcp hooks CLI entry points (auto-capture, checkpoint) and
+// by the in-process server-side session_tracker pipeline.
 //
-// The hooks wrapper is the only place near-duplicate session-checkpoint
-// records are filtered out. Programmatic memory.Store.Store() remains
-// unfiltered: adding the logic only here preserves the MCP
-// store_memory tool's transparent behaviour while fixing the observed
-// flood (30-60 duplicate session-checkpoint records per 2h coding
-// session) originating from the hook CLI.
+// Both call sites apply Check before persisting session-checkpoint
+// records. Programmatic memory.Store.Store() outside these paths remains
+// unfiltered, preserving the MCP store_memory tool's transparent
+// behaviour while fixing the observed flood (30-60 duplicate
+// session-checkpoint records per 2h coding session) at every entry that
+// produces them.
 package hooks
 
 import (
@@ -43,6 +44,22 @@ type DedupResult struct {
 	SimilarID string
 	// Similarity is the Jaccard score vs. the previous record (0..1).
 	Similarity float64
+}
+
+// NewDedupConfig builds a DedupConfig from the runtime knobs, honouring
+// the disabled escape hatch. When disabled is true the returned config has
+// Threshold=0 and MinContentChars=0, so Check short-circuits to a no-skip
+// result for any non-whitespace candidate (whitespace-only summaries are
+// still dropped as ReasonEmpty regardless — see Check godoc).
+func NewDedupConfig(disabled bool, threshold float64, minChars int, window time.Duration) DedupConfig {
+	if disabled {
+		return DedupConfig{}
+	}
+	return DedupConfig{
+		Threshold:       threshold,
+		MinContentChars: minChars,
+		Window:          window,
+	}
 }
 
 // DedupConfig controls Check behaviour.

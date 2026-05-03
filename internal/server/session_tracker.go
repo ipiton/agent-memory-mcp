@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/logger"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
@@ -24,6 +25,7 @@ type sessionTracker struct {
 	idleTimeout        time.Duration
 	checkpointInterval time.Duration
 	minEvents          int
+	dedupCfg           hooks.DedupConfig
 	now                func() time.Time
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -74,9 +76,15 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 		idleTimeout:        cfg.SessionIdleTimeout,
 		checkpointInterval: cfg.SessionCheckpointInterval,
 		minEvents:          cfg.SessionMinEvents,
-		now:                time.Now,
-		ctx:                ctx,
-		cancel:             cancel,
+		dedupCfg: hooks.NewDedupConfig(
+			cfg.CheckpointDedupDisabled,
+			cfg.CheckpointDedupThreshold,
+			cfg.CheckpointDedupMinChars,
+			cfg.CheckpointDedupWindow,
+		),
+		now:    time.Now,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 }
 
@@ -350,12 +358,23 @@ func (st *sessionTracker) saveCheckpointWithBoundary(session *trackedSession, bo
 		return
 	}
 
+	summary := session.summary(boundary)
+
+	// Mirror the CLI hook dedup gate (T45) so the in-process auto-session
+	// pipeline does not flood the store with near-identical session-checkpoint
+	// records on every boundary tick. Fail-open on unexpected errors.
+	if dedup, err := hooks.Check(st.ctx, st.store, summary, st.dedupCfg); err != nil {
+		st.logWarn("background session checkpoint dedup check failed", zap.String("boundary", boundary), zap.Error(err))
+	} else if dedup.Skip {
+		st.store.IncrementDedupSkipped(dedup.Reason)
+		return
+	}
+
 	tags := []string{"session-checkpoint"}
 	if boundary != "checkpoint" {
 		tags = append(tags, boundary)
 	}
 
-	summary := session.summary(boundary)
 	if _, err := st.closeService.SaveRawSummaryWithOptions(st.ctx, summary, sessionclose.RawSaveOptions{
 		RecordKind: memory.RecordKindSessionCheckpoint,
 		ExtraTags:  tags,

@@ -18,19 +18,15 @@ import (
 )
 
 // dedupConfigFrom builds a hooks.DedupConfig from the loaded runtime config.
-// When MCP_CHECKPOINT_DEDUP_DISABLED=true the returned config has Threshold=0
-// and MinContentChars=0, so hooks.Check short-circuits to a no-skip result for
-// any non-whitespace candidate. Whitespace-only summaries are still dropped as
-// ReasonEmpty regardless (see hooks.Check godoc).
+// Thin wrapper over hooks.NewDedupConfig so CLI and server-side session
+// tracker share construction logic.
 func dedupConfigFrom(cfg config.Config) hooks.DedupConfig {
-	if cfg.CheckpointDedupDisabled {
-		return hooks.DedupConfig{}
-	}
-	return hooks.DedupConfig{
-		Threshold:       cfg.CheckpointDedupThreshold,
-		MinContentChars: cfg.CheckpointDedupMinChars,
-		Window:          cfg.CheckpointDedupWindow,
-	}
+	return hooks.NewDedupConfig(
+		cfg.CheckpointDedupDisabled,
+		cfg.CheckpointDedupThreshold,
+		cfg.CheckpointDedupMinChars,
+		cfg.CheckpointDedupWindow,
+	)
 }
 
 // contextInjectRow holds the minimal fields needed for context-inject output.
