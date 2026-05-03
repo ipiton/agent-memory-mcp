@@ -170,6 +170,20 @@ type Store struct {
 	// snapshot so an in-flight Store can swap providers without races.
 	tripleExtractorMu sync.RWMutex
 	tripleExtractor   TripleExtractor
+
+	// extractionWG counts in-flight async triple-extraction goroutines.
+	// Tests use WaitForBackgroundExtraction to block deterministically
+	// instead of polling; Close() should drain it for clean shutdown.
+	extractionWG sync.WaitGroup
+}
+
+// WaitForBackgroundExtraction blocks until every async triple-extraction
+// goroutine launched by fanoutTripleExtraction has finished. Tests use it to
+// avoid sleep/poll loops when asserting on freshly-extracted triples.
+// Production code rarely needs it — the fan-out is fire-and-forget by
+// design, but Close() and graceful shutdown paths benefit.
+func (ms *Store) WaitForBackgroundExtraction() {
+	ms.extractionWG.Wait()
 }
 
 // SetSedimentEnabled toggles the T48 layer-aware retrieval path. Idempotent;

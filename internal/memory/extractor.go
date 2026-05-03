@@ -55,7 +55,9 @@ func (ms *Store) fanoutTripleExtraction(mem *Memory) {
 	}
 
 	memCopy := copyMemory(mem)
+	ms.extractionWG.Add(1)
 	go func() {
+		defer ms.extractionWG.Done()
 		// Bound the per-memory extraction so a hung provider cannot leak
 		// goroutines indefinitely. 60s is generous for chat completions
 		// even on slow models like Sonnet/GPT-4 class.

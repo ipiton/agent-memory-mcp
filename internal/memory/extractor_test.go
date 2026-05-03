@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -214,19 +213,18 @@ func TestStore_FiresExtractorAsynchronouslyOnStore(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 
-	// Fan-out is async; wait briefly for the goroutine to land. A short
-	// poll loop avoids flaky absolute sleeps under loaded CI.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		got, _ := store.TriplesForMemory(ctx, mem.ID)
-		if len(got) == 2 {
-			return // ok
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	// Wait deterministically for the fan-out goroutine to land instead of
+	// polling. The previous poll-with-deadline approach was racy under
+	// heavy CI load.
+	store.WaitForBackgroundExtraction()
 
-	got, _ := store.TriplesForMemory(ctx, mem.ID)
-	t.Fatalf("expected 2 triples persisted within 10s, got %d (extractor calls=%d)", len(got), stub.calls.Load())
+	got, err := store.TriplesForMemory(ctx, mem.ID)
+	if err != nil {
+		t.Fatalf("TriplesForMemory: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 triples persisted, got %d (extractor calls=%d)", len(got), stub.calls.Load())
+	}
 }
 
 func TestStore_ExtractorFailureDoesNotBlockIngest(t *testing.T) {
@@ -291,35 +289,23 @@ func TestStore_UpdateContent_ReExtractsTriples(t *testing.T) {
 	if err := store.Store(ctx, mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	waitForTripleCount(t, store, mem.ID, 1)
+	store.WaitForBackgroundExtraction()
+
+	got, _ := store.TriplesForMemory(ctx, mem.ID)
+	if len(got) != 1 || got[0].Subject != "first" {
+		t.Fatalf("after Store: expected one 'first' triple, got %v", got)
+	}
 
 	// Update the content; extractor must fire again with new content and
 	// the prior triples must be replaced (not accumulated).
 	if err := store.Update(ctx, mem.ID, Update{Content: "second content describing service"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		got, _ := store.TriplesForMemory(ctx, mem.ID)
-		if len(got) == 1 && got[0].Subject == "second" {
-			return // success: replace-all happened
-		}
-		time.Sleep(20 * time.Millisecond)
+	store.WaitForBackgroundExtraction()
+
+	got, _ = store.TriplesForMemory(ctx, mem.ID)
+	if len(got) != 1 || got[0].Subject != "second" {
+		t.Fatalf("after Update: expected single triple subj=second (replace-all), got %v", got)
 	}
-	got, _ := store.TriplesForMemory(ctx, mem.ID)
-	t.Fatalf("expected single triple with subj=second, got %v", got)
 }
 
-func waitForTripleCount(t *testing.T, store *Store, memoryID string, want int) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		got, _ := store.TriplesForMemory(t.Context(), memoryID)
-		if len(got) == want {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	got, _ := store.TriplesForMemory(t.Context(), memoryID)
-	t.Fatalf("waited 10s, expected %d triples, got %d", want, len(got))
-}
