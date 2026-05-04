@@ -34,12 +34,37 @@ This makes it a better fit when the agent needs to answer questions like:
 - "What changed recently that could explain this regression?"
 - "Which runbook or RFC matches this incident?"
 
+## Table of Contents
+
+- [Who This Is For](#who-this-is-for)
+- [Why Not Just A Memory Tool](#why-not-just-a-memory-tool)
+- [Features](#features)
+- [What Improved For Users](#what-improved-for-users)
+- [Start Local In 3 Minutes](#start-local-in-3-minutes)
+- [Local-Only Mode](#local-only-mode)
+- [Index Your Repo In 2 Commands](#index-your-repo-in-2-commands)
+- [Turn It Into A Team Service Later](#turn-it-into-a-team-service-later)
+- [Installation Options](#installation-options) — Homebrew, binary, source, Docker
+- [CLI Mode](#cli-mode)
+- [MCP client configuration](#mcp-client-configuration) — Claude Desktop, Cursor, Codex
+- [Recommended Workflow Snippets](#recommended-workflow-snippets) — what to paste into `CLAUDE.md` / `.cursorrules`
+- [CLI commands](#cli-commands)
+- [MCP tools reference](#mcp-tools-reference) — and JSON examples in [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md)
+- [Configuration](#configuration) — env vars, hot-reload, indexing safety
+- [Security And Operations](#security-and-operations)
+- [Architecture](#architecture)
+- [macOS service installation](#macos-service-installation)
+- [Troubleshooting / FAQ](#troubleshooting--faq)
+- [Development](#development)
+
+Reference docs: [HOOKS](docs/HOOKS.md) · [MCP_TOOLS](docs/MCP_TOOLS.md) · [SHARED_SERVICE](docs/SHARED_SERVICE.md) · [STEWARDSHIP](docs/STEWARDSHIP.md) · [SEDIMENTATION](docs/SEDIMENTATION.md) · [BACKUP_RESTORE](docs/BACKUP_RESTORE.md) · [SECURITY](docs/SECURITY.md) · [THREAT_MODEL](docs/THREAT_MODEL.md) · [CONTRIBUTING](docs/CONTRIBUTING.md) · [CHANGELOG](docs/CHANGELOG.md)
+
 ## Features
 
 - **Automatic session capture** — Claude Code hooks auto-capture knowledge at session end, save checkpoints before context compression, and compile pending summaries at session start
 - **Typed persistent memory** with 4 types: episodic, semantic, procedural, working
 - **Hybrid retrieval** that combines embeddings with keyword/BM25-like ranking
-- **RAG indexing** for project docs, changelogs, and knowledge archives
+- **RAG indexing** for project docs, changelogs, and knowledge archives (enabled by default in stdio/CLI mode; **disabled by default in the Homebrew service preset** — see [Installation Options](#installation-options))
 - **Repo-aware file tools** for listing, reading, and searching allowlisted paths
 - **Knowledge stewardship** — automated maintenance: duplicate detection, conflict resolution, stale detection, drift scanning, and a review inbox
 - **Temporal knowledge model** — track when knowledge was valid, build supersession chains, and query "what was true at time T"
@@ -267,17 +292,27 @@ brew install ipiton/tap/agent-memory-mcp
 
 Download a prebuilt archive from the [Releases](https://github.com/ipiton/agent-memory-mcp/releases) page.
 
+The release archives include the version in their filename, so resolve the latest tag first:
+
 ```bash
+# Resolve latest version once
+VERSION=$(curl -fsSL https://api.github.com/repos/ipiton/agent-memory-mcp/releases/latest \
+  | grep '"tag_name"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
+
 # macOS (Apple Silicon)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-darwin-arm64.tar.gz | tar xz
-mv agent-memory-mcp /usr/local/bin/
+curl -fsSL "https://github.com/ipiton/agent-memory-mcp/releases/download/v${VERSION}/agent-memory-mcp-${VERSION}-darwin-arm64.tar.gz" | tar xz
+sudo mv agent-memory-mcp /usr/local/bin/
 
 # macOS (Intel)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-darwin-amd64.tar.gz | tar xz
-mv agent-memory-mcp /usr/local/bin/
+curl -fsSL "https://github.com/ipiton/agent-memory-mcp/releases/download/v${VERSION}/agent-memory-mcp-${VERSION}-darwin-amd64.tar.gz" | tar xz
+sudo mv agent-memory-mcp /usr/local/bin/
 
 # Linux (x86_64)
-curl -L https://github.com/ipiton/agent-memory-mcp/releases/latest/download/agent-memory-mcp-0.2.0-linux-amd64.tar.gz | tar xz
+curl -fsSL "https://github.com/ipiton/agent-memory-mcp/releases/download/v${VERSION}/agent-memory-mcp-${VERSION}-linux-amd64.tar.gz" | tar xz
+sudo mv agent-memory-mcp /usr/local/bin/
+
+# Linux (arm64)
+curl -fsSL "https://github.com/ipiton/agent-memory-mcp/releases/download/v${VERSION}/agent-memory-mcp-${VERSION}-linux-arm64.tar.gz" | tar xz
 sudo mv agent-memory-mcp /usr/local/bin/
 ```
 
@@ -604,6 +639,16 @@ For shared HTTP mode:
 | `import` | Import memories from JSON (positional file or stdin) |
 | `index-triples` | Retrofit (subj, rel, obj) triples for memories that lack them (`-resume`, `-force`, `-limit`, `-context`, `-dry-run`, `-progress-every`, `-json`). Powers the `recall_multihop` MCP tool — see `MCP_TRIPLE_EXTRACTOR_*` envs. |
 | `dead-ends-stale` | List dead_end memories older than `-age` (default 12 months) for re-evaluation (`-limit`, `-json`) |
+| `setup` | Auto-configure Claude Code hooks in `~/.claude/settings.json` (`-command`, `-dry-run`, `-force`). See [docs/HOOKS.md](docs/HOOKS.md) |
+| `hooks-config` | Print Claude Code hooks JSON for manual paste into `settings.json` (`-command`, `-json`) |
+| `context-inject` | SessionStart hook payload: recent memories + pending raw summaries (`-limit`, `-pending-limit`, `-context`, `-service`) |
+| `auto-capture` | SessionEnd hook: read transcript from stdin, run extract → plan → apply pipeline (`-stdin`, `-summary`, `-mode`, `-context`, `-service`, `-tags`, `-dry-run`, `-json`) |
+| `checkpoint` | PreCompact hook: save a raw session checkpoint before context compression (`-stdin`, `-summary`, `-boundary`, `-context`, `-service`, `-tags`) |
+| `sweep-archive` | Scan `MCP_TASK_ARCHIVE_ROOTS` and run `end-task` on every archived slug (T47) |
+| `end-task` | Consolidate working/procedural memories tied to one archived task slug (T47) |
+| `mark-dead-end` | Record an abandoned approach with its failure rationale (T46) |
+| `sediment-cycle` | Apply layer transitions for memory sedimentation: trivial promotions auto-apply, the rest queue for review (T48) |
+| `recount-refs` | Backfill `referenced_by_count` metadata from existing cross-memory edges (idempotent) |
 
 ## MCP tools reference
 
@@ -657,7 +702,7 @@ For shared HTTP mode:
 | `recall_similar_incidents` | Recall similar incidents from memory and indexed postmortems |
 | `end_task` | Consolidate memory for an archived task slug: outdate working/procedural entries, route high-importance ones to the review queue |
 | `sweep_archive` | Pull-mode scan over `MCP_TASK_ARCHIVE_ROOTS` that runs `end_task` on every archived slug |
-| `store_dead_end` | Record an attempted approach that failed (plus the why and the alternative used) so retrieval can surface it as a pitfall warning on related queries |
+| `store_dead_end` | Record an attempted approach that failed (plus the why and the alternative used) so retrieval can surface it as a pitfall warning on related queries. **Use this** for standalone failures with no decision context. **Use `store_decision -avoided-dead-end-id <id>`** when the dead end is part of a larger architectural decision and you want to link both records into one rationale chain (T46) |
 | `promote_sediment` | Promote a memory to a higher sediment layer (surface → episodic → semantic → character). See `docs/SEDIMENTATION.md` |
 | `demote_sediment` | Demote a memory one sediment layer down |
 | `sediment_cycle` | Run the sediment transition cycle — auto-applies trivial promotions, routes non-trivial ones to the review queue |
@@ -713,8 +758,13 @@ kill -HUP $(pgrep agent-memory-mcp)
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_ROOT` | Current dir | Project root path |
+| `MCP_ALLOW_DIRS` | `""` (only `MCP_ROOT`) | Comma-separated extra repo-relative paths the file tools (`repo_list`, `repo_read`, `repo_search`) may read. Paths must stay under `MCP_ROOT`; absolute paths or `..` traversal are rejected at config load. **Critical for shared/HTTP mode** — keep narrow |
+| `MCP_MAX_FILE_BYTES` | `2097152` | Max file size (bytes) `repo_read` will return; larger files are rejected |
+| `MCP_MAX_SEARCH_RESULTS` | `200` | Hard cap for `repo_search` result count |
+| `MCP_MAX_DEPTH` | `3` | Max directory recursion depth for `repo_list` |
+| `MCP_STDIO_MODE` | `line` | Stdio framing: `line` (newline-delimited) or `lsp` (Content-Length headers) |
 | `MCP_MEMORY_ENABLED` | `true` | Enable memory tools |
-| `MCP_RAG_ENABLED` | `true` | Enable RAG/search tools |
+| `MCP_RAG_ENABLED` | `true` | Enable RAG/search tools (Homebrew service preset overrides this to `false` until you set `MCP_ROOT`) |
 | `MCP_HTTP_MODE` | `stdio` | Transport: `stdio` or `http` |
 | `MCP_HTTP_HOST` | `127.0.0.1` | HTTP bind host; set `0.0.0.0` for shared/container deployments |
 | `MCP_HTTP_PORT` | `18080` | HTTP port (when in HTTP mode) |
@@ -727,7 +777,9 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
 | `MCP_EMBEDDING_DIMENSION` | `1024` | Vector dimension (change requires re-indexing) |
-| `MCP_INDEX_DIRS` | `docs` | Directories to index for RAG |
+| `MCP_INDEX_DIRS` | `docs` | Comma-separated directories and individual files to index for RAG. Code fallback is `docs`; the shipped `.env.example` preset sets `docs,README.md,CHANGELOG.md` for a typical project layout |
+| `MCP_RAG_AUTO_INDEX` | `true` | Index documents on startup. Code default is `true` (good for HTTP/service mode); the solo-local `.env.example` preset turns it off so you control indexing with explicit `agent-memory-mcp index` runs |
+| `MCP_RAG_FILE_WATCHER` | `false` | Watch `MCP_INDEX_DIRS` for changes and reindex incrementally; useful for long-running shared/service instances |
 | `MCP_INDEX_EXCLUDE_DIRS` | built-in defaults | Extra directory names or repo-relative paths to exclude from RAG indexing |
 | `MCP_INDEX_EXCLUDE_GLOBS` | - | Extra glob patterns matched against repo-relative paths, for example `docs/internal/*.md` |
 | `MCP_REDACT_SECRETS` | `true` | Redact common secret-like content before documents are indexed |
@@ -736,6 +788,12 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_SESSION_CHECKPOINT_INTERVAL` | `30m` | Interval for periodic raw checkpoint snapshots during active sessions |
 | `MCP_SESSION_MIN_EVENTS` | `2` | Minimum tracked MCP tool calls before background auto-close runs |
 | `MCP_DATA_PATH` | `data` | Base path for data storage |
+| `MCP_RAG_INDEX_PATH` | `<MCP_DATA_PATH>/rag-index` | Override the SQLite vector index location |
+| `MCP_MEMORY_DB_PATH` | `<MCP_DATA_PATH>/memory-store/memories.db` | Override the SQLite memory database path |
+| `MCP_LOG_PATH` | `<MCP_DATA_PATH>/logs/mcp-diagnostics.log` | Override the diagnostics log file path |
+| `MCP_STATS_ENABLED` | `false` | Append per-call usage records (jsonl) for self-observability |
+| `MCP_STATS_PATH` | `<MCP_DATA_PATH>/logs/mcp-usage.jsonl` | Stats jsonl output path |
+| `MCP_STATS_SAMPLE_RATE` | `1.0` | Fraction (0.0–1.0) of calls to record when stats are enabled |
 | `MCP_STEWARD_ENABLED` | auto | Enable knowledge stewardship (auto-enabled in HTTP mode with memory) |
 | `MCP_STEWARD_MODE` | `manual` | Stewardship mode: `off`, `manual`, `scheduled`, `event_driven` |
 | `MCP_STEWARD_SCHEDULE_INTERVAL` | `24h` | Interval between scheduled stewardship runs |
@@ -748,8 +806,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_CHECKPOINT_DEDUP_DISABLED` | `false` | Escape hatch: disable checkpoint-hook deduplication entirely |
 | `MCP_TASK_ARCHIVE_ROOTS` | - | Colon-separated archive roots for `sweep-archive` / `end-task` (e.g. `/home/you/tasks/archive`). Empty disables the feature |
 | `MCP_TASK_SLUG_PATTERN` | - | Optional regex filtering archive subdirectory names; invalid regex fails config load |
-| `MCP_RERANK_ENABLED` | `false` | Enable neural reranker after hybrid search; feature-flagged, default off |
-| `MCP_RERANK_PROVIDER` | `disabled` | Reranker provider: `jina` or `disabled` |
+| `MCP_RERANK_ENABLED` | `false` | Master gate for the neural reranker stage after hybrid search. Must be `true` AND `MCP_RERANK_PROVIDER` must be a real provider (`jina`) for the reranker to run |
+| `MCP_RERANK_PROVIDER` | `disabled` | Reranker provider: `jina` or `disabled`. With `disabled` (or empty) the pipeline degrades to hybrid-only ranking even when `MCP_RERANK_ENABLED=true` |
 | `JINA_RERANKER_MODEL` | `jina-reranker-v2-base-multilingual` | Jina reranker model id |
 | `MCP_RERANK_TIMEOUT` | `5s` | Hard timeout for one rerank call; on timeout the hybrid order is kept and `rerank_failed:timeout` is added to debug signals |
 | `MCP_RERANK_TOP_N` | `40` | Number of top hybrid candidates sent to the reranker; clamped to `100` at call time |
@@ -1074,11 +1132,11 @@ Reference docs:
 
 The server supports three embedding providers in `auto` mode:
 
-1. **Jina AI** (primary) -- `jina-embeddings-v3`, 1024 dimensions, multilingual
-2. **OpenAI** (fallback) -- `text-embedding-3-small`, 1024 dimensions, or any OpenAI-compatible API
-3. **Ollama** (local fallback) -- `bge-m3`, 1024 dimensions, runs locally for free
+1. **Jina AI** (primary) -- `jina-embeddings-v3`, native 1024 dimensions, multilingual
+2. **OpenAI** (fallback) -- `text-embedding-3-small` or any OpenAI-compatible API. Native dimension is 1536; the server requests `dimensions=1024` via the OpenAI MRL parameter to match the rest of the stack
+3. **Ollama** (local fallback) -- `bge-m3`, native 1024 dimensions, runs locally for free
 
-All three can produce 1024-dimensional vectors, but they are not interchangeable: each model has its own embedding space. Matching dimensions do not make cosine similarity safe across different models.
+All three are normalized to the same vector dimension (`MCP_EMBEDDING_DIMENSION`, default `1024`), but they are **not** interchangeable: each model has its own embedding space. Matching dimensions do not make cosine similarity safe across different models — that is why the server tags every memory with its `embedding_model` and refuses to mix them at recall time.
 
 What `auto` mode means in practice:
 
@@ -1145,6 +1203,90 @@ launchctl load ~/Library/LaunchAgents/com.agent-memory-mcp.plist
 launchctl unload ~/Library/LaunchAgents/com.agent-memory-mcp.plist
 ```
 
+## Troubleshooting / FAQ
+
+### "no embedding provider available" or "embedder not configured"
+
+The server tries Jina → OpenAI → Ollama in `auto` mode and stops at the first available one. If none is reachable, embeddings (and therefore semantic recall) are disabled.
+
+- set at least one of `JINA_API_KEY`, `OPENAI_API_KEY`, or run Ollama with `bge-m3` pulled (`ollama pull bge-m3`)
+- in `MCP_EMBEDDING_MODE=local-only` only Ollama is consulted; verify `OLLAMA_BASE_URL` (default `http://localhost:11434`) responds
+
+CLI `agent-memory-mcp store …` without an embedder still saves the memory but skips the vector — the record will only be retrievable via text/keyword search until you run `agent-memory-mcp reembed`.
+
+### "embedding model mismatch — index built with X, current is Y"
+
+The RAG index and stored memories are tagged with the embedding model that produced them. If you switch provider or model, retrieval refuses to mix vector spaces:
+
+```bash
+agent-memory-mcp index            # rebuild RAG index for the new model
+agent-memory-mcp reembed          # re-embed stored memories
+agent-memory-mcp stats -json      # check how many memories still belong to older models
+```
+
+### "address already in use" — port `18080` taken
+
+Another `agent-memory-mcp` (or unrelated service) holds the port:
+
+```bash
+lsof -nP -iTCP:18080 -sTCP:LISTEN
+brew services list | grep agent-memory-mcp
+```
+
+If two instances were started, stop one (`brew services stop agent-memory-mcp` or `kill <pid>`) or change `MCP_HTTP_PORT`.
+
+### `brew services start agent-memory-mcp` does not start the daemon
+
+Most common causes:
+
+- the formula was installed as a Cask before — uninstall first: `brew uninstall --cask agent-memory-mcp && brew install ipiton/tap/agent-memory-mcp`
+- the config file is malformed: `cat $(brew --prefix)/etc/agent-memory-mcp/config.env`
+- log: `tail -f $(brew --prefix)/var/log/agent-memory-mcp/mcp-diagnostics.log`
+
+### Hooks not firing in Claude Code
+
+After `agent-memory-mcp setup`, restart Claude Code (hooks load at process start). Verify the merge:
+
+```bash
+agent-memory-mcp setup --dry-run     # show what would be written
+jq '.hooks' ~/.claude/settings.json  # inspect actual config
+```
+
+If you upgraded via `brew upgrade`, re-run `agent-memory-mcp setup --force` so the hook command points to the new binary path. See [docs/HOOKS.md](docs/HOOKS.md).
+
+### "bind to 0.0.0.0 without auth is not allowed"
+
+In HTTP mode the server refuses non-loopback binds without `MCP_HTTP_AUTH_TOKEN`. Either:
+
+- set the bearer token (`MCP_HTTP_AUTH_TOKEN=$(openssl rand -hex 32)`) — recommended
+- or, for tightly controlled environments only, set `MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED=true`
+
+### Memory database keeps growing
+
+- run `agent-memory-mcp project-bank canonical_overview` and `… review_queue` to spot raw session summaries that should be promoted or marked outdated
+- enable stewardship: `MCP_STEWARD_MODE=scheduled` triggers periodic dedup/stale scans
+- prune session checkpoints with the dedup window (`MCP_CHECKPOINT_DEDUP_THRESHOLD`, `MCP_CHECKPOINT_DEDUP_WINDOW`)
+- back up first: `agent-memory-mcp export > backup.json` (see [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md))
+
+### `recall_multihop` returns empty
+
+The multi-hop graph walks the `(subj, rel, obj)` triple corpus. It's empty until you either:
+
+- enable `MCP_TRIPLE_EXTRACTOR_ENABLED=true` and write new memories (extraction is async on every store)
+- backfill existing memories with `agent-memory-mcp index-triples` (idempotent, supports `--resume`)
+
+Both paths require `MCP_TRIPLE_EXTRACTOR_*` (see [Key variables](#key-variables)) — extraction calls an OpenAI-compatible `/chat/completions` endpoint.
+
+### "config not reloading" in HTTP/service mode
+
+Changes are picked up within ~30s. Force an immediate reload:
+
+```bash
+kill -HUP $(pgrep agent-memory-mcp)
+```
+
+Note: HTTP host/port require a full restart (`brew services restart agent-memory-mcp`). Only RAG-related settings hot-reload.
+
 ## Development
 
 ```bash
@@ -1156,7 +1298,12 @@ make run
 
 # Test
 make test
+
+# Full quality gate (lint + tests + smoke)
+make quality-gates
 ```
+
+For repo layout, code style, and PR conventions see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## License
 

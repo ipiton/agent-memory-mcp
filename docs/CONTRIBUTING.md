@@ -33,30 +33,50 @@ make test
 make run
 
 # Run in HTTP mode
-MCP_HTTP_MODE=http MCP_HTTP_PORT=18080 go run .
+MCP_HTTP_MODE=http MCP_HTTP_PORT=18080 go run ./cmd/agent-memory-mcp
 ```
 
 ### Project structure
 
 ```
 .
-├── main.go              # Entry point
-├── server.go            # MCP server, JSON-RPC dispatch
-├── tools.go             # Tool definitions and descriptions
-├── tool_calls.go        # Tool call handlers (file operations)
-├── tool_results.go      # Tool result formatting
-├── memory_store.go      # Memory CRUD + vector search
-├── rag_engine.go        # RAG: document indexing, embeddings, search
-├── vector_store.go      # SQLite-backed vector store
-├── config.go            # Configuration from env vars / flags
-├── paths.go             # Path guard (security: allowlisted paths)
-├── resources.go         # MCP resources (file listing)
-├── search.go            # Text search across files
-├── readers.go           # File readers
-├── logger.go            # File-based logging
-├── stats.go             # Usage statistics
-├── scripts/             # Shell scripts for testing and installation
-└── system/macos/        # macOS launchd service files
+├── cmd/agent-memory-mcp/      # Binary entry point + CLI subcommands
+│   ├── main.go                # Subcommand dispatch (serve, store, search, hooks…)
+│   ├── cli.go                 # Memory/RAG/session CLI handlers
+│   ├── hooks_cli.go           # Claude Code hook commands (context-inject, auto-capture, checkpoint)
+│   ├── hooks_config.go        # `hooks-config` JSON generator
+│   ├── setup.go               # `setup` — auto-merges hooks into ~/.claude/settings.json
+│   ├── session_close.go       # close/review/accept-session CLI
+│   ├── project_bank.go        # project-bank views CLI
+│   ├── sediment_cli.go        # sediment-cycle / promote / demote CLI
+│   ├── dead_end_cli.go        # mark-dead-end / dead-ends-stale CLI
+│   ├── index_triples_cli.go   # T50 knowledge-graph triple backfill
+│   └── lifecycle_cli.go       # sweep-archive / end-task (T47)
+├── internal/
+│   ├── config/                # Env loading, dotenv chain, hot-reload watcher
+│   ├── server/                # MCP JSON-RPC server, tools_registry, HTTP handlers
+│   ├── memory/                # Memory CRUD, types, sediment metadata
+│   ├── rag/                   # RAG engine: indexing, chunking, hybrid search
+│   ├── vectorstore/           # SQLite-backed vector index
+│   ├── embedder/              # Jina/OpenAI/Ollama providers + embedder cache
+│   ├── reranker/              # Optional neural reranker (Jina cross-encoder)
+│   ├── search/                # Keyword/BM25 indexer
+│   ├── topk/                  # Hybrid top-K candidate merge
+│   ├── scoring/               # Trust/recency/source-aware scoring
+│   ├── trust/                 # Trust metadata: confidence/freshness/owner
+│   ├── steward/               # Stewardship: duplicates, drift, verification, inbox
+│   ├── sessionclose/          # close-session pipeline (extract/plan/apply)
+│   ├── review/                # Review queue
+│   ├── hooks/                 # Hook dedup logic (jaccard window)
+│   ├── lifecycle/             # Task-archive sweep (T47)
+│   ├── paths/                 # PathGuard — allowlisted paths
+│   ├── stats/                 # Usage stats jsonl
+│   ├── logger/                # File-based diagnostics logger
+│   └── userio/                # Stdio framing (line / lsp)
+├── deploy/                    # Docker, nginx, systemd unit, env shared template
+├── docs/                      # Reference docs (this folder)
+├── scripts/                   # Helper shell scripts (install, smoke, release)
+└── Makefile                   # Build, test, lint, smoke, quality-gates
 ```
 
 ## How to contribute

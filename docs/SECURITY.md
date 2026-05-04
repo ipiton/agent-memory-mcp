@@ -12,7 +12,13 @@ If you discover a security vulnerability, please report it responsibly.
 
 **Do not open a public issue.**
 
-Instead, please email security concerns to the maintainers or use [GitHub's private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability).
+Preferred channel: open a private advisory on GitHub:
+
+- <https://github.com/ipiton/agent-memory-mcp/security/advisories/new>
+
+This routes the report to the maintainers without making it public. See the [GitHub guide on private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability) for the full workflow.
+
+If GitHub access is not available, fall back to emailing the maintainer listed on the [project owner profile](https://github.com/ipiton).
 
 ### What to include
 

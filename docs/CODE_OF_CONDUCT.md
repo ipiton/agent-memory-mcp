@@ -29,9 +29,15 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers. All complaints will be reviewed and
-investigated and will result in a response that is deemed necessary and
-appropriate to the circumstances.
+reported through the following channels:
+
+- **Private GitHub advisory** (preferred for sensitive reports):
+  <https://github.com/ipiton/agent-memory-mcp/security/advisories/new>
+- **Public issue** for clearly non-sensitive matters:
+  <https://github.com/ipiton/agent-memory-mcp/issues>
+
+All complaints will be reviewed and investigated and will result in a response
+that is deemed necessary and appropriate to the circumstances.
 
 ## Attribution
 
