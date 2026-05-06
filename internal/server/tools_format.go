@@ -8,6 +8,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -353,12 +354,11 @@ func (s *MCPServer) formatWorkflowDocResults(heading string, results *rag.Search
 	return buf.String()
 }
 
+// truncateText is a thin alias for textfmt.Truncate (rune-aware). The byte-
+// based legacy implementation is preserved as the package-local name to
+// minimize churn across call sites.
 func truncateText(value string, maxLen int) string {
-	value = strings.TrimSpace(value)
-	if len(value) <= maxLen {
-		return value
-	}
-	return value[:maxLen] + "..."
+	return textfmt.Truncate(value, maxLen)
 }
 
 // Memory result formatting

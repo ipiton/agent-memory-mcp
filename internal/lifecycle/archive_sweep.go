@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"go.uber.org/zap"
 )
 
@@ -540,20 +541,10 @@ func displayTitle(m *memory.Memory) string {
 	return m.ID
 }
 
-// truncate shortens s to at most max runes, appending "..." if truncated.
-// Guards: non-positive max returns empty; max<3 returns a hard cut (no room
-// for the ellipsis).
+// truncate is a thin alias for textfmt.Truncate. Kept to minimize churn at
+// the call sites; new code should call textfmt.Truncate directly.
 func truncate(s string, max int) string {
-	if max <= 0 {
-		return ""
-	}
-	if len(s) <= max {
-		return s
-	}
-	if max < 3 {
-		return s[:max]
-	}
-	return s[:max-3] + "..."
+	return textfmt.Truncate(s, max)
 }
 
 // FormatSweepResult renders a SweepResult as a human-readable multi-line

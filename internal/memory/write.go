@@ -473,19 +473,18 @@ func (ms *Store) PromoteSediment(ctx context.Context, id string, target Sediment
 	}
 
 	// Direct column update — no Validate() round-trip, no embedding churn.
+	now := time.Now()
 	if _, err := ms.db.Exec(
 		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
-		string(target), time.Now(), id,
+		string(target), now, id,
 	); err != nil {
 		return nil, fmt.Errorf("promote_sediment: update failed: %w", err)
 	}
 
-	ms.mu.Lock()
-	if cm, ok := ms.memories[id]; ok {
+	ms.updateCachedField(id, func(cm *cachedMemory) {
 		cm.SedimentLayer = target
-		cm.UpdatedAt = time.Now()
-	}
-	ms.mu.Unlock()
+		cm.UpdatedAt = now
+	})
 
 	ms.logger.Info("Sediment layer promoted",
 		zap.String("id", id),
@@ -520,19 +519,18 @@ func (ms *Store) DemoteSediment(ctx context.Context, id string) (*DemoteSediment
 		}, nil
 	}
 
+	now := time.Now()
 	if _, err := ms.db.Exec(
 		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
-		string(to), time.Now(), id,
+		string(to), now, id,
 	); err != nil {
 		return nil, fmt.Errorf("demote_sediment: update failed: %w", err)
 	}
 
-	ms.mu.Lock()
-	if cm, ok := ms.memories[id]; ok {
+	ms.updateCachedField(id, func(cm *cachedMemory) {
 		cm.SedimentLayer = to
-		cm.UpdatedAt = time.Now()
-	}
-	ms.mu.Unlock()
+		cm.UpdatedAt = now
+	})
 
 	ms.logger.Info("Sediment layer demoted",
 		zap.String("id", id),

@@ -48,6 +48,17 @@ type trackedSession struct {
 	activities       []trackedActivity
 }
 
+// newTrackedSession constructs a fresh trackedSession with all three
+// timestamp fields stamped to the same `now`. Centralises the start/activity/
+// checkpoint trio that was inlined three times in flush/checkpoint paths.
+func newTrackedSession(now time.Time) *trackedSession {
+	return &trackedSession{
+		startedAt:        now,
+		lastActivityAt:   now,
+		lastCheckpointAt: now,
+	}
+}
+
 type trackedActivity struct {
 	Tool string
 	Line string
@@ -110,11 +121,7 @@ func (st *sessionTracker) HandleToolCall(name string, args map[string]any, rErr 
 		return
 	}
 	if st.current == nil {
-		st.current = &trackedSession{
-			startedAt:        now,
-			lastActivityAt:   now,
-			lastCheckpointAt: now,
-		}
+		st.current = newTrackedSession(now)
 	}
 	session := st.current
 	session.lastActivityAt = now
@@ -271,11 +278,7 @@ func (st *sessionTracker) flushWithNotification(boundary string, event sessionNo
 	}
 	session := cloneTrackedSession(st.current)
 	if session == nil {
-		session = &trackedSession{
-			startedAt:        now,
-			lastActivityAt:   now,
-			lastCheckpointAt: now,
-		}
+		session = newTrackedSession(now)
 	}
 	applySessionNotification(session, event, now)
 	st.current = nil
@@ -298,11 +301,7 @@ func (st *sessionTracker) forceCheckpoint(event sessionNotification, boundary st
 	}
 	session := cloneTrackedSession(st.current)
 	if session == nil {
-		session = &trackedSession{
-			startedAt:        now,
-			lastActivityAt:   now,
-			lastCheckpointAt: now,
-		}
+		session = newTrackedSession(now)
 	}
 	applySessionNotification(session, event, now)
 	if st.current != nil {

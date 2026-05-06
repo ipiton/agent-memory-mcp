@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
-	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
+	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 )
 
 // maxScanMemories is the safety limit for the number of memories loaded into RAM
@@ -472,7 +472,7 @@ func scanSemanticConflicts(memories []*memory.Memory, policy Policy, result *Sca
 			for j := i + 1; j < len(g.members) && pairs < maxPairsPerGroup; j++ {
 				a, b := g.members[i], g.members[j]
 
-				sim := vectorstore.CosineSimilarity(a.Embedding, b.Embedding)
+				sim := scoring.CosineSimilarity(a.Embedding, b.Embedding)
 				if sim < similarityThreshold {
 					continue
 				}

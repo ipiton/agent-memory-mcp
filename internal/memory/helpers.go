@@ -1,10 +1,51 @@
 package memory
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// parseMetadataJSON unmarshals a metadata blob from a sql.NullString into
+// a non-nil map[string]string. Empty / "null" / invalid strings yield an
+// empty map; the unmarshal error is returned for callers that care.
+//
+// Several read paths (loadMemoriesToCache, Get, getBatch) historically
+// silently dropped unmarshal errors — those callers can `_ =` the error.
+// IncrementReferencedByCount and similar write paths surface it.
+func parseMetadataJSON(raw sql.NullString) (map[string]string, error) {
+	metadata := map[string]string{}
+	if !raw.Valid || raw.String == "" || raw.String == "null" {
+		return metadata, nil
+	}
+	if err := json.Unmarshal([]byte(raw.String), &metadata); err != nil {
+		return map[string]string{}, fmt.Errorf("unmarshal metadata: %w", err)
+	}
+	if metadata == nil {
+		// json.Unmarshal of "null" onto &map resets to nil; defensive.
+		metadata = map[string]string{}
+	}
+	return metadata, nil
+}
+
+// updateCachedField runs fn against the cachedMemory for id under the cache
+// mutex. No-op when id is absent. Centralises the lock-look-up-mutate trio
+// that write paths (PromoteSediment, DemoteSediment, IncrementReferencedBy,
+// RecountReferences) repeated four times.
+//
+// Callers should capture `now := time.Now()` once and pass it to BOTH the
+// SQL UPDATE and fn — the previous pattern called time.Now() in two places
+// per write, causing microsecond drift between SQL.updated_at and the
+// cached UpdatedAt field.
+func (ms *Store) updateCachedField(id string, fn func(*cachedMemory)) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if cm, ok := ms.memories[id]; ok && cm != nil {
+		fn(cm)
+	}
+}
 
 func copyMetadata(metadata map[string]string) map[string]string {
 	if len(metadata) == 0 {

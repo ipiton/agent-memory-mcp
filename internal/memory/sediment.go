@@ -16,7 +16,6 @@
 package memory
 
 import (
-	"strconv"
 	"strings"
 	"time"
 )
@@ -279,20 +278,13 @@ func Decide(m *Memory, policy SedimentPolicy) *SedimentTransition {
 }
 
 // referencedByCount reads the optional referenced_by_count metadata as int.
-// Missing/invalid values produce 0 (no-op for the rule).
+// Missing/invalid values produce 0 (no-op for the rule). Thin wrapper over
+// referencedByCountFromMetadata that tolerates a nil *Memory.
 func referencedByCount(m *Memory) int {
-	if m == nil || len(m.Metadata) == 0 {
+	if m == nil {
 		return 0
 	}
-	raw := strings.TrimSpace(m.Metadata[MetadataReferencedByCount])
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
+	return referencedByCountFromMetadata(m.Metadata)
 }
 
 // DemoteOneStep returns the layer immediately closer to surface. Used by

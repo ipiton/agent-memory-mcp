@@ -53,16 +53,9 @@ func (ms *Store) incrementReferencedByCountLocked(ctx context.Context, id string
 		return fmt.Errorf("read metadata: %w", err)
 	}
 
-	metadata := map[string]string{}
-	if metadataJSON.Valid && metadataJSON.String != "" && metadataJSON.String != "null" {
-		if err := json.Unmarshal([]byte(metadataJSON.String), &metadata); err != nil {
-			return fmt.Errorf("unmarshal metadata: %w", err)
-		}
-	}
-	// json.Unmarshal of "null" on a map pointer resets the map to nil; guard
-	// against a nil map leaking past this point in any case.
-	if metadata == nil {
-		metadata = map[string]string{}
+	metadata, err := parseMetadataJSON(metadataJSON)
+	if err != nil {
+		return err
 	}
 
 	current := referencedByCountFromMetadata(metadata)
@@ -86,11 +79,8 @@ func (ms *Store) incrementReferencedByCountLocked(ctx context.Context, id string
 	// sediment rule consumption goes through Decide(m, policy) on a fresh
 	// *Memory struct. Refresh UpdatedAt under mu so cached timestamp
 	// matches DB for callers that snapshot via the cache.
-	ms.mu.Lock()
-	if cm, ok := ms.memories[id]; ok && cm != nil {
-		cm.UpdatedAt = time.Now()
-	}
-	ms.mu.Unlock()
+	now := time.Now()
+	ms.updateCachedField(id, func(cm *cachedMemory) { cm.UpdatedAt = now })
 
 	return nil
 }
@@ -160,18 +150,13 @@ func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountRe
 			_ = rows.Close()
 			return nil, fmt.Errorf("scan row: %w", err)
 		}
-		metadata := map[string]string{}
-		if metadataJSON.Valid && metadataJSON.String != "" && metadataJSON.String != "null" {
-			if err := json.Unmarshal([]byte(metadataJSON.String), &metadata); err != nil {
-				// Skip unparseable metadata — it cannot contribute to tally
-				// and we do not want to fail the whole recount.
-				ms.logger.Warn("recount: skipping unparseable metadata",
-					zap.String("id", id))
-				continue
-			}
-		}
-		if metadata == nil {
-			metadata = map[string]string{}
+		metadata, err := parseMetadataJSON(metadataJSON)
+		if err != nil {
+			// Skip unparseable metadata — it cannot contribute to tally
+			// and we do not want to fail the whole recount.
+			ms.logger.Warn("recount: skipping unparseable metadata",
+				zap.String("id", id))
+			continue
 		}
 		allRows = append(allRows, scanned{id: id, metadata: metadata, currentCount: referencedByCountFromMetadata(metadata)})
 
@@ -266,13 +251,9 @@ func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountRe
 	// cached, so no further cache mutation is required.
 	if len(applied) > 0 {
 		now := time.Now()
-		ms.mu.Lock()
 		for id := range applied {
-			if cm, ok := ms.memories[id]; ok && cm != nil {
-				cm.UpdatedAt = now
-			}
+			ms.updateCachedField(id, func(cm *cachedMemory) { cm.UpdatedAt = now })
 		}
-		ms.mu.Unlock()
 	}
 
 	result.Updated = len(applied)

@@ -325,10 +325,7 @@ func (ms *Store) loadMemoriesToCache() error {
 		}
 
 		// Derived metadata for trust scoring
-		metadata := make(map[string]string)
-		if metadataJSON.Valid && metadataJSON.String != "" {
-			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
-		}
+		metadata, _ := parseMetadataJSON(metadataJSON)
 		deriveCachedFields(&m, metadata, m.Type)
 
 		// Parse embedding (binary format)
@@ -705,10 +702,7 @@ func backfillSedimentLayer(db *sql.DB) error {
 			_ = rows.Close()
 			return err
 		}
-		metadata := map[string]string{}
-		if metadataJSON.Valid && metadataJSON.String != "" {
-			_ = json.Unmarshal([]byte(metadataJSON.String), &metadata)
-		}
+		metadata, _ := parseMetadataJSON(metadataJSON)
 		layer := BackfillSedimentLayer(Type(typeStr), metadata)
 		// Only queue the update if the backfilled layer differs from the
 		// default 'surface' that ADD COLUMN already stamped on every row.

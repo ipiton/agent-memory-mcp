@@ -759,24 +759,11 @@ func decodeEmbedding(blob []byte) ([]float32, error) {
 	return result, nil
 }
 
-// CosineSimilarity calculates the cosine similarity between two vectors.
+// CosineSimilarity is a thin alias kept for backwards compatibility.
+// The implementation now lives in internal/scoring; new callers should
+// import scoring.CosineSimilarity directly.
 func CosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dotProduct, normA, normB float64
-	for i := range a {
-		dotProduct += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
+	return scoring.CosineSimilarity(a, b)
 }
 
 func tokenizeKeywordText(value string) []string {

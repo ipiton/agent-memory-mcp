@@ -11,7 +11,6 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/topk"
-	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
 )
 
@@ -170,7 +169,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 
 		var score float64
 		if len(queryEmbedding) > 0 && len(m.Embedding) > 0 && m.EmbeddingModel != "" && m.EmbeddingModel == queryModelID {
-			score = vectorstore.CosineSimilarity(queryEmbedding, m.Embedding)
+			score = scoring.CosineSimilarity(queryEmbedding, m.Embedding)
 		} else {
 			if len(queryEmbedding) > 0 && len(m.Embedding) > 0 && m.EmbeddingModel != "" && m.EmbeddingModel != queryModelID {
 				modelMismatchCount++
@@ -414,15 +413,26 @@ func (ms *Store) flushAccessStats(ids []string) {
 	ms.mu.Unlock()
 }
 
-// Get retrieves a memory by ID from the database.
-func (ms *Store) Get(id string) (*Memory, error) {
-	row := ms.db.QueryRow(`
-		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
-		       embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer
-		FROM memories WHERE id = ?
-	`, id)
+// memoryColumns is the canonical SELECT list for full *Memory rows. Kept in
+// sync with scanMemoryRow. Loader (loadMemoriesToCache) historically used a
+// shorter subset that omitted replaces/observed_at — those gaps are
+// preserved there for now to avoid widening the cachedMemory shape.
+const memoryColumns = `id, content, type, title, tags, context, importance, metadata, embedding_model,
+		embedding, created_at, updated_at, accessed_at, access_count,
+		valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer`
 
+// rowScanner abstracts *sql.Row and *sql.Rows so scanMemoryRow can serve
+// both QueryRow callers (Get) and Next-loop callers (getBatch).
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanMemoryRow scans memoryColumns into a fresh *Memory and applies the
+// post-Scan hydration (tags JSON, metadata JSON, embedding blob, time
+// fields, sediment layer normalization). Centralises ~50 LOC that Get and
+// getBatch previously duplicated and which had already started drifting
+// (Round 3 H18: loader missed replaces/observed_at).
+func scanMemoryRow(scanner rowScanner) (*Memory, error) {
 	var m Memory
 	var tagsJSON, metadataJSON, embeddingModel sql.NullString
 	var embeddingBlob []byte
@@ -431,25 +441,19 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	var supersededBy, replaces sql.NullString
 	var sedimentLayer sql.NullString
 
-	err := row.Scan(
+	if err := scanner.Scan(
 		&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 		&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
 		&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
 		&validFrom, &validUntil, &supersededBy, &replaces, &observedAt, &sedimentLayer,
-	)
-	if err == sql.ErrNoRows {
-		return nil, &ErrNotFound{ID: id}
-	}
-	if err != nil {
+	); err != nil {
 		return nil, err
 	}
 
 	if tagsJSON.Valid && tagsJSON.String != "" {
 		_ = json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
 	}
-	if metadataJSON.Valid && metadataJSON.String != "" {
-		_ = json.Unmarshal([]byte(metadataJSON.String), &m.Metadata)
-	}
+	m.Metadata, _ = parseMetadataJSON(metadataJSON)
 	if len(embeddingBlob) > 0 {
 		m.Embedding, _ = unmarshalEmbeddingBinary(embeddingBlob)
 	}
@@ -486,8 +490,20 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	if m.SedimentLayer == "" {
 		m.SedimentLayer = string(DefaultSedimentLayer)
 	}
-
 	return &m, nil
+}
+
+// Get retrieves a memory by ID from the database.
+func (ms *Store) Get(id string) (*Memory, error) {
+	row := ms.db.QueryRow("SELECT "+memoryColumns+" FROM memories WHERE id = ?", id)
+	m, err := scanMemoryRow(row)
+	if err == sql.ErrNoRows {
+		return nil, &ErrNotFound{ID: id}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
@@ -500,12 +516,8 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`
-		SELECT id, content, type, title, tags, context, importance, metadata, embedding_model,
-		       embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer
-		FROM memories WHERE id IN (%s)
-	`, strings.Join(placeholders, ","))
+	query := fmt.Sprintf("SELECT "+memoryColumns+" FROM memories WHERE id IN (%s)",
+		strings.Join(placeholders, ","))
 
 	rows, err := ms.db.Query(query, args...)
 	if err != nil {
@@ -515,66 +527,11 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 
 	result := make(map[string]*Memory)
 	for rows.Next() {
-		var m Memory
-		var tagsJSON, metadataJSON, embeddingModel sql.NullString
-		var embeddingBlob []byte
-		var createdAt, updatedAt, accessedAt sql.NullTime
-		var validFrom, validUntil, observedAt sql.NullTime
-		var supersededBy, replaces sql.NullString
-		var sedimentLayer sql.NullString
-
-		err := rows.Scan(
-			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
-			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
-			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
-			&validFrom, &validUntil, &supersededBy, &replaces, &observedAt, &sedimentLayer,
-		)
+		m, err := scanMemoryRow(rows)
 		if err != nil {
 			continue
 		}
-		if tagsJSON.Valid && tagsJSON.String != "" {
-			_ = json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
-		}
-		if metadataJSON.Valid && metadataJSON.String != "" {
-			_ = json.Unmarshal([]byte(metadataJSON.String), &m.Metadata)
-		}
-		if len(embeddingBlob) > 0 {
-			m.Embedding, _ = unmarshalEmbeddingBinary(embeddingBlob)
-		}
-		if embeddingModel.Valid {
-			m.EmbeddingModel = embeddingModel.String
-		}
-		if createdAt.Valid {
-			m.CreatedAt = createdAt.Time
-		}
-		if updatedAt.Valid {
-			m.UpdatedAt = updatedAt.Time
-		}
-		if accessedAt.Valid {
-			m.AccessedAt = accessedAt.Time
-		}
-		if validFrom.Valid {
-			m.ValidFrom = &validFrom.Time
-		}
-		if validUntil.Valid {
-			m.ValidUntil = &validUntil.Time
-		}
-		if supersededBy.Valid {
-			m.SupersededBy = supersededBy.String
-		}
-		if replaces.Valid {
-			m.Replaces = replaces.String
-		}
-		if observedAt.Valid {
-			m.ObservedAt = &observedAt.Time
-		}
-		if sedimentLayer.Valid {
-			m.SedimentLayer = string(NormalizeSedimentLayer(sedimentLayer.String))
-		}
-		if m.SedimentLayer == "" {
-			m.SedimentLayer = string(DefaultSedimentLayer)
-		}
-		result[m.ID] = &m
+		result[m.ID] = m
 	}
 	return result, nil
 }
