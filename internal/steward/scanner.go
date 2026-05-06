@@ -22,7 +22,9 @@ const maxScanMemories = 5000
 // `steward run` perf (~24× regression after T48-T50 widened the row
 // shape). The replaces/observed_at fields ListLightweight skips are not
 // read by any scanner.
-func loadActiveMemories(ctx context.Context, store *memory.Store, memContext, service string) ([]*memory.Memory, bool, error) {
+//
+// Takes storeAPI (Round 3 M24) so tests can inject fakes.
+func loadActiveMemories(ctx context.Context, store storeAPI, memContext, service string) ([]*memory.Memory, bool, error) {
 	memories := store.ListLightweight(memory.Filters{Context: memContext})
 	var active []*memory.Memory
 	for _, m := range memories {
@@ -49,7 +51,8 @@ type ScanResult struct {
 }
 
 // RunScanners executes the requested scans and returns combined results.
-func RunScanners(ctx context.Context, store *memory.Store, policy Policy, scope RunScope, memContext, service string) *ScanResult {
+// Takes storeAPI (Round 3 M24) so tests can inject fakes.
+func RunScanners(ctx context.Context, store storeAPI, policy Policy, scope RunScope, memContext, service string) *ScanResult {
 	result := &ScanResult{}
 
 	active, truncated, err := loadActiveMemories(ctx, store, memContext, service)

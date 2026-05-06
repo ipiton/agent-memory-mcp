@@ -12,18 +12,31 @@ import (
 	"go.uber.org/zap"
 )
 
+// storeAPI is the narrow surface of *memory.Store that steward depends on.
+// Round 3 M24: lets unit tests inject a fake without spinning up a full
+// SQLite store. *memory.Store satisfies this interface natively.
+type storeAPI interface {
+	DB() *sql.DB
+	ListLightweight(filters memory.Filters) []*memory.Memory
+	Update(ctx context.Context, id string, update memory.Update) error
+	Delete(ctx context.Context, id string) error
+	MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error)
+	MergeDuplicates(ctx context.Context, primaryID string, duplicateIDs []string) (*memory.MergeDuplicatesResult, error)
+	PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error)
+}
+
 // Service is the main stewardship orchestrator. It manages policy, runs scans,
 // applies safe actions, and records audit entries.
 type Service struct {
 	db       *sql.DB
-	store    *memory.Store
+	store    storeAPI
 	logger   *zap.Logger
 	policyMu sync.RWMutex
 	policy   Policy
 }
 
 // NewService creates a steward service and ensures the required database tables exist.
-func NewService(store *memory.Store, logger *zap.Logger) (*Service, error) {
+func NewService(store storeAPI, logger *zap.Logger) (*Service, error) {
 	if logger == nil {
 		cfg := zap.NewProductionConfig()
 		cfg.Level = zap.NewAtomicLevelAt(zap.FatalLevel)
