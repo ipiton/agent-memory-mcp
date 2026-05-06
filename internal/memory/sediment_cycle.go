@@ -70,6 +70,15 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 		return nil, fmt.Errorf("sediment-cycle: list memories: %w", err)
 	}
 
+	// Round 3 H6: pre-load existing pending review items into a {targetID:
+	// true} set ONCE so createSedimentReviewItem doesn't re-scan the working
+	// memory list per candidate (was O(n*m) inside the loop). For a 5k corpus
+	// with 100 transitions this drops 100 List calls to 1.
+	pendingReviews, err := ms.loadPendingSedimentReviews(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("sediment-cycle: load pending reviews: %w", err)
+	}
+
 	var sinceCutoff time.Time
 	if cfg.SinceDays > 0 {
 		sinceCutoff = now.Add(-time.Duration(cfg.SinceDays) * 24 * time.Hour)
@@ -121,7 +130,7 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 			result.ReviewQueued++
 			continue
 		}
-		queued, err := ms.createSedimentReviewItem(ctx, m, tr)
+		queued, err := ms.createSedimentReviewItem(ctx, m, tr, pendingReviews)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: review queue %s→%s: %v", tr.MemoryID, tr.From, tr.To, err))
 			ms.logger.Warn("sediment-cycle: review queue write failed",
@@ -133,6 +142,7 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 		}
 		if queued {
 			result.ReviewQueued++
+			pendingReviews[tr.MemoryID] = struct{}{} // keep dedup set hot for follow-up transitions
 		}
 	}
 
@@ -150,13 +160,24 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 // createSedimentReviewItem writes a review_queue_item memory targeted at the
 // given memory+transition. Returns (queued=false, nil) if a matching review
 // item already exists (idempotency).
-func (ms *Store) createSedimentReviewItem(ctx context.Context, target *Memory, tr *SedimentTransition) (bool, error) {
-	exists, err := ms.sedimentReviewItemExists(ctx, target.Context, target.ID)
-	if err != nil {
-		return false, fmt.Errorf("dedup check: %w", err)
-	}
-	if exists {
-		return false, nil
+//
+// pendingReviews is a pre-loaded set of target IDs that already have a
+// non-resolved sediment-cycle review item (Round 3 H6); pass nil to fall
+// back to the legacy per-call List scan (used by code paths that don't run
+// inside RunSedimentCycle).
+func (ms *Store) createSedimentReviewItem(ctx context.Context, target *Memory, tr *SedimentTransition, pendingReviews map[string]struct{}) (bool, error) {
+	if pendingReviews != nil {
+		if _, exists := pendingReviews[target.ID]; exists {
+			return false, nil
+		}
+	} else {
+		exists, err := ms.sedimentReviewItemExists(ctx, target.Context, target.ID)
+		if err != nil {
+			return false, fmt.Errorf("dedup check: %w", err)
+		}
+		if exists {
+			return false, nil
+		}
 	}
 
 	content := fmt.Sprintf(
@@ -199,6 +220,36 @@ func (ms *Store) createSedimentReviewItem(ctx context.Context, target *Memory, t
 		return false, err
 	}
 	return true, nil
+}
+
+// loadPendingSedimentReviews returns the set of memory IDs that already
+// have an unresolved sediment-cycle review item. Built once per
+// RunSedimentCycle to replace per-candidate List scans.
+//
+// "Unresolved" excludes items where MetadataReviewRequired is "false" so a
+// re-run can still propose a transition that was previously dismissed, in
+// keeping with the original sedimentReviewItemExists semantic.
+func (ms *Store) loadPendingSedimentReviews(ctx context.Context) (map[string]struct{}, error) {
+	items, err := ms.List(ctx, Filters{Type: TypeWorking}, 0)
+	if err != nil {
+		return nil, err
+	}
+	pending := make(map[string]struct{})
+	for _, m := range items {
+		if m == nil || !IsReviewQueueMemory(m) {
+			continue
+		}
+		if m.Metadata[MetadataReviewSource] != ReviewSourceSedimentCycle {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataReviewRequired]), "false") {
+			continue
+		}
+		if target := strings.TrimSpace(m.Metadata[MetadataReviewTargetMemoryID]); target != "" {
+			pending[target] = struct{}{}
+		}
+	}
+	return pending, nil
 }
 
 // sedimentReviewItemExists reports whether a review_queue_item from an

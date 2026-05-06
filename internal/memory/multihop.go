@@ -288,10 +288,21 @@ func (ms *Store) RecallMultihop(ctx context.Context, req MultiHopRequest) ([]*Mu
 		ranked = ranked[:req.Limit]
 	}
 
+	// Round 3 H3: batch-load all top-K ids in one SQL roundtrip instead of
+	// N separate Get calls. For limit=100 this drops 100 SELECTs to 1.
+	ids := make([]string, len(ranked))
+	for i, r := range ranked {
+		ids[i] = r.id
+	}
+	loaded, err := ms.getBatch(ids)
+	if err != nil {
+		return nil, fmt.Errorf("multihop batch load: %w", err)
+	}
+
 	out := make([]*MultiHopResult, 0, len(ranked))
 	for _, r := range ranked {
-		mem, err := ms.Get(r.id)
-		if err != nil {
+		mem, ok := loaded[r.id]
+		if !ok {
 			ms.logger.Debug("multihop: memory disappeared between recall and graph walk", zap.String("id", r.id))
 			continue
 		}

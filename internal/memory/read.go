@@ -379,6 +379,9 @@ func (ms *Store) accessStatsWorker() {
 }
 
 // flushAccessStats persists access statistics for a batch of memory IDs.
+// Round 3 M3: all per-id UPDATEs run inside a single transaction so the
+// WAL fsync count is one per batch instead of one per id (was N fsyncs
+// per Recall under bursty traffic).
 func (ms *Store) flushAccessStats(ids []string) {
 	if len(ids) == 0 {
 		return
@@ -386,17 +389,35 @@ func (ms *Store) flushAccessStats(ids []string) {
 
 	now := time.Now()
 
-	// Write to DB first — only update cache for IDs that succeed.
+	// Write to DB first inside a single transaction so success/failure is
+	// all-or-nothing per batch and the WAL only fsyncs once. defer Rollback
+	// is a no-op once Commit succeeds.
+	tx, err := ms.db.Begin()
+	if err != nil {
+		ms.logger.Warn("Failed to begin access stats tx", zap.Error(err))
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`UPDATE memories SET accessed_at = ?, access_count = access_count + 1 WHERE id = ?`)
+	if err != nil {
+		ms.logger.Warn("Failed to prepare access stats stmt", zap.Error(err))
+		return
+	}
+	defer func() { _ = stmt.Close() }()
+
 	successIDs := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if _, err := ms.db.Exec(`
-			UPDATE memories SET accessed_at = ?, access_count = access_count + 1
-			WHERE id = ?
-		`, now, id); err != nil {
+		if _, err := stmt.Exec(now, id); err != nil {
 			ms.logger.Warn("Failed to update access stats", zap.String("id", id), zap.Error(err))
-		} else {
-			successIDs = append(successIDs, id)
+			continue
 		}
+		successIDs = append(successIDs, id)
+	}
+
+	if err := tx.Commit(); err != nil {
+		ms.logger.Warn("Failed to commit access stats tx", zap.Error(err))
+		return
 	}
 
 	if len(successIDs) == 0 {
@@ -506,10 +527,33 @@ func (ms *Store) Get(id string) (*Memory, error) {
 	return m, nil
 }
 
+// getBatchChunkSize bounds the IN-clause size per SQLite query. SQLite's
+// default SQLITE_MAX_VARIABLE_NUMBER is 999 (newer builds raise it to
+// 32766, but modernc.org/sqlite ships with the conservative default).
+// 500 leaves headroom for the planner and is a safe ceiling. Round 3 H4:
+// without this cap ExportAll and any massive getBatch crashed at >999 ids.
+const getBatchChunkSize = 500
+
 func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 	if len(ids) == 0 {
 		return make(map[string]*Memory), nil
 	}
+	result := make(map[string]*Memory, len(ids))
+	for start := 0; start < len(ids); start += getBatchChunkSize {
+		end := start + getBatchChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if err := ms.getBatchChunk(ids[start:end], result); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+// getBatchChunk loads a single IN-bounded chunk of ids into result.
+// Caller is responsible for chunking; see getBatch.
+func (ms *Store) getBatchChunk(ids []string, result map[string]*Memory) error {
 	placeholders := make([]string, len(ids))
 	args := make([]interface{}, len(ids))
 	for i, id := range ids {
@@ -521,11 +565,10 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 
 	rows, err := ms.db.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
 
-	result := make(map[string]*Memory)
 	for rows.Next() {
 		m, err := scanMemoryRow(rows)
 		if err != nil {
@@ -533,7 +576,36 @@ func (ms *Store) getBatch(ids []string) (map[string]*Memory, error) {
 		}
 		result[m.ID] = m
 	}
-	return result, nil
+	return nil
+}
+
+// ListLightweight returns memories matching `filters` built directly from
+// the in-RAM cache, skipping the SQLite getBatch round-trip that List
+// performs. Returned *Memory objects do NOT include `Replaces` or
+// `ObservedAt` (those columns are not cached for RAM reasons); all other
+// fields are populated identically to List.
+//
+// Round 3 T52: steward's RunScanners path called List on the full corpus
+// per scan invocation, which made `loadActiveMemories` dominate the
+// profile (~50% of cum time in BenchmarkRunScanners_2000). Switching to
+// ListLightweight for steward and similar predicate-only consumers cuts
+// that to a cache-iteration cost.
+//
+// Use List when you need replaces/observed_at; otherwise prefer this.
+func (ms *Store) ListLightweight(filters Filters) []*Memory {
+	snapshot := ms.snapshotForContext(filters.Context)
+
+	results := make([]*Memory, 0, len(snapshot))
+	for _, cm := range snapshot {
+		if !ms.matchCachedFilters(cm, filters) {
+			continue
+		}
+		results = append(results, cachedMemoryToMemory(cm))
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+	})
+	return results
 }
 
 // List returns memories matching the given filters, sorted by update time descending.

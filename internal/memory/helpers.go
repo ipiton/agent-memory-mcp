@@ -47,6 +47,36 @@ func (ms *Store) updateCachedField(id string, fn func(*cachedMemory)) {
 	}
 }
 
+// cachedMemoryToMemory builds a *Memory from a cachedMemory without
+// hitting the database. Replaces and ObservedAt are not in the cache and
+// remain zero — see ListLightweight godoc.
+func cachedMemoryToMemory(cm *cachedMemory) *Memory {
+	if cm == nil {
+		return nil
+	}
+	m := &Memory{
+		ID:             cm.ID,
+		Content:        cm.Content,
+		Type:           cm.Type,
+		Title:          cm.Title,
+		Tags:           append([]string(nil), cm.Tags...),
+		Context:        cm.Context,
+		Importance:     cm.Importance,
+		Metadata:       copyMetadata(cm.Metadata),
+		Embedding:      cm.Embedding,
+		EmbeddingModel: cm.EmbeddingModel,
+		CreatedAt:      cm.CreatedAt,
+		UpdatedAt:      cm.UpdatedAt,
+		AccessedAt:     cm.AccessedAt,
+		AccessCount:    cm.AccessCount,
+		ValidFrom:      cm.ValidFrom,
+		ValidUntil:     cm.ValidUntil,
+		SupersededBy:   cm.SupersededBy,
+		SedimentLayer:  string(cm.SedimentLayer),
+	}
+	return m
+}
+
 func copyMetadata(metadata map[string]string) map[string]string {
 	if len(metadata) == 0 {
 		return map[string]string{}

@@ -273,6 +273,11 @@ func TestStaleDetection(t *testing.T) {
 	db := store.DB()
 	_, _ = db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
 		time.Now().Add(-48*time.Hour), "Ingress rollback runbook")
+	// Steward now reads from the in-RAM cache (Round 3 T52 fix); refresh
+	// it after direct DB mutations so the test sees the aged timestamp.
+	if err := store.ReloadCache(); err != nil {
+		t.Fatalf("ReloadCache: %v", err)
+	}
 
 	report, err := svc.Run(ctx, RunParams{Scope: ScopeStale, DryRun: true})
 	if err != nil {
@@ -307,6 +312,9 @@ func TestWorkingMemoryTTL_AutoDeletesLowImportance(t *testing.T) {
 	if _, err := db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
 		old, "Task started: stale-task"); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.ReloadCache(); err != nil {
+		t.Fatalf("ReloadCache: %v", err)
 	}
 
 	report, err := svc.Run(ctx, RunParams{Scope: ScopeWorkingTTL, DryRun: false})
@@ -348,6 +356,9 @@ func TestWorkingMemoryTTL_RespectsImportanceCutoff(t *testing.T) {
 	if _, err := db.Exec(`UPDATE memories SET updated_at = ? WHERE title = ?`,
 		old, "Important working note"); err != nil {
 		t.Fatal(err)
+	}
+	if err := store.ReloadCache(); err != nil {
+		t.Fatalf("ReloadCache: %v", err)
 	}
 
 	report, err := svc.Run(ctx, RunParams{Scope: ScopeWorkingTTL, DryRun: false})

@@ -108,8 +108,16 @@ func (m *Memory) Validate() error {
 	return nil
 }
 
-// cachedMemory is a RAM-efficient representation of a Memory entry for fast filtering and search.
-// Content is NOT cached in RAM to save space.
+// cachedMemory is a RAM-efficient representation of a Memory entry for fast
+// filtering and search. Pre-derives lifecycle/knowledge-layer/owner from
+// metadata so hot paths (steward scanners, recall) don't re-parse JSON.
+//
+// Round 3 T52: Metadata is now cached too — without it any consumer that
+// needs MemoryService / EngineeringTypeOf etc. has to round-trip through
+// Store.List → getBatch (full-corpus SQL load on every scan run, ~24× hot
+// path regression after T48-T50). The RAM cost is ~300 bytes/memory; for
+// 100k memories that is ~30 MB, an acceptable trade for keeping steward
+// and other metadata-readers fully cache-resident.
 type cachedMemory struct {
 	ID             string
 	Content        string
@@ -121,6 +129,7 @@ type cachedMemory struct {
 	KnowledgeLayer string
 	Owner          string
 	Importance     float64
+	Metadata       map[string]string
 	Embedding      []float32
 	EmbeddingModel string
 	CreatedAt      time.Time
@@ -324,8 +333,9 @@ func (ms *Store) loadMemoriesToCache() error {
 			}
 		}
 
-		// Derived metadata for trust scoring
+		// Cache metadata + derived fields for fast cache-resident lookup.
 		metadata, _ := parseMetadataJSON(metadataJSON)
+		m.Metadata = metadata
 		deriveCachedFields(&m, metadata, m.Type)
 
 		// Parse embedding (binary format)
@@ -407,6 +417,7 @@ func toCachedMemory(m *Memory) *cachedMemory {
 		Tags:           m.Tags,
 		Context:        m.Context,
 		Importance:     m.Importance,
+		Metadata:       copyMetadata(m.Metadata),
 		Embedding:      m.Embedding,
 		EmbeddingModel: m.EmbeddingModel,
 		CreatedAt:      m.CreatedAt,

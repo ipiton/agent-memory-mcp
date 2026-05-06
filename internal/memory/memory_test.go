@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -174,6 +175,33 @@ func TestListReturnsCopies(t *testing.T) {
 		if m.Tags[0] == "MUTATED" {
 			t.Fatal("List returned shared slice")
 		}
+	}
+}
+
+// TestGetBatch_ChunksLargeIDLists pins down Round 3 H4: SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER (999 in modernc.org/sqlite) crashes IN-clause
+// queries with >999 ids. getBatch must chunk transparently; we exercise
+// 1500 ids = three chunks of 500.
+func TestGetBatch_ChunksLargeIDLists(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	const total = 1500
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		mem := &Memory{Content: fmt.Sprintf("chunk-test-%d", i), Type: TypeSemantic}
+		if err := store.Store(ctx, mem); err != nil {
+			t.Fatalf("Store %d: %v", i, err)
+		}
+		ids = append(ids, mem.ID)
+	}
+
+	loaded, err := store.getBatch(ids)
+	if err != nil {
+		t.Fatalf("getBatch: %v", err)
+	}
+	if len(loaded) != total {
+		t.Errorf("loaded %d memories, want %d", len(loaded), total)
 	}
 }
 

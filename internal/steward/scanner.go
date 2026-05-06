@@ -16,11 +16,14 @@ const maxScanMemories = 5000
 
 // loadActiveMemories loads non-archived memories filtered by context and service.
 // Returns at most maxScanMemories entries; if truncated, the boolean is true.
+//
+// Round 3 T52: uses ListLightweight (cache-only) instead of Store.List —
+// the latter does a full-corpus getBatch SQL roundtrip that dominated
+// `steward run` perf (~24× regression after T48-T50 widened the row
+// shape). The replaces/observed_at fields ListLightweight skips are not
+// read by any scanner.
 func loadActiveMemories(ctx context.Context, store *memory.Store, memContext, service string) ([]*memory.Memory, bool, error) {
-	memories, err := store.List(ctx, memory.Filters{Context: memContext}, 0)
-	if err != nil {
-		return nil, false, err
-	}
+	memories := store.ListLightweight(memory.Filters{Context: memContext})
 	var active []*memory.Memory
 	for _, m := range memories {
 		if memory.IsArchivedMemory(m) {

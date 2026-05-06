@@ -185,7 +185,7 @@ func newSweeperFromAPI(store storeAPI, opts ...Option) *Sweeper {
 		store:     store,
 		logger:    zap.NewNop(),
 		now:       time.Now,
-		statFS:    os.Stat,
+		statFS:    statNoSymlink,
 		readDirFS: os.ReadDir,
 	}
 	for _, opt := range opts {
@@ -331,6 +331,24 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 		}
 		memories = append(memories, m...)
 	}
+
+	// Round 3 H7: pre-load existing review-queue items for this slug ONCE
+	// so createPromotionCandidate doesn't re-List on every promotion
+	// candidate (was O(n*m)). One List instead of N for slugs with many
+	// promotion candidates.
+	existingReviews := make(map[string]struct{})
+	for _, m := range memories {
+		if m == nil || !memory.IsReviewQueueMemory(m) {
+			continue
+		}
+		if m.Metadata[memory.MetadataReviewSource] != memory.ReviewSourceArchiveSweep {
+			continue
+		}
+		if target := strings.TrimSpace(m.Metadata[memory.MetadataReviewTargetMemoryID]); target != "" {
+			existingReviews[target] = struct{}{}
+		}
+	}
+
 	stats := &SlugStats{}
 	result.PerSlug[slug] = stats
 
@@ -362,12 +380,13 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 				result.TotalPromotionCand++
 				break
 			}
-			if err := sw.createPromotionCandidate(ctx, m, slug); err != nil {
+			if err := sw.createPromotionCandidate(ctx, m, slug, existingReviews); err != nil {
 				result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, err))
 				sw.logger.Warn("archive-sweep: create review-queue item failed",
 					zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
 				break
 			}
+			existingReviews[m.ID] = struct{}{} // keep dedup set hot
 			stats.PromotionCandidates++
 			result.TotalPromotionCand++
 		default:
@@ -447,13 +466,24 @@ func isSweptType(t memory.Type) bool {
 // createPromotionCandidate persists a review_queue_item memory suggesting the
 // given memory be promoted. Idempotent: returns nil without writing if a
 // matching review item already exists.
-func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memory, slug string) error {
-	exists, err := sw.reviewItemExists(ctx, slug, m.ID)
-	if err != nil {
-		return fmt.Errorf("dedup check: %w", err)
-	}
-	if exists {
-		return nil
+//
+// existingReviews is a pre-loaded set of target IDs that already have a
+// review-queue item from an earlier sweep (Round 3 H7); pass nil to fall
+// back to the legacy per-call List scan (used by paths that don't run
+// inside sweepSlug).
+func (sw *Sweeper) createPromotionCandidate(ctx context.Context, m *memory.Memory, slug string, existingReviews map[string]struct{}) error {
+	if existingReviews != nil {
+		if _, exists := existingReviews[m.ID]; exists {
+			return nil
+		}
+	} else {
+		exists, err := sw.reviewItemExists(ctx, slug, m.ID)
+		if err != nil {
+			return fmt.Errorf("dedup check: %w", err)
+		}
+		if exists {
+			return nil
+		}
 	}
 
 	content := fmt.Sprintf(
@@ -545,6 +575,23 @@ func displayTitle(m *memory.Memory) string {
 // the call sites; new code should call textfmt.Truncate directly.
 func truncate(s string, max int) string {
 	return textfmt.Truncate(s, max)
+}
+
+// statNoSymlink is the production statFS implementation. It uses os.Lstat
+// (does not follow symlinks) and returns os.ErrNotExist when the target is
+// a symlink, so a symlink under an archive root cannot redirect the
+// sweeper to mark an unrelated slug as stale (Round 3 M9 — symlink
+// injection guard). For directories that are not symlinks, behaviour
+// matches os.Stat.
+func statNoSymlink(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, os.ErrNotExist
+	}
+	return info, nil
 }
 
 // FormatSweepResult renders a SweepResult as a human-readable multi-line
