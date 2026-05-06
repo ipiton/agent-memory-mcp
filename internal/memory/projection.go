@@ -180,7 +180,7 @@ func (ms *Store) ListCanonical(ctx context.Context, filters Filters, limit int) 
 		return nil, err
 	}
 
-	now := time.Now()
+	now := ms.now()
 	result := make([]*CanonicalKnowledge, 0)
 	for _, mem := range memories {
 		if !IsCanonicalMemory(mem) {

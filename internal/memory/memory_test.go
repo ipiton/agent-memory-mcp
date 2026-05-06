@@ -205,6 +205,47 @@ func TestGetBatch_ChunksLargeIDLists(t *testing.T) {
 	}
 }
 
+// TestStore_SetClockInjection pins down Round 3 H19: Store.SetClock makes
+// timestamps deterministic for tests. Previously every Store/Update call
+// reached for time.Now() directly so writes could not be tested for
+// temporal ordering without sleeping.
+func TestStore_SetClockInjection(t *testing.T) {
+	store := newTestStore(t)
+
+	fixed := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	store.SetClock(func() time.Time { return fixed })
+
+	mem := &Memory{Content: "stamped at fixed time", Type: TypeSemantic}
+	if err := store.Store(context.Background(), mem); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	got, err := store.Get(mem.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.CreatedAt.Equal(fixed) {
+		t.Errorf("CreatedAt = %v, want %v", got.CreatedAt, fixed)
+	}
+	if !got.UpdatedAt.Equal(fixed) {
+		t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, fixed)
+	}
+
+	// Advance the clock and update — UpdatedAt should follow.
+	advanced := fixed.Add(2 * time.Hour)
+	store.SetClock(func() time.Time { return advanced })
+	if err := store.Update(context.Background(), mem.ID, Update{Content: "updated"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, _ = store.Get(mem.ID)
+	if !got.UpdatedAt.Equal(advanced) {
+		t.Errorf("after Update: UpdatedAt = %v, want %v", got.UpdatedAt, advanced)
+	}
+	if !got.CreatedAt.Equal(fixed) {
+		t.Errorf("after Update: CreatedAt = %v, want %v (must NOT change)", got.CreatedAt, fixed)
+	}
+}
+
 func TestExportAllReturnsCopies(t *testing.T) {
 	store := newTestStore(t)
 

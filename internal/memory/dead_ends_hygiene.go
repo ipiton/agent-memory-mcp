@@ -35,7 +35,7 @@ func (ms *Store) StaleDeadEnds(ctx context.Context, olderThan time.Duration) ([]
 		return nil, err
 	}
 
-	now := time.Now()
+	now := ms.now()
 	var out []*StaleDeadEnd
 	for _, mem := range all {
 		if mem == nil {

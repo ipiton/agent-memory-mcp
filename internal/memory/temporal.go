@@ -139,7 +139,7 @@ func (ms *Store) SetTemporalFields(ctx context.Context, id string, validFrom, va
 		m.Replaces = replaces
 	}
 
-	m.UpdatedAt = time.Now()
+	m.UpdatedAt = ms.now()
 
 	if err := updateMemoryRow(ms.db, m); err != nil {
 		return err

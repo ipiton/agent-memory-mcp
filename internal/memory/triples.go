@@ -84,7 +84,7 @@ func (ms *Store) AddTriple(ctx context.Context, t *Triple) error {
 		t.ID = uuid.New().String()
 	}
 	if t.CreatedAt.IsZero() {
-		t.CreatedAt = time.Now().UTC()
+		t.CreatedAt = ms.now().UTC()
 	}
 
 	ms.writeMu.Lock()
@@ -117,7 +117,7 @@ func (ms *Store) AddTriples(ctx context.Context, triples []*Triple) error {
 			t.ID = uuid.New().String()
 		}
 		if t.CreatedAt.IsZero() {
-			t.CreatedAt = time.Now().UTC()
+			t.CreatedAt = ms.now().UTC()
 		}
 	}
 

@@ -185,6 +185,22 @@ type Store struct {
 	// Tests use WaitForBackgroundExtraction to block deterministically
 	// instead of polling; Close() should drain it for clean shutdown.
 	extractionWG sync.WaitGroup
+
+	// now is the clock used for all UpdatedAt / AccessedAt / metadata
+	// timestamp stamping. Default time.Now; tests override via SetClock to
+	// get deterministic temporal behaviour without sleeping. Round 3 H19.
+	now func() time.Time
+}
+
+// SetClock overrides the clock used for timestamping. Intended for tests:
+// production callers should leave the default (time.Now). Goroutine-safe
+// when called once during construction; concurrent calls during a write
+// would race with a concurrent ms.now() read.
+func (ms *Store) SetClock(now func() time.Time) {
+	if now == nil {
+		now = time.Now
+	}
+	ms.now = now
 }
 
 // WaitForBackgroundExtraction blocks until every async triple-extraction
@@ -263,6 +279,7 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 		accessCh:     make(chan []string, 64),
 		memories:     make(map[string]*cachedMemory),
 		contextIndex: make(map[string]map[string]*cachedMemory),
+		now:          time.Now,
 	}
 
 	// Load memories into cache — must succeed before starting background workers.

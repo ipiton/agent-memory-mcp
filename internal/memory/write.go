@@ -23,7 +23,7 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 		m.ID = uuid.New().String()
 	}
 
-	now := time.Now()
+	now := ms.now()
 	m.CreatedAt = now
 	m.UpdatedAt = now
 	m.AccessedAt = now
@@ -114,7 +114,7 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 		m.Metadata = NormalizeMetadata(mergedMetadata)
 	}
 
-	m.UpdatedAt = time.Now()
+	m.UpdatedAt = ms.now()
 	if err := m.Validate(); err != nil {
 		return err
 	}
@@ -191,7 +191,7 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 	}
 	metadata["status"] = status
 	metadata["archived"] = "true"
-	metadata["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+	metadata["last_verified_at"] = ms.now().UTC().Format(time.RFC3339)
 
 	importance := mem.Importance
 	if importance > 0.25 {
@@ -206,7 +206,7 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 	}
 
 	// Build supersession chain: set temporal fields on old entry.
-	now := time.Now().UTC()
+	now := ms.now().UTC()
 	if err := ms.SetTemporalFields(ctx, id, nil, &now, supersededBy, ""); err != nil {
 		// Non-fatal: temporal fields are supplementary.
 		ms.logger.Warn("Failed to set temporal fields on outdated entry", zap.String("id", id), zap.Error(err))
@@ -250,8 +250,9 @@ func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string
 	}
 	metadata["knowledge_layer"] = "canonical"
 	metadata["canonical"] = "true"
-	metadata["canonical_promoted_at"] = time.Now().UTC().Format(time.RFC3339)
-	metadata["last_verified_at"] = time.Now().UTC().Format(time.RFC3339)
+	canonicalNow := ms.now().UTC().Format(time.RFC3339)
+	metadata["canonical_promoted_at"] = canonicalNow
+	metadata["last_verified_at"] = canonicalNow
 	delete(metadata, "archived")
 
 	importance := mem.Importance
@@ -321,7 +322,7 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 		return nil, &ErrValidation{Message: "at least one duplicate memory id is required"}
 	}
 
-	now := time.Now()
+	now := ms.now()
 	metadata := copyMetadata(primary.Metadata)
 	if owner := strings.TrimSpace(metadata["owner"]); owner == "" {
 		for _, duplicate := range duplicates {
@@ -473,7 +474,7 @@ func (ms *Store) PromoteSediment(ctx context.Context, id string, target Sediment
 	}
 
 	// Direct column update — no Validate() round-trip, no embedding churn.
-	now := time.Now()
+	now := ms.now()
 	if _, err := ms.db.Exec(
 		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
 		string(target), now, id,
@@ -519,7 +520,7 @@ func (ms *Store) DemoteSediment(ctx context.Context, id string) (*DemoteSediment
 		}, nil
 	}
 
-	now := time.Now()
+	now := ms.now()
 	if _, err := ms.db.Exec(
 		`UPDATE memories SET sediment_layer = ?, updated_at = ? WHERE id = ?`,
 		string(to), now, id,
@@ -645,7 +646,7 @@ func (ms *Store) updateStoredEmbedding(id string, embedding []float32, embedding
 	updated.EmbeddingModel = embeddingModel
 	updated.Embedding = make([]float32, len(embedding))
 	copy(updated.Embedding, embedding)
-	updated.UpdatedAt = time.Now()
+	updated.UpdatedAt = ms.now()
 	if err := updateMemoryRow(ms.db, updated); err != nil {
 		return fmt.Errorf("failed to update embedding: %w", err)
 	}

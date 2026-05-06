@@ -110,7 +110,7 @@ func (ms *Store) ProjectBankView(ctx context.Context, view ProjectBankView, opti
 		return nil, err
 	}
 
-	now := time.Now()
+	now := ms.now()
 	items := make([]*ProjectBankItem, 0, len(memories))
 	for _, mem := range memories {
 		item := projectBankItemFromMemory(mem, deriveTrustMetadata(mem, now))

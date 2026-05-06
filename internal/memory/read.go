@@ -146,7 +146,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		})
 	}
 	modelMismatchCount := 0
-	now := time.Now()
+	now := ms.now()
 
 	// Round 3 M18: build the filter tag-set ONCE outside the per-memory loop.
 	filterTagSet := buildFilterTagSet(filters)
@@ -416,7 +416,7 @@ func (ms *Store) flushAccessStats(ids []string) {
 		return
 	}
 
-	now := time.Now()
+	now := ms.now()
 
 	// Write to DB first inside a single transaction so success/failure is
 	// all-or-nothing per batch and the WAL only fsyncs once. defer Rollback

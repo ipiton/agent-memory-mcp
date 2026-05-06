@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -67,19 +66,15 @@ func (ms *Store) incrementReferencedByCountLocked(ctx context.Context, id string
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
+	now := ms.now()
 	if _, err := ms.db.ExecContext(ctx,
 		"UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
-		string(newJSON), time.Now(), id,
+		string(newJSON), now, id,
 	); err != nil {
 		return fmt.Errorf("update metadata: %w", err)
 	}
 
-	// Cache: cachedMemory does not store the raw Metadata map, so nothing
-	// to mutate here. Get() always re-reads from DB, and Recall()-side
-	// sediment rule consumption goes through Decide(m, policy) on a fresh
-	// *Memory struct. Refresh UpdatedAt under mu so cached timestamp
-	// matches DB for callers that snapshot via the cache.
-	now := time.Now()
+	// Refresh cached UpdatedAt under mu so SQL timestamp and cache match.
 	ms.updateCachedField(id, func(cm *cachedMemory) { cm.UpdatedAt = now })
 
 	return nil
@@ -236,9 +231,10 @@ func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountRe
 				zap.String("id", r.id))
 			continue
 		}
+		now := ms.now()
 		if _, err := ms.db.ExecContext(ctx,
 			"UPDATE memories SET metadata = ?, updated_at = ? WHERE id = ?",
-			string(newJSON), time.Now(), r.id,
+			string(newJSON), now, r.id,
 		); err != nil {
 			ms.logger.Warn("recount: update failed",
 				zap.String("id", r.id))
@@ -250,7 +246,7 @@ func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountRe
 	// Cache: refresh UpdatedAt for each touched id. Metadata is not
 	// cached, so no further cache mutation is required.
 	if len(applied) > 0 {
-		now := time.Now()
+		now := ms.now()
 		for id := range applied {
 			ms.updateCachedField(id, func(cm *cachedMemory) { cm.UpdatedAt = now })
 		}
