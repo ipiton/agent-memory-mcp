@@ -694,8 +694,11 @@ func (ms *Store) ReloadCache() error {
 	return ms.loadMemoriesToCache()
 }
 
-// Close shuts down the access stats worker and closes the database connection.
+// Close shuts down all background workers and closes the database connection.
+// Order matters: drain in-flight triple-extraction goroutines first so they
+// don't write to a closed DB. Then stop the access-stats worker.
 func (ms *Store) Close() error {
+	ms.extractionWG.Wait()
 	close(ms.accessCh)
 	ms.accessWG.Wait()
 	return ms.db.Close()

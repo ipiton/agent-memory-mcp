@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"go.uber.org/zap"
@@ -208,7 +209,7 @@ func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*
 		logger, _ = config.Build()
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL")
+	db, err := dbutil.OpenSQLite(dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open memory database: %w", err)
 	}
@@ -728,15 +729,14 @@ func backfillSedimentLayer(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.Prepare(`UPDATE memories SET sediment_layer = ? WHERE id = ?`)
 	if err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	defer func() { _ = stmt.Close() }()
 	for _, r := range pending {
 		if _, err := stmt.Exec(string(r.layer), r.id); err != nil {
-			_ = tx.Rollback()
 			return err
 		}
 	}

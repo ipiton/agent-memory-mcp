@@ -30,7 +30,9 @@ func (a ollamaAdapter) embed(ctx context.Context, text, _ string) ([]float32, er
 
 	for attempt := 0; attempt <= a.embedder.config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			a.logRetry("Retrying Ollama embed, model may be loading", attempt)
+			if err := a.waitRetry(ctx, "Retrying Ollama embed, model may be loading", attempt); err != nil {
+				return nil, err
+			}
 		}
 
 		var response ollamaEmbeddingResponse
@@ -80,7 +82,9 @@ func (a ollamaAdapter) embedSubBatch(ctx context.Context, texts []string) ([][]f
 
 	for attempt := 0; attempt <= a.embedder.config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			a.logRetry("Retrying Ollama batch embed, model may be loading", attempt)
+			if err := a.waitRetry(ctx, "Retrying Ollama batch embed, model may be loading", attempt); err != nil {
+				return nil, err
+			}
 		}
 
 		var response ollamaBatchEmbeddingResponse
@@ -123,12 +127,19 @@ func (a ollamaAdapter) batchEndpoint() string {
 	return strings.TrimRight(a.embedder.config.OllamaBaseURL, "/") + "/api/embed"
 }
 
-func (a ollamaAdapter) logRetry(message string, attempt int) {
+func (a ollamaAdapter) waitRetry(ctx context.Context, message string, attempt int) error {
 	delay := time.Duration(attempt*2) * time.Second
 	a.embedder.logger.Info(message,
 		zap.String("model", a.model),
 		zap.Int("attempt", attempt+1),
 		zap.Duration("delay", delay),
 	)
-	time.Sleep(delay)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

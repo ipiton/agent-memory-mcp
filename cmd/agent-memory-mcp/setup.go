@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // runSetup automatically configures Claude Code hooks in ~/.claude/settings.json.
@@ -110,9 +111,10 @@ func hooksAlreadyConfigured(settings map[string]any, currentCommand string) bool
 			if !ok {
 				continue
 			}
-			if containsStr(cmd, "agent-memory-mcp") {
+			ours, current := isOurHookCommand(cmd, currentCommand)
+			if ours {
 				// Hook exists but points to a different binary — needs update.
-				if !containsStr(cmd, currentCommand) {
+				if !current {
 					return false
 				}
 				found++
@@ -143,15 +145,21 @@ func mergeHooks(settings map[string]any, hooks map[string][]hookEntry) {
 	settings["hooks"] = existing
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstr(s, substr))
-}
-
-func findSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+// isOurHookCommand parses a hook command line (e.g.
+// "/usr/local/bin/agent-memory-mcp hook session-start") and reports:
+//   - ours:    the first token's basename is exactly "agent-memory-mcp"
+//   - current: ours == true AND the first token equals currentCommand
+//
+// Strict basename match avoids false positives like "agent-memory-mcp-old"
+// or "/path/to/something-else/agent-memory-mcp" buried mid-string.
+func isOurHookCommand(cmd, currentCommand string) (ours bool, current bool) {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return false, false
 	}
-	return false
+	bin := parts[0]
+	if filepath.Base(bin) != "agent-memory-mcp" {
+		return false, false
+	}
+	return true, bin == currentCommand
 }

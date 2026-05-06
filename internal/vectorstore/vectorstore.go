@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/topk"
 	"go.uber.org/zap"
@@ -105,7 +106,7 @@ type keywordQueryStats struct {
 
 // NewSQLiteStore creates a new SQLite-backed vector store with the given embedding dimension.
 func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL")
+	db, err := dbutil.OpenSQLite(dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}

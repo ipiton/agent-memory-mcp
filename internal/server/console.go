@@ -85,8 +85,8 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "ok",
-			"rag_available":    server.ragEngine != nil,
-			"memory_available": server.memoryStore != nil,
+			"rag_available":    server.getRagEngine() != nil,
+			"memory_available": server.getMemoryStore() != nil,
 		})
 	})
 
@@ -141,7 +141,8 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 
 		switch strings.ToLower(strings.TrimSpace(req.Mode)) {
 		case "", "documents", "document", "search":
-			if server.ragEngine == nil {
+			ragEngine := server.getRagEngine()
+			if ragEngine == nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "RAG engine not available"})
 				return
 			}
@@ -149,7 +150,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.ragEngine.Search(r.Context(), req.Query, req.Limit, req.SourceType, req.Debug)
+			results, err := ragEngine.Search(r.Context(), req.Query, req.Limit, req.SourceType, req.Debug)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return
@@ -162,7 +163,8 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				Results:     results,
 			})
 		case "memory", "memories":
-			if server.memoryStore == nil {
+			memoryStore := server.getMemoryStore()
+			if memoryStore == nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Memory store not available"})
 				return
 			}
@@ -170,7 +172,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.memoryStore.Recall(r.Context(), req.Query, filters, req.Limit)
+			results, err := memoryStore.Recall(r.Context(), req.Query, filters, req.Limit)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return
@@ -184,7 +186,8 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				Results:     results,
 			})
 		case "canonical":
-			if server.memoryStore == nil {
+			memoryStore := server.getMemoryStore()
+			if memoryStore == nil {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "Memory store not available"})
 				return
 			}
@@ -192,7 +195,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "query is required"})
 				return
 			}
-			results, err := server.memoryStore.RecallCanonical(r.Context(), req.Query, filters, req.Limit)
+			results, err := memoryStore.RecallCanonical(r.Context(), req.Query, filters, req.Limit)
 			if err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 				return

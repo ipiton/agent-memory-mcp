@@ -37,6 +37,9 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 
 	results, err := s.getRagEngine().Search(context.Background(), query, limit, sourceType, debug)
 	if err != nil {
+		if s.fileLogger != nil {
+			s.fileLogger.Error("search failed", zap.Error(err), zap.String("query", query))
+		}
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("search failed: %v", err)}
 	}
 
@@ -50,6 +53,9 @@ func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
 
 	err := s.getRagEngine().IndexDocuments(context.Background())
 	if err != nil {
+		if s.fileLogger != nil {
+			s.fileLogger.Error("document indexing failed", zap.Error(err))
+		}
 		return nil, &rpcError{Code: rpcErrServerError, Message: "document indexing failed", Data: err.Error()}
 	}
 

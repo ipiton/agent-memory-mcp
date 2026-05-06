@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -309,3 +311,70 @@ func TestStore_UpdateContent_ReExtractsTriples(t *testing.T) {
 	}
 }
 
+// TestStoreClose_DrainsExtractor pins down Round 3 C1: Close() must wait for
+// in-flight triple-extraction goroutines to finish before closing the DB.
+// Otherwise extractor goroutines that survived a shutdown would write to a
+// closed DB and panic with "database is closed".
+func TestStoreClose_DrainsExtractor(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "drain.db")
+	store, err := NewStore(dbPath, nil, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	stub := &stubExtractor{
+		returnFn: func(mem *Memory) ([]*Triple, error) {
+			close(started)
+			<-release
+			return []*Triple{{Subject: "drained", Relation: "by", Object: "close", MemoryID: mem.ID}}, nil
+		},
+	}
+	store.SetTripleExtractor(stub)
+
+	mem := &Memory{Content: "shutdown drain probe", Type: TypeSemantic}
+	if err := store.Store(context.Background(), mem); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	<-started // extractor goroutine is in-flight
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- store.Close() }()
+
+	// Close must NOT return while the extractor is still in-flight.
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before extractor was released: err=%v", err)
+	case <-time.After(75 * time.Millisecond):
+		// expected: still blocked draining extractionWG
+	}
+
+	close(release)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return within 3s after extractor released")
+	}
+
+	// Reopen and verify the extractor's writes (DeleteTriplesForMemory +
+	// AddTriples) reached the DB before close — i.e. no panic, no lost data.
+	store2, err := NewStore(dbPath, nil, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewStore reopen: %v", err)
+	}
+	defer func() { _ = store2.Close() }()
+
+	triples, err := store2.TriplesForMemory(context.Background(), mem.ID)
+	if err != nil {
+		t.Fatalf("TriplesForMemory: %v", err)
+	}
+	if len(triples) != 1 || triples[0].Subject != "drained" {
+		t.Fatalf("expected single drained triple, got %v", triples)
+	}
+}

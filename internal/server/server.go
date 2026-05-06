@@ -422,6 +422,15 @@ func (s *MCPServer) getRagEngine() *rag.Engine {
 	return s.ragEngine
 }
 
+// getMemoryStore returns the memory store. memoryStore is set once during
+// New() and never reassigned afterwards (no ReloadMemory equivalent), so
+// no lock is needed. Provided as a getter for symmetry with getRagEngine
+// and to give consumers a single point to add a lock if mutability is
+// introduced later.
+func (s *MCPServer) getMemoryStore() *memory.Store {
+	return s.memoryStore
+}
+
 // ReloadRAG stops the current RAG engine and creates a new one from newCfg.
 // If RAG is disabled in newCfg, the engine is stopped and set to nil.
 func (s *MCPServer) ReloadRAG(newCfg config.Config) {
