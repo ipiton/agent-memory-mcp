@@ -60,15 +60,18 @@ func (ms *Store) RunSedimentCycle(ctx context.Context, cfg SedimentCycleConfig) 
 	now := policy.Now()
 
 	// SinceDays filters for memories OLDER than N days. We post-filter
-	// after List() rather than pushing into Filters{Since: ...} because
-	// Filters.Since selects memories NEWER than the threshold — the
-	// opposite semantic. Age-based transition rules only fire on older
-	// memories, so pre-filtering via Filters.Since would silently drop
-	// the exact candidates we need to consider.
-	memories, err := ms.List(ctx, Filters{}, 0)
-	if err != nil {
-		return nil, fmt.Errorf("sediment-cycle: list memories: %w", err)
-	}
+	// after the cache iteration rather than pushing into Filters{Since: ...}
+	// because Filters.Since selects memories NEWER than the threshold —
+	// the opposite semantic. Age-based transition rules only fire on
+	// older memories, so pre-filtering via Filters.Since would silently
+	// drop the exact candidates we need to consider.
+	//
+	// Round 3 H5: switched from Store.List (full-corpus SQL roundtrip)
+	// to ListLightweight (cache-only) since cachedMemory now carries
+	// Metadata (T52 enabling change). For a 100k corpus this avoids
+	// hydrating every row's embedding blob just to scan a few hundred
+	// candidates.
+	memories := ms.ListLightweight(Filters{})
 
 	// Round 3 H6: pre-load existing pending review items into a {targetID:
 	// true} set ONCE so createSedimentReviewItem doesn't re-scan the working
@@ -229,11 +232,11 @@ func (ms *Store) createSedimentReviewItem(ctx context.Context, target *Memory, t
 // "Unresolved" excludes items where MetadataReviewRequired is "false" so a
 // re-run can still propose a transition that was previously dismissed, in
 // keeping with the original sedimentReviewItemExists semantic.
+//
+// Uses ListLightweight (cache-only) — no SQL roundtrip needed for a
+// metadata-only scan; see RunSedimentCycle.
 func (ms *Store) loadPendingSedimentReviews(ctx context.Context) (map[string]struct{}, error) {
-	items, err := ms.List(ctx, Filters{Type: TypeWorking}, 0)
-	if err != nil {
-		return nil, err
-	}
+	items := ms.ListLightweight(Filters{Type: TypeWorking})
 	pending := make(map[string]struct{})
 	for _, m := range items {
 		if m == nil || !IsReviewQueueMemory(m) {

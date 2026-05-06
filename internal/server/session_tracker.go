@@ -35,6 +35,20 @@ type sessionTracker struct {
 	timer   *time.Timer
 	current *trackedSession
 	closed  bool
+
+	// Round 3 M10: checkpoints used to run synchronously in HandleToolCall,
+	// adding a DB-write + embedder-call latency tax to every tool response
+	// that landed on a checkpoint boundary. checkpointSem bounds the
+	// concurrent checkpoint goroutines (drops the request if the worker
+	// pool is full — the next tool call will retrigger), and
+	// checkpointWG lets Close() drain in-flight checkpoints cleanly.
+	checkpointSem chan struct{}
+	checkpointWG  sync.WaitGroup
+
+	// flushWG tracks in-flight flushSession goroutines (idle timer,
+	// notifications). Tests use waitForBackground to drain deterministically
+	// instead of guessing time.Sleep durations.
+	flushWG sync.WaitGroup
 }
 
 type trackedSession struct {
@@ -93,9 +107,10 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 			cfg.CheckpointDedupMinChars,
 			cfg.CheckpointDedupWindow,
 		),
-		now:    time.Now,
-		ctx:    ctx,
-		cancel: cancel,
+		now:           time.Now,
+		ctx:           ctx,
+		cancel:        cancel,
+		checkpointSem: make(chan struct{}, 2),
 	}
 }
 
@@ -204,6 +219,11 @@ func (st *sessionTracker) Close() {
 	st.current = nil
 	st.mu.Unlock()
 
+	// Drain in-flight async checkpoints (Round 3 M10) BEFORE flush + cancel
+	// so they observe an uncancelled context and don't write into a closing
+	// store.
+	st.checkpointWG.Wait()
+
 	st.flushSession("shutdown", session)
 	st.cancel()
 }
@@ -252,6 +272,9 @@ func (st *sessionTracker) reset() {
 }
 
 func (st *sessionTracker) flushFromIdle() {
+	st.flushWG.Add(1)
+	defer st.flushWG.Done()
+
 	st.mu.Lock()
 	if st.closed {
 		st.mu.Unlock()
@@ -356,8 +379,49 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 	}
 }
 
+// waitForCheckpoints drains all in-flight async checkpoints. Tests use it
+// to deterministically assert on checkpoint side effects without resorting
+// to time.Sleep guesswork.
+func (st *sessionTracker) waitForCheckpoints() {
+	if st == nil {
+		return
+	}
+	st.checkpointWG.Wait()
+}
+
+// waitForBackground drains both checkpoint workers and idle-timer-driven
+// flushSession goroutines. Tests should call this instead of sleeping
+// before asserting on side effects of flushFromIdle / saveCheckpoint.
+func (st *sessionTracker) waitForBackground() {
+	if st == nil {
+		return
+	}
+	st.checkpointWG.Wait()
+	st.flushWG.Wait()
+}
+
+// saveCheckpoint is the async entry point used from the HandleToolCall hot
+// path. It dispatches to a bounded worker pool so a slow embedder/DB write
+// can't add latency to the tool-call response. If the pool is saturated
+// (cap=2), the checkpoint is dropped — the next tool call will retrigger.
+// Round 3 M10.
 func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
-	st.saveCheckpointWithBoundary(session, "checkpoint")
+	if st == nil || st.checkpointSem == nil {
+		st.saveCheckpointWithBoundary(session, "checkpoint")
+		return
+	}
+	select {
+	case st.checkpointSem <- struct{}{}:
+	default:
+		st.logWarn("background checkpoint dropped: worker pool busy")
+		return
+	}
+	st.checkpointWG.Add(1)
+	go func() {
+		defer st.checkpointWG.Done()
+		defer func() { <-st.checkpointSem }()
+		st.saveCheckpointWithBoundary(session, "checkpoint")
+	}()
 }
 
 func (st *sessionTracker) saveCheckpointWithBoundary(session *trackedSession, boundary string) {

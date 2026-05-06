@@ -1473,7 +1473,10 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
-	time.Sleep(60 * time.Millisecond)
+	// Idle timeout is 20ms; sleep just past it to let the timer fire,
+	// then drain the flush goroutine deterministically (Round 3 M10).
+	time.Sleep(40 * time.Millisecond)
+	s.sessionTracker.waitForBackground()
 
 	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 20)
 	if err != nil {
@@ -1532,6 +1535,9 @@ func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing
 	if _, rErr := s.handleToolsCall(second); rErr != nil {
 		t.Fatalf("second handleToolsCall returned error: %+v", rErr)
 	}
+
+	// Round 3 M10: checkpoints are now async, so drain before asserting.
+	s.sessionTracker.waitForCheckpoints()
 
 	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
 	if err != nil {
