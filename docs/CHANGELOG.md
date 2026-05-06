@@ -5,11 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-05-06
+
+Round 3 remediation roadmap waves 0-2 closed plus Phase 3 partial. Highlights:
+24× steward perf regression closed via cache-resident metadata; shutdown
+goroutine drain and SQLite WAL hardening (incident 2026-05-04 root cause
++ pragma fix); ~500 LOC of tools/memory dedup; deterministic time
+injection for tests.
+
+### Fixed
+
+- **T54 shutdown stability + race fixes (Round 3 Phase 0)** —
+  - C1 `Close()` drains `extractionWG` before closing the DB; in-flight triple-extraction goroutines no longer write to a closed store on shutdown (paniced and lost data previously).
+  - H1 `console.go` reads `ragEngine`/`memoryStore` via `getRagEngine()` / new `getMemoryStore()` getters; `-race` CI no longer reports a HTTP-mode + ReloadRAG race.
+  - M2 `defer recover()` on the extractor goroutine — panics are logged, no longer crash the server.
+  - M7 ollama retry sleep is now ctx-aware via `select { time.After / ctx.Done() }`; shutdown no longer hangs up to 4 seconds on a pending retry.
+  - H12 `cmd/.../setup.go` replaces the home-grown `containsStr`/`findSubstr` with `filepath.Base`-comparing `isOurHookCommand`. `agent-memory-mcp-old` no longer false-matches `agent-memory-mcp` and overwrites unrelated hooks.
+- **T59 SQLite busy-timeout incident hardening** — root cause of the 2026-05-04 25-hour `index_documents` stall. New `internal/dbutil` package opens both `vectors.db` and `memories.db` with explicit `PRAGMA busy_timeout=5000`, `journal_mode=WAL` (verified via the returned mode — the previous DSN form `?_journal_mode=WAL` was silently ignored by `modernc.org/sqlite`, leaving the DB in rollback-journal mode), and `synchronous=NORMAL`. Backfill migration adds `defer tx.Rollback()`. `tools_search` logs `index_documents` / `search` failures via `fileLogger.Error` so the next incident leaves a trace in `service.err.log` rather than only the JSON-RPC `data` field. See `06-planning/2026-05-05-sqlite-busy-incident.md` for the postmortem.
+- **T52 steward run perf regression** — ~24× slowdown after T48-T50 traced via `BenchmarkRunScanners_2000` to `loadActiveMemories → Store.List → getBatch` doing a full-corpus SQL roundtrip per scan invocation. Root cause: `cachedMemory` did not carry the raw `Metadata` map, so steward (which needs `MemoryService` / `EngineeringTypeOf` / `LifecycleStatusOf`) was forced through the SQL re-hydration path. Fix: cache `Metadata` (~300 bytes/memory, 30 MB on a 100k corpus) and add `Store.ListLightweight(filters)` cache-only path. `loadActiveMemories` switched. Bench: 32ms → 8.6ms/op on 2000-memory corpus; projected real-world 351-memory corpus drops from 8.44s to <1s.
+- **T53 steward mode reset on restart** — `server.go` unconditionally overrode the persisted policy with config defaults on every start, so a user-set `steward_policy mode=scheduled` was clobbered to `manual` after `brew upgrade`. Each `MCP_STEWARD_*` override is now gated on `os.LookupEnv` — env unset honours DB; explicit env applies config. Bonus observability: warn at startup when `mode=manual` and pending review queue >100, with a hint to run `steward_policy mode=scheduled`.
+
+### Performance
+
+- **T56 Round 3 Phase 2 hotspots** — N+1 patterns and WAL-fsync waste eliminated:
+  - **H3** `RecallMultihop` collects all top-K ids and calls `getBatch` once instead of N separate `Get` calls. For limit=100 this drops 100 SELECTs to 1.
+  - **H4** `getBatch` chunks IN-clause by 500 ids; SQLite's `SQLITE_MAX_VARIABLE_NUMBER` (default 999 in `modernc.org/sqlite`) no longer crashes ExportAll or any massive batch load. New regression test covers a 1500-id load.
+  - **H5** `RunSedimentCycle` and `loadPendingSedimentReviews` use `ListLightweight` (cache-only); no full-corpus SQL roundtrip per cycle.
+  - **H6** sediment cycle pre-loads existing pending review-queue items into a `{targetID:struct{}{}}` set ONCE; `createSedimentReviewItem` does O(1) dedup instead of re-Listing the working memories per candidate (was O(n*m) inside the loop).
+  - **H7** archive sweep builds `existingReviews` from the already-loaded slug cohort and passes it to `createPromotionCandidate`. One List per slug instead of N.
+  - **M3** `flushAccessStats` wraps per-id UPDATEs in a single transaction with prepared statement — WAL fsync count drops from N to 1 per batch.
+  - **M8** Sweeper now serialises per-slug invocations via a `sync.Map` of `*sync.Mutex`. Concurrent `SweepArchive + EndTask` on the same slug can no longer race the existence-check + Store write.
+  - **M9** Sweeper uses `os.Lstat` and rejects symlinked candidates (new `statNoSymlink`). A symlink under an archive root cannot redirect the sweeper to mark an unrelated slug as stale.
+  - **M10** Session-tracker checkpoints run on a cap-2 semaphore-bounded goroutine pool — `HandleToolCall` no longer pays the DB+embedder latency tax synchronously. `Close()` drains via `checkpointWG.Wait()`. Tests get `waitForCheckpoints` / `waitForBackground` for deterministic sync without `time.Sleep`.
+  - **M11** `flushSession` runs on a fresh `context.WithTimeout(60s)` instead of inheriting `st.ctx` (which `Close()` had already cancelled by the time the shutdown flush arrived).
+  - **M18** `matchCachedFilters` no longer allocates a `map[string]struct{}` from `m.Tags` per memory; new `buildFilterTagSet` builds the filter-tags set once outside the Recall/List/ListLightweight loops, allocations go from O(N) to O(1).
+  - **L13** BM25 boost magic numbers (`1.4` / `0.8` / `1.0` / `0.9` / `0.6` / `0.5`) moved into a documented `keywordScoreConfig` struct. No behavioural change; the defaults match prior values exactly.
+
+### Refactor
+
+- **T55 Round 3 Phase 1 dedup quick wins** — ~500 LOC removed across server tools and memory store; no public API change:
+  - **server side** — `parseFormat` + `renderFormatted(format, value, textFn)` helpers replace ~14 sites that hand-rolled `if format == "json" { JSON } else { text }`. Steward tools now reject `format=yaml` with explicit `InvalidParams` instead of silently coercing to text. `buildSessionSchema(summaryDesc, extras)` collapses the 35-LOC inline schemas of `review_session_changes` and `accept_session_changes`. `requiredString(args, key)` consolidates 20+ sites of `getString + !ok || TrimSpace == ""` with a consistent `"<key> parameter is required"` message. `boundedLimit` applied to remaining manual `if limit <= 0` clamps in steward.
+  - **memory side** — `internal/textfmt.Truncate` is the canonical rune-aware string truncator (fixes the byte-aware `lifecycle.truncate` UTF-8 corruption bug for Cyrillic / CJK / emoji titles). `scanMemoryRow(rowScanner)` + `const memoryColumns` consolidate the ~70-LOC scan path that `Get` and `getBatch` previously duplicated. `parseMetadataJSON(sql.NullString)` replaces five sites of bespoke unmarshalling. `referencedByCount` becomes a thin wrapper over `referencedByCountFromMetadata`. `updateCachedField(id, fn)` consolidates the four `mu.Lock; if cm, ok := memories[id]; ok { ... }; mu.Unlock` sites and fixes a microsecond drift between SQL `updated_at` and cached `UpdatedAt` (two separate `time.Now()` calls per write). `CosineSimilarity` moves to `internal/scoring`; `vectorstore.CosineSimilarity` is a thin alias for back-compat. `newTrackedSession(now)` centralises the start/activity/checkpoint timestamp triple.
+
+### Added
+
+- **T57 Round 3 Phase 3 (partial) — testability infra**:
+  - **H19** `Store.SetClock(now func() time.Time)` injects the clock for deterministic temporal tests; all `time.Now()` calls in `*Store` methods route through `ms.now()`. New `TestStore_SetClockInjection` pins the contract.
+  - **M24** new `storeAPI` interface in `internal/steward` (mirrors `internal/lifecycle`); `Service` / `RunScanners` / `loadActiveMemories` accept the interface so unit tests can inject fakes without spinning up a full SQLite store.
+- **`internal/dbutil` package** — `OpenSQLite(dbPath, logger)` + `ApplyPragmas(db, logger)` helpers shared between memory store and vector store. WAL verification + busy_timeout in one place.
+- **`internal/textfmt` package** — `Truncate(s, maxRunes)` rune-aware string truncator with TrimSpace, ellipsis, and proper `maxRunes < 3` handling.
+- **`internal/scoring/cosine.go`** — `scoring.CosineSimilarity` is now the canonical implementation; `vectorstore.CosineSimilarity` redirects to it.
+
+### Migration notes
+
+- **No env-var changes.** The new `MCP_*` lookups are explicitly opt-in: previously implicit defaults remain identical when env is unset.
+- **CHANGELOG hygiene** — this release also folds the changelog entries that should have been split into `[0.7.0]` / `[0.7.1]` (Wave 1-4, T48-T50, T51) into their dedicated sections below; the formerly-[Unreleased] block is now correctly attributed.
+
+## [0.7.1] - 2026-05-03
 
 ### Fixed
 
 - **T51 empty-context duplicate cluster guard** — `internal/steward/scanner.go:groupKey` now returns an empty key when entity, service AND context are all blank. Generic-subject working memories (e.g. multiple "Session close" records from auto-session writers without explicit context) used to hash into one cluster; on a live v0.7.0 steward run this surfaced a 29-record cluster of unrelated tasks waiting for review-required merge — approving it would have collapsed 29 different tasks into one. The guard rejects such clusters at the grouping step so they never enter the review queue. Existing pending items from pre-fix runs can be resolved manually via `resolve_review_item`. Regression tests cover both the suppression and the legitimate same-context cluster case.
+- **T50 extractor fan-out test determinism** — bumped async triple-extraction deadline for slow CI runners so tests stop flaking under load.
+
+## [0.7.0] - 2026-05-03
 
 ### Added
 
