@@ -148,8 +148,11 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	modelMismatchCount := 0
 	now := time.Now()
 
+	// Round 3 M18: build the filter tag-set ONCE outside the per-memory loop.
+	filterTagSet := buildFilterTagSet(filters)
+
 	for _, m := range snapshot {
-		if !ms.matchCachedFilters(m, filters) {
+		if !ms.matchCachedFiltersWithTagSet(m, filters, filterTagSet) {
 			continue
 		}
 
@@ -262,6 +265,16 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 }
 
 func (ms *Store) matchCachedFilters(m *cachedMemory, filters Filters) bool {
+	return ms.matchCachedFiltersWithTagSet(m, filters, nil)
+}
+
+// matchCachedFiltersWithTagSet is the hot-path variant called by Recall/List
+// loops. The caller pre-builds the filter tag-set once outside the loop;
+// this avoids the O(M) per-memory allocation of m.Tags into a set that the
+// naive matchCachedFilters performed (Round 3 M18: ~100k allocations on a
+// 100k-memory recall). For one-off calls with no filter tags, pass nil and
+// the function falls back to a linear membership scan.
+func (ms *Store) matchCachedFiltersWithTagSet(m *cachedMemory, filters Filters, filterTagSet map[string]struct{}) bool {
 	if filters.Type != "" && m.Type != filters.Type {
 		return false
 	}
@@ -275,24 +288,40 @@ func (ms *Store) matchCachedFilters(m *cachedMemory, filters Filters) bool {
 		return false
 	}
 
-	if len(filters.Tags) > 0 {
-		tagSet := make(map[string]struct{}, len(m.Tags))
+	if len(filters.Tags) == 0 {
+		return true
+	}
+	if filterTagSet == nil {
+		// Fallback: linear scan when caller didn't pre-build the set.
 		for _, t := range m.Tags {
-			tagSet[t] = struct{}{}
-		}
-		hasTag := false
-		for _, filterTag := range filters.Tags {
-			if _, ok := tagSet[filterTag]; ok {
-				hasTag = true
-				break
+			for _, filterTag := range filters.Tags {
+				if t == filterTag {
+					return true
+				}
 			}
 		}
-		if !hasTag {
-			return false
+		return false
+	}
+	for _, t := range m.Tags {
+		if _, ok := filterTagSet[t]; ok {
+			return true
 		}
 	}
+	return false
+}
 
-	return true
+// buildFilterTagSet returns a set of filter.Tags for use with
+// matchCachedFiltersWithTagSet. Returns nil when there are no tag filters
+// (skip allocation entirely).
+func buildFilterTagSet(filters Filters) map[string]struct{} {
+	if len(filters.Tags) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(filters.Tags))
+	for _, t := range filters.Tags {
+		set[t] = struct{}{}
+	}
+	return set
 }
 
 func (ms *Store) textMatchScore(query string, m *cachedMemory) float64 {
@@ -594,10 +623,11 @@ func (ms *Store) getBatchChunk(ids []string, result map[string]*Memory) error {
 // Use List when you need replaces/observed_at; otherwise prefer this.
 func (ms *Store) ListLightweight(filters Filters) []*Memory {
 	snapshot := ms.snapshotForContext(filters.Context)
+	filterTagSet := buildFilterTagSet(filters)
 
 	results := make([]*Memory, 0, len(snapshot))
 	for _, cm := range snapshot {
-		if !ms.matchCachedFilters(cm, filters) {
+		if !ms.matchCachedFiltersWithTagSet(cm, filters, filterTagSet) {
 			continue
 		}
 		results = append(results, cachedMemoryToMemory(cm))
@@ -611,11 +641,12 @@ func (ms *Store) ListLightweight(filters Filters) []*Memory {
 // List returns memories matching the given filters, sorted by update time descending.
 func (ms *Store) List(ctx context.Context, filters Filters, limit int) ([]*Memory, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
+	filterTagSet := buildFilterTagSet(filters)
 
 	var filteredIDs []string
 	idToCached := make(map[string]*cachedMemory)
 	for _, m := range snapshot {
-		if ms.matchCachedFilters(m, filters) {
+		if ms.matchCachedFiltersWithTagSet(m, filters, filterTagSet) {
 			filteredIDs = append(filteredIDs, m.ID)
 			idToCached[m.ID] = m
 		}

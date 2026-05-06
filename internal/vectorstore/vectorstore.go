@@ -846,6 +846,45 @@ func (s *SQLiteStore) removeChunkKeywordsLocked(chunkID string) {
 	}
 }
 
+// keywordScoreConfig holds the BM25 + boost coefficients for keyword scoring.
+// Round 3 L13: extracted from inline magic numbers so they can be tuned in
+// one place (rather than chasing six +0.5/+1.4/+0.8/+0.9/+0.6 literals
+// across the function body).
+//
+// Boost rationale:
+//   - TitleExact (1.4): exact-substring match in the title is the strongest
+//     signal in our retrieval suite. Doubled relative to AllTermsPresent.
+//   - TitleAllTerms (0.8): all query terms present somewhere in the title
+//     but not as an exact substring (word-order independent).
+//   - PathExact (1.0): exact match in the document path. Slightly lower
+//     than TitleExact because paths are often deep/noisy.
+//   - PathSlugged (0.9): exact-substring after replacing spaces with "-",
+//     covers slugified URLs.
+//   - PathAllTerms (0.6): weakest path signal.
+//   - ContentExact (0.5): floor; content-substring matches exist but
+//     correlate weakly with relevance for short queries.
+type keywordScoreConfig struct {
+	K1            float64 // BM25 saturation
+	B             float64 // BM25 length normalization
+	TitleExact    float64
+	TitleAllTerms float64
+	PathExact     float64
+	PathSlugged   float64
+	PathAllTerms  float64
+	ContentExact  float64
+}
+
+var defaultKeywordScoreConfig = keywordScoreConfig{
+	K1:            1.2,
+	B:             0.75,
+	TitleExact:    1.4,
+	TitleAllTerms: 0.8,
+	PathExact:     1.0,
+	PathSlugged:   0.9,
+	PathAllTerms:  0.6,
+	ContentExact:  0.5,
+}
+
 func keywordScore(queryLower string, queryTerms []string, queryStats keywordQueryStats, stats keywordDocStats) float64 {
 	if len(queryTerms) == 0 || queryStats.totalDocs == 0 || stats.tokenCount == 0 {
 		return 0
@@ -855,10 +894,7 @@ func keywordScore(queryLower string, queryTerms []string, queryStats keywordQuer
 	pathLower := stats.pathLower
 	contentLower := stats.contentLower
 
-	const (
-		k1 = 1.2
-		b  = 0.75
-	)
+	cfg := defaultKeywordScoreConfig
 
 	score := 0.0
 	chunkLength := float64(stats.tokenCount)
@@ -874,8 +910,8 @@ func keywordScore(queryLower string, queryTerms []string, queryStats keywordQuer
 		}
 
 		idf := math.Log(1 + (float64(queryStats.totalDocs)-float64(df)+0.5)/(float64(df)+0.5))
-		denom := float64(tf) + k1*(1-b+b*(chunkLength/queryStats.avgChunkLength))
-		score += idf * ((float64(tf) * (k1 + 1)) / denom)
+		denom := float64(tf) + cfg.K1*(1-cfg.B+cfg.B*(chunkLength/queryStats.avgChunkLength))
+		score += idf * ((float64(tf) * (cfg.K1 + 1)) / denom)
 	}
 
 	if score == 0 && !scoring.ContainsAny(titleLower, queryTerms...) && !scoring.ContainsAny(pathLower, queryTerms...) && !scoring.ContainsAny(contentLower, queryTerms...) {
@@ -884,22 +920,22 @@ func keywordScore(queryLower string, queryTerms []string, queryStats keywordQuer
 
 	switch {
 	case strings.Contains(titleLower, queryLower):
-		score += 1.4
+		score += cfg.TitleExact
 	case allTermsPresent(titleLower, queryTerms):
-		score += 0.8
+		score += cfg.TitleAllTerms
 	}
 
 	switch {
 	case strings.Contains(pathLower, queryLower):
-		score += 1.0
+		score += cfg.PathExact
 	case strings.Contains(pathLower, strings.ReplaceAll(queryLower, " ", "-")):
-		score += 0.9
+		score += cfg.PathSlugged
 	case allTermsPresent(pathLower, queryTerms):
-		score += 0.6
+		score += cfg.PathAllTerms
 	}
 
 	if strings.Contains(contentLower, queryLower) {
-		score += 0.5
+		score += cfg.ContentExact
 	}
 
 	return score

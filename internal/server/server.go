@@ -211,13 +211,27 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 				fileLogger.Warn("Steward service initialization failed", zap.Error(err))
 			}
 		} else {
-			// Override policy from config if mode differs.
+			// Apply env-driven config overrides ONLY for fields whose env
+			// var is explicitly set. Without this guard (Round 3 / T53),
+			// every restart clobbered a user-set `steward_policy mode=auto`
+			// with the config default "manual", silently halting auto-runs
+			// after `brew upgrade`.
 			p := stewardSvc.Policy()
-			p.Mode = steward.PolicyMode(cfg.StewardMode)
-			p.ScheduleInterval = cfg.StewardScheduleInterval
-			p.DuplicateSimilarity = cfg.StewardDuplicateThreshold
-			p.StaleDays = cfg.StewardStaleDays
-			p.CanonicalMinConfidence = cfg.StewardCanonicalMinConf
+			if _, ok := os.LookupEnv("MCP_STEWARD_MODE"); ok {
+				p.Mode = steward.PolicyMode(cfg.StewardMode)
+			}
+			if _, ok := os.LookupEnv("MCP_STEWARD_SCHEDULE_INTERVAL"); ok {
+				p.ScheduleInterval = cfg.StewardScheduleInterval
+			}
+			if _, ok := os.LookupEnv("MCP_STEWARD_DUPLICATE_THRESHOLD"); ok {
+				p.DuplicateSimilarity = cfg.StewardDuplicateThreshold
+			}
+			if _, ok := os.LookupEnv("MCP_STEWARD_STALE_DAYS"); ok {
+				p.StaleDays = cfg.StewardStaleDays
+			}
+			if _, ok := os.LookupEnv("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE"); ok {
+				p.CanonicalMinConfidence = cfg.StewardCanonicalMinConf
+			}
 			if err := stewardSvc.SetPolicy(p); err != nil && fileLogger != nil {
 				fileLogger.Warn("Failed to set steward policy from config", zap.Error(err))
 			}
@@ -225,10 +239,21 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			stewardSched = steward.NewScheduler(stewardSvc, sLogger)
 			stewardSched.Start()
 
+			// T53 observability: surface a persistent inbox backlog when
+			// running in non-auto mode so operators notice that previously
+			// queued items aren't being processed.
 			if fileLogger != nil {
 				fileLogger.Info("Steward service initialized",
-					zap.String("mode", cfg.StewardMode),
+					zap.String("mode", string(p.Mode)),
 				)
+				if p.Mode == steward.PolicyModeManual {
+					if status, err := stewardSvc.Status(); err == nil && status.PendingReview > 100 {
+						fileLogger.Warn("Steward in manual mode with large pending review queue",
+							zap.Int("pending_review", status.PendingReview),
+							zap.String("hint", "run 'steward_policy mode=scheduled' to resume auto-resolution"),
+						)
+					}
+				}
 			}
 		}
 	}

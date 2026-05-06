@@ -31,6 +31,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -138,6 +139,22 @@ type Sweeper struct {
 	now       func() time.Time
 	statFS    func(path string) (os.FileInfo, error) // injectable for tests
 	readDirFS func(path string) ([]os.DirEntry, error)
+
+	// slugLocks serialises per-slug sweeps. Round 3 M8: previously the
+	// "not safe for concurrent invocation on the same slug" property was
+	// document-only — a concurrent SweepArchive + EndTask race could
+	// duplicate review-queue items between the existence check and the
+	// Store call. The map is loaded with sync.LoadOrStore so we keep one
+	// *sync.Mutex per slug across the lifetime of the Sweeper.
+	slugLocks sync.Map // map[string]*sync.Mutex
+}
+
+// lockSlug returns a function that releases the per-slug lock when called.
+func (sw *Sweeper) lockSlug(slug string) func() {
+	v, _ := sw.slugLocks.LoadOrStore(slug, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // Option customizes Sweeper construction.
@@ -323,6 +340,8 @@ func (sw *Sweeper) verifySlugInRoots(slug string, roots []string) error {
 // ArchiveAction. The procedural path in decide() would be dead code if the
 // List filter were restricted to TypeWorking — see the sweptTypes comment.
 func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepConfig, result *SweepResult) error {
+	defer sw.lockSlug(slug)()
+
 	var memories []*memory.Memory
 	for _, t := range sweptTypes {
 		m, err := sw.store.List(ctx, memory.Filters{Context: slug, Type: t}, 0)

@@ -317,8 +317,16 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 		return
 	}
 
+	// Round 3 M11: shutdown flushes must NOT inherit st.ctx, which Close()
+	// has already cancelled by the time this runs from the shutdown path.
+	// Use a fresh background context with a generous timeout so a slow
+	// embedder/LLM doesn't hang the shutdown indefinitely while still
+	// giving the consolidation time to land.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
 	summary := session.summary(boundary)
-	result, err := st.closeService.Analyze(st.ctx, sessionclose.AnalyzeRequest{
+	result, err := st.closeService.Analyze(ctx, sessionclose.AnalyzeRequest{
 		Summary:          summary,
 		DryRun:           false,
 		SaveRaw:          true,
@@ -328,7 +336,7 @@ func (st *sessionTracker) flushSession(boundary string, session *trackedSession)
 		st.logWarn("background session close failed", zap.String("boundary", boundary), zap.Error(err))
 		return
 	}
-	if err := st.persistReviewQueue(boundary, result); err != nil {
+	if err := st.persistReviewQueue(ctx, boundary, result); err != nil {
 		st.logWarn("background review queue persistence failed", zap.String("boundary", boundary), zap.Error(err))
 		return
 	}
@@ -386,7 +394,7 @@ func (st *sessionTracker) saveCheckpointWithBoundary(session *trackedSession, bo
 	}
 }
 
-func (st *sessionTracker) persistReviewQueue(boundary string, result *sessionclose.AnalysisResult) error {
+func (st *sessionTracker) persistReviewQueue(ctx context.Context, boundary string, result *sessionclose.AnalysisResult) error {
 	if st == nil || result == nil {
 		return nil
 	}
@@ -434,7 +442,7 @@ func (st *sessionTracker) persistReviewQueue(boundary string, result *sessionclo
 			Tags:       tags,
 			Metadata:   metadata,
 		}
-		if err := st.store.Store(st.ctx, mem); err != nil {
+		if err := st.store.Store(ctx, mem); err != nil {
 			return err
 		}
 	}
