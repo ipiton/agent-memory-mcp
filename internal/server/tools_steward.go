@@ -36,7 +36,10 @@ func (s *MCPServer) callStewardRun(args map[string]any) (any, *rpcError) {
 	}
 	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	report, err := s.stewardService.Run(context.Background(), steward.RunParams{
 		Scope:   scope,
@@ -48,10 +51,7 @@ func (s *MCPServer) callStewardRun(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("steward run failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(report), nil
-	}
-	return toolResultText(steward.FormatReport(report)), nil
+	return renderFormatted(format, report, func() string { return steward.FormatReport(report) }), nil
 }
 
 func (s *MCPServer) callStewardReport(args map[string]any) (any, *rpcError) {
@@ -60,7 +60,10 @@ func (s *MCPServer) callStewardReport(args map[string]any) (any, *rpcError) {
 	}
 
 	runID, _ := getString(args, "run_id")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	report, err := s.stewardService.GetReport(runID)
 	if err != nil {
@@ -70,10 +73,7 @@ func (s *MCPServer) callStewardReport(args map[string]any) (any, *rpcError) {
 		return toolResultText("No steward reports found."), nil
 	}
 
-	if format == "json" {
-		return toolResultJSON(report), nil
-	}
-	return toolResultText(steward.FormatReport(report)), nil
+	return renderFormatted(format, report, func() string { return steward.FormatReport(report) }), nil
 }
 
 func (s *MCPServer) callStewardPolicy(args map[string]any) (any, *rpcError) {
@@ -127,11 +127,11 @@ func (s *MCPServer) callStewardStatus(args map[string]any) (any, *rpcError) {
 		status.NextRun = s.stewardScheduler.NextRun()
 	}
 
-	format, _ := getString(args, "format")
-	if format == "json" {
-		return toolResultJSON(status), nil
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
 	}
-	return toolResultText(formatStewardStatus(status)), nil
+	return renderFormatted(format, status, func() string { return formatStewardStatus(status) }), nil
 }
 
 // --- Phase 2 tools ---
@@ -148,7 +148,10 @@ func (s *MCPServer) callDriftScan(args map[string]any) (any, *rpcError) {
 	}
 	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	result, err := s.stewardService.DriftScan(context.Background(), steward.DriftScanParams{
 		Scope:    driftScope,
@@ -160,10 +163,7 @@ func (s *MCPServer) callDriftScan(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("drift scan failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(result), nil
-	}
-	return toolResultText(formatDriftResult(result)), nil
+	return renderFormatted(format, result, func() string { return formatDriftResult(result) }), nil
 }
 
 func (s *MCPServer) callVerificationCandidates(args map[string]any) (any, *rpcError) {
@@ -171,15 +171,15 @@ func (s *MCPServer) callVerificationCandidates(args map[string]any) (any, *rpcEr
 		return nil, err
 	}
 
-	limit, _ := getInt(args, "limit")
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := boundedLimit(args, 20, 100)
 	scope, _ := getString(args, "scope")
 	minAge, _ := getInt(args, "min_age_days")
 	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	candidates, err := s.stewardService.VerificationCandidates(context.Background(), steward.VerificationCandidatesParams{
 		Limit:      limit,
@@ -192,10 +192,7 @@ func (s *MCPServer) callVerificationCandidates(args map[string]any) (any, *rpcEr
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("verification candidates failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(candidates), nil
-	}
-	return toolResultText(formatVerificationCandidates(candidates)), nil
+	return renderFormatted(format, candidates, func() string { return formatVerificationCandidates(candidates) }), nil
 }
 
 func (s *MCPServer) callVerifyEntry(args map[string]any) (any, *rpcError) {
@@ -203,9 +200,9 @@ func (s *MCPServer) callVerifyEntry(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	memoryID, ok := getString(args, "memory_id")
-	if !ok || memoryID == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "memory_id is required"}
+	memoryID, rsErr := requiredString(args, "memory_id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	methodRaw, _ := getString(args, "method")
 	method, err := steward.ValidateVerificationMethod(methodRaw)
@@ -241,12 +238,12 @@ func (s *MCPServer) callStewardInbox(args map[string]any) (any, *rpcError) {
 		status = "pending"
 	}
 	kind, _ := getString(args, "kind")
-	limit, _ := getInt(args, "limit")
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := boundedLimit(args, 20, 100)
 	sortBy, _ := getString(args, "sort_by")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	items, err := s.stewardService.ListInbox(steward.InboxQuery{
 		Status: status,
@@ -258,10 +255,7 @@ func (s *MCPServer) callStewardInbox(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("inbox query failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(items), nil
-	}
-	return toolResultText(formatInboxItems(items)), nil
+	return renderFormatted(format, items, func() string { return formatInboxItems(items) }), nil
 }
 
 func (s *MCPServer) callStewardInboxResolve(args map[string]any) (any, *rpcError) {
@@ -269,13 +263,13 @@ func (s *MCPServer) callStewardInboxResolve(args map[string]any) (any, *rpcError
 		return nil, err
 	}
 
-	itemID, ok := getString(args, "item_id")
-	if !ok || itemID == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "item_id is required"}
+	itemID, rsErr := requiredString(args, "item_id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
-	action, _ := getString(args, "action")
-	if action == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "action is required"}
+	action, rsErr := requiredString(args, "action")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	note, _ := getString(args, "note")
 
@@ -345,13 +339,13 @@ func (s *MCPServer) callRecallAsOf(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	query, ok := getString(args, "query")
-	if !ok || query == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	query, rsErr := requiredString(args, "query")
+	if rsErr != nil {
+		return nil, rsErr
 	}
-	asOfStr, ok := getString(args, "as_of")
-	if !ok || asOfStr == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "as_of parameter is required (RFC3339 timestamp)"}
+	asOfStr, rsErr := requiredString(args, "as_of")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	asOf, err := time.Parse(time.RFC3339, asOfStr)
 	if err != nil {
@@ -359,11 +353,11 @@ func (s *MCPServer) callRecallAsOf(args map[string]any) (any, *rpcError) {
 	}
 
 	memContext, _ := getString(args, "context")
-	limit, _ := getInt(args, "limit")
-	if limit <= 0 {
-		limit = 10
+	limit := boundedLimit(args, 10, 50)
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
 	}
-	format, _ := getString(args, "format")
 
 	filters := memory.Filters{Context: memContext}
 	results, err := s.memoryStore.RecallAsOf(context.Background(), query, asOf, filters, limit)
@@ -371,10 +365,7 @@ func (s *MCPServer) callRecallAsOf(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("recall_as_of failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(results), nil
-	}
-	return toolResultText(formatRecallAsOf(results, asOf)), nil
+	return renderFormatted(format, results, func() string { return formatRecallAsOf(results, asOf) }), nil
 }
 
 func (s *MCPServer) callKnowledgeTimeline(args map[string]any) (any, *rpcError) {
@@ -382,23 +373,23 @@ func (s *MCPServer) callKnowledgeTimeline(args map[string]any) (any, *rpcError) 
 		return nil, err
 	}
 
-	query, ok := getString(args, "query")
-	if !ok || query == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	query, rsErr := requiredString(args, "query")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	memContext, _ := getString(args, "context")
 	service, _ := getString(args, "service")
-	format, _ := getString(args, "format")
+	format, fmtErr := parseFormat(args)
+	if fmtErr != nil {
+		return nil, fmtErr
+	}
 
 	entries, err := s.memoryStore.KnowledgeTimeline(context.Background(), query, memContext, service)
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("knowledge_timeline failed: %v", err)}
 	}
 
-	if format == "json" {
-		return toolResultJSON(entries), nil
-	}
-	return toolResultText(formatKnowledgeTimeline(entries, query)), nil
+	return renderFormatted(format, entries, func() string { return formatKnowledgeTimeline(entries, query) }), nil
 }
 
 func formatRecallAsOf(results []*memory.SearchResult, asOf time.Time) string {

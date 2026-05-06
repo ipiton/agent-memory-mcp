@@ -14,9 +14,9 @@ func (s *MCPServer) callPromoteSediment(args map[string]any) (any, *rpcError) {
 	if err := s.requireMemoryStore(); err != nil {
 		return nil, err
 	}
-	id := strings.TrimSpace(mustString(args, "id"))
-	if id == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	id, rsErr := requiredString(args, "id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	target := strings.TrimSpace(mustString(args, "target_layer"))
 	if !memory.IsValidSedimentLayer(target) {
@@ -34,12 +34,10 @@ func (s *MCPServer) callPromoteSediment(args map[string]any) (any, *rpcError) {
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
-		text := fmt.Sprintf("Sediment layer updated:\n- ID: %s\n- From: %s\n- To: %s\n- Affected: %v",
+	return renderFormatted(format, res, func() string {
+		return fmt.Sprintf("Sediment layer updated:\n- ID: %s\n- From: %s\n- To: %s\n- Affected: %v",
 			res.ID, res.From, res.To, res.Affected)
-		return toolResultText(text), nil
-	}
-	return toolResultJSON(res), nil
+	}), nil
 }
 
 // callDemoteSediment moves a memory one layer closer to surface. No-op at surface.
@@ -47,9 +45,9 @@ func (s *MCPServer) callDemoteSediment(args map[string]any) (any, *rpcError) {
 	if err := s.requireMemoryStore(); err != nil {
 		return nil, err
 	}
-	id := strings.TrimSpace(mustString(args, "id"))
-	if id == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	id, rsErr := requiredString(args, "id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	res, err := s.memoryStore.DemoteSediment(context.Background(), id)
 	if err != nil {
@@ -60,16 +58,14 @@ func (s *MCPServer) callDemoteSediment(args map[string]any) (any, *rpcError) {
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
+	return renderFormatted(format, res, func() string {
 		msg := "Sediment layer demoted"
 		if !res.Affected {
 			msg = "Sediment layer unchanged (already at surface)"
 		}
-		text := fmt.Sprintf("%s:\n- ID: %s\n- From: %s\n- To: %s",
+		return fmt.Sprintf("%s:\n- ID: %s\n- From: %s\n- To: %s",
 			msg, res.ID, res.From, res.To)
-		return toolResultText(text), nil
-	}
-	return toolResultJSON(res), nil
+	}), nil
 }
 
 // callSedimentCycle runs the sediment-cycle job (T48). Non-auto transitions
@@ -98,7 +94,7 @@ func (s *MCPServer) callSedimentCycle(args map[string]any) (any, *rpcError) {
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
+	return renderFormatted(format, result, func() string {
 		mode := "live"
 		if result.DryRun {
 			mode = "dry-run"
@@ -114,7 +110,6 @@ func (s *MCPServer) callSedimentCycle(args map[string]any) (any, *rpcError) {
 				fmt.Fprintf(&b, "- %s\n", e)
 			}
 		}
-		return toolResultText(b.String()), nil
-	}
-	return toolResultJSON(result), nil
+		return b.String()
+	}), nil
 }

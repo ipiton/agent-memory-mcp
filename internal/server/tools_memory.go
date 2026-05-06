@@ -355,9 +355,9 @@ func (s *MCPServer) callMergeDuplicates(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	primaryID, ok := getString(args, "primary_id")
-	if !ok || strings.TrimSpace(primaryID) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "primary_id parameter is required"}
+	primaryID, rsErr := requiredString(args, "primary_id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	duplicateIDs := getStringSlice(args, "duplicate_ids")
 	if len(duplicateIDs) == 0 {
@@ -382,9 +382,9 @@ func (s *MCPServer) callMarkOutdated(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	id, ok := getString(args, "id")
-	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	id, rsErr := requiredString(args, "id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	reason, _ := getString(args, "reason")
 	supersededBy, _ := getString(args, "superseded_by")
@@ -408,9 +408,9 @@ func (s *MCPServer) callPromoteToCanonical(args map[string]any) (any, *rpcError)
 		return nil, err
 	}
 
-	id, ok := getString(args, "id")
-	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	id, rsErr := requiredString(args, "id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	owner, _ := getString(args, "owner")
 

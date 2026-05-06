@@ -24,18 +24,25 @@ type tool struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
-var sessionAnalysisSchema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
+// buildSessionSchema returns a JSON-Schema object literal that describes the
+// shared input shape of close_session, review_session_changes, and
+// accept_session_changes. Pass `extras` to add tool-specific properties
+// (e.g. dry_run, save_raw) or override the default summary description.
+// `extras` keys are merged into properties; nil is fine.
+func buildSessionSchema(summaryDesc string, extras map[string]any) map[string]any {
+	if summaryDesc == "" {
+		summaryDesc = "Raw session summary text"
+	}
+	properties := map[string]any{
 		"summary": map[string]any{
 			"type":        "string",
-			"description": "Raw session summary text to analyze",
+			"description": summaryDesc,
 		},
 		"mode": map[string]any{
 			"type":        "string",
 			"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
-			"description": "Optional session mode that influences conservative type fallback",
 			"default":     "coding",
+			"description": "Optional session mode that influences conservative type fallback",
 		},
 		"context": map[string]any{
 			"type":        "string",
@@ -63,30 +70,40 @@ var sessionAnalysisSchema = map[string]any{
 			"additionalProperties": map[string]any{"type": "string"},
 			"description":          "Optional string metadata for the raw session summary",
 		},
-		"dry_run": map[string]any{
-			"type":        "boolean",
-			"default":     true,
-			"description": "If true, only plan actions without saving the raw summary",
-		},
-		"save_raw": map[string]any{
-			"type":        "boolean",
-			"default":     false,
-			"description": "Persist the raw session summary when dry_run is false",
-		},
-		"auto_apply_low_risk": map[string]any{
-			"type":        "boolean",
-			"default":     false,
-			"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
-		},
 		"format": map[string]any{
 			"type":        "string",
 			"enum":        []string{"text", "json"},
 			"default":     "text",
 			"description": "Return a human-readable report or structured JSON",
 		},
-	},
-	"required": []string{"summary"},
+	}
+	for k, v := range extras {
+		properties[k] = v
+	}
+	return map[string]any{
+		"type":       "object",
+		"properties": properties,
+		"required":   []string{"summary"},
+	}
 }
+
+var sessionAnalysisSchema = buildSessionSchema("Raw session summary text to analyze", map[string]any{
+	"dry_run": map[string]any{
+		"type":        "boolean",
+		"default":     true,
+		"description": "If true, only plan actions without saving the raw summary",
+	},
+	"save_raw": map[string]any{
+		"type":        "boolean",
+		"default":     false,
+		"description": "Persist the raw session summary when dry_run is false",
+	},
+	"auto_apply_low_risk": map[string]any{
+		"type":        "boolean",
+		"default":     false,
+		"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
+	},
+})
 
 func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 	tools := []tool{
@@ -572,68 +589,12 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		{
 			Name:        "review_session_changes",
 			Description: "Re-run session analysis in explicit review mode and return only the review-oriented consolidation report",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"summary": map[string]any{"type": "string", "description": "Raw session summary text to review"},
-					"mode": map[string]any{
-						"type":        "string",
-						"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
-						"default":     "coding",
-						"description": "Optional session mode",
-					},
-					"context":    map[string]any{"type": "string", "description": "Optional project, task, or workflow context"},
-					"service":    map[string]any{"type": "string", "description": "Optional service or component name"},
-					"started_at": map[string]any{"type": "string", "description": "Optional RFC3339 session start timestamp"},
-					"ended_at":   map[string]any{"type": "string", "description": "Optional RFC3339 session end timestamp"},
-					"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional tags"},
-					"metadata": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "string"},
-						"description":          "Optional string metadata for the raw session summary",
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"enum":        []string{"text", "json"},
-						"default":     "text",
-						"description": "Return a human-readable report or structured JSON",
-					},
-				},
-				"required": []string{"summary"},
-			},
+			InputSchema: buildSessionSchema("Raw session summary text to review", nil),
 		},
 		{
 			Name:        "accept_session_changes",
 			Description: "Persist the raw session summary, auto-apply low-risk session changes, and return the remaining review backlog",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"summary": map[string]any{"type": "string", "description": "Raw session summary text to apply"},
-					"mode": map[string]any{
-						"type":        "string",
-						"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
-						"default":     "coding",
-						"description": "Optional session mode",
-					},
-					"context":    map[string]any{"type": "string", "description": "Optional project, task, or workflow context"},
-					"service":    map[string]any{"type": "string", "description": "Optional service or component name"},
-					"started_at": map[string]any{"type": "string", "description": "Optional RFC3339 session start timestamp"},
-					"ended_at":   map[string]any{"type": "string", "description": "Optional RFC3339 session end timestamp"},
-					"tags":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional tags"},
-					"metadata": map[string]any{
-						"type":                 "object",
-						"additionalProperties": map[string]any{"type": "string"},
-						"description":          "Optional string metadata for the raw session summary",
-					},
-					"format": map[string]any{
-						"type":        "string",
-						"enum":        []string{"text", "json"},
-						"default":     "text",
-						"description": "Return a human-readable report or structured JSON",
-					},
-				},
-				"required": []string{"summary"},
-			},
+			InputSchema: buildSessionSchema("Raw session summary text to apply", nil),
 		},
 		{
 			Name:        "resolve_review_item",

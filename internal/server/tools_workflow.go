@@ -53,9 +53,9 @@ func (s *MCPServer) callResolveReviewItem(args map[string]any) (any, *rpcError) 
 		return nil, err
 	}
 
-	id, ok := getString(args, "id")
-	if !ok || strings.TrimSpace(id) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
+	id, rsErr := requiredString(args, "id")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 
 	resolution, err := review.NormalizeResolution(mustString(args, "resolution"))
@@ -164,9 +164,9 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 		return nil, err
 	}
 
-	summaryText, ok := getString(args, "summary")
-	if !ok || strings.TrimSpace(summaryText) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
+	summaryText, rsErr := requiredString(args, "summary")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 
 	modeValue := mustString(args, "mode")
@@ -263,9 +263,9 @@ func (s *MCPServer) storeEngineeringMemory(args map[string]any, entityType memor
 }
 
 func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
-	decision, ok := getString(args, "decision")
-	if !ok || strings.TrimSpace(decision) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "decision parameter is required"}
+	decision, rsErr := requiredString(args, "decision")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	owner := mustString(args, "owner")
 	content := joinContentLines(
@@ -295,13 +295,13 @@ func (s *MCPServer) callStoreDecision(args map[string]any) (any, *rpcError) {
 // callStoreDeadEnd persists an abandoned approach with its failure rationale.
 // Stores as TypeSemantic (knowledge, not event) with metadata.entity=dead_end.
 func (s *MCPServer) callStoreDeadEnd(args map[string]any) (any, *rpcError) {
-	attempted, ok := getString(args, "attempted_approach")
-	if !ok || strings.TrimSpace(attempted) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "attempted_approach parameter is required"}
+	attempted, rsErr := requiredString(args, "attempted_approach")
+	if rsErr != nil {
+		return nil, rsErr
 	}
-	whyFailed, ok := getString(args, "why_failed")
-	if !ok || strings.TrimSpace(whyFailed) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "why_failed parameter is required"}
+	whyFailed, rsErr := requiredString(args, "why_failed")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	content := joinContentLines(
 		prefixedLine("Attempted approach", attempted),
@@ -321,9 +321,9 @@ func (s *MCPServer) callStoreDeadEnd(args map[string]any) (any, *rpcError) {
 }
 
 func (s *MCPServer) callStoreIncident(args map[string]any) (any, *rpcError) {
-	summary, ok := getString(args, "summary")
-	if !ok || strings.TrimSpace(summary) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
+	summary, rsErr := requiredString(args, "summary")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	content := joinContentLines(
 		prefixedLine("Incident", summary), prefixedLine("Impact", mustString(args, "impact")),
@@ -334,9 +334,9 @@ func (s *MCPServer) callStoreIncident(args map[string]any) (any, *rpcError) {
 }
 
 func (s *MCPServer) callStoreRunbook(args map[string]any) (any, *rpcError) {
-	procedure, ok := getString(args, "procedure")
-	if !ok || strings.TrimSpace(procedure) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "procedure parameter is required"}
+	procedure, rsErr := requiredString(args, "procedure")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	content := joinContentLines(
 		prefixedLine("Procedure", procedure), prefixedLine("Trigger", mustString(args, "trigger")),
@@ -347,9 +347,9 @@ func (s *MCPServer) callStoreRunbook(args map[string]any) (any, *rpcError) {
 }
 
 func (s *MCPServer) callStorePostmortem(args map[string]any) (any, *rpcError) {
-	summary, ok := getString(args, "summary")
-	if !ok || strings.TrimSpace(summary) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "summary parameter is required"}
+	summary, rsErr := requiredString(args, "summary")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	content := joinContentLines(
 		prefixedLine("Postmortem", summary), prefixedLine("Impact", mustString(args, "impact")),
@@ -379,7 +379,7 @@ func (s *MCPServer) callRecountReferences(args map[string]any) (any, *rpcError) 
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
+	return renderFormatted(format, result, func() string {
 		mode := "live"
 		if result.DryRun {
 			mode = "dry-run"
@@ -394,15 +394,14 @@ func (s *MCPServer) callRecountReferences(args map[string]any) (any, *rpcError) 
 				fmt.Fprintf(&b, "- %s → %d\n", id, count)
 			}
 		}
-		return toolResultText(b.String()), nil
-	}
-	return toolResultJSON(result), nil
+		return b.String()
+	}), nil
 }
 
 func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
-	query, ok := getString(args, "query")
-	if !ok || strings.TrimSpace(query) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	query, rsErr := requiredString(args, "query")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 
 	ctx := context.Background()
@@ -438,9 +437,9 @@ func (s *MCPServer) callSearchRunbooks(args map[string]any) (any, *rpcError) {
 }
 
 func (s *MCPServer) callRecallSimilarIncidents(args map[string]any) (any, *rpcError) {
-	query, ok := getString(args, "query")
-	if !ok || strings.TrimSpace(query) == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	query, rsErr := requiredString(args, "query")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 
 	ctx := context.Background()
@@ -722,6 +721,28 @@ func parseFormat(args map[string]any) (string, *rpcError) {
 	return f, nil
 }
 
+// renderFormatted dispatches on a format string ("text" or "json") returning
+// the appropriate toolResult. textFn is invoked lazily so callers don't pay
+// the formatting cost when the client requested JSON.
+func renderFormatted(format string, jsonValue any, textFn func() string) any {
+	if format == "json" {
+		return toolResultJSON(jsonValue)
+	}
+	return toolResultText(textFn())
+}
+
+// requiredString extracts a required string argument and trims whitespace.
+// Returns a JSON-RPC InvalidParams error if missing or blank, with a stable
+// message format used across all tools.
+func requiredString(args map[string]any, key string) (string, *rpcError) {
+	value, _ := getString(args, key)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &rpcError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("%s parameter is required", key)}
+	}
+	return value, nil
+}
+
 func defaultTitle(title string, fallback string) string {
 	title = strings.TrimSpace(title)
 	if title != "" {
@@ -885,9 +906,9 @@ func (srv *MCPServer) callEndTask(args map[string]any) (any, *rpcError) {
 	if err := srv.requireMemoryStore(); err != nil {
 		return nil, err
 	}
-	slug := strings.TrimSpace(mustString(args, "context_slug"))
-	if slug == "" {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "context_slug parameter is required"}
+	slug, rsErr := requiredString(args, "context_slug")
+	if rsErr != nil {
+		return nil, rsErr
 	}
 	dryRun, _ := getBool(args, "dry_run")
 
@@ -906,10 +927,7 @@ func (srv *MCPServer) callEndTask(args map[string]any) (any, *rpcError) {
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
-		return toolResultText(lifecycle.FormatSweepResult(result)), nil
-	}
-	return toolResultJSON(result), nil
+	return renderFormatted(format, result, func() string { return lifecycle.FormatSweepResult(result) }), nil
 }
 
 // callSweepArchive is the MCP tool entry point for pull-mode archive sweeps.
@@ -934,10 +952,7 @@ func (srv *MCPServer) callSweepArchive(args map[string]any) (any, *rpcError) {
 	if fmtErr != nil {
 		return nil, fmtErr
 	}
-	if format == "text" {
-		return toolResultText(lifecycle.FormatSweepResult(result)), nil
-	}
-	return toolResultJSON(result), nil
+	return renderFormatted(format, result, func() string { return lifecycle.FormatSweepResult(result) }), nil
 }
 
 // buildSweepConfigFromArgs resolves the ArchiveSweepConfig from MCP args,

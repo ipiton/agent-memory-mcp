@@ -22,11 +22,10 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	query, ok := getString(args, "query")
-	if !ok {
-		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "query parameter is required"}
+	query, rsErr := requiredString(args, "query")
+	if rsErr != nil {
+		return nil, rsErr
 	}
-	query = strings.TrimSpace(query)
 	if err := userio.ValidateQuery(query); err != nil {
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
