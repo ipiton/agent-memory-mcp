@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-12
+
+Memory cleanup unblocked. `sweep_archive` no longer hides the underlying
+configuration error behind a generic JSON-RPC `-32000`, and a new
+`auto_promote` flag turns the promotion path into an in-place
+`PromoteToCanonical` instead of growing the review queue
+proportional to closed tasks. Additional guards at the `store_memory`
+boundary stop common status-stub titles from polluting recall.
+
+### Fixed
+
+- **T61 `sweep_archive -32000` masked the real error** — `lifecycle.ErrNoRoots` (set when `MCP_TASK_ARCHIVE_ROOTS` is empty) bubbled up as a generic `sweep_archive failed` server-error. New `mapSweepError` in `internal/server/tools_workflow.go` maps it to `rpcErrInvalidParams` with an actionable hint (`"Set MCP_TASK_ARCHIVE_ROOTS in service config or pass roots[] explicitly"`). `end_task` shares the same mapper. Tests cover the typed-error path and the unknown-error fallthrough.
+- **Config hot-reload covers non-RAG fields** — `MCPServer.ReloadRAG` only wrote `s.config = newCfg` inside the RAG-enabled happy path, so a SIGHUP after editing `MCP_TASK_ARCHIVE_ROOTS` could not be picked up while RAG was off or failed to initialise. Refactored to `ReloadConfig` which assigns `s.config` first, under the existing `ragMu` write lock; `ReloadRAG` kept as a deprecated alias. `main.go` watcher and SIGHUP handler now call `ReloadConfig`.
+
+### Added
+
+- **T62 `sweep_archive --auto_promote` / `end_task --auto_promote`** — when set, high-importance promotion candidates are promoted to canonical in-place via `store.PromoteToCanonical` instead of producing a new `review_queue_item` working memory. Stops the inbox from growing 5-10 items per closed task. `ArchiveSweepConfig.AutoPromote`, `SweepResult.TotalPromoted`, and per-slug `Promoted` counters are exposed; `storeAPI` interface extended with `PromoteToCanonical`. Default remains `false` so existing operator review flows are unchanged. Dry-run honours the flag (counts go to the Promoted bucket, no writes).
+- **Noise guards at the `store_memory` boundary** — `callStoreMemory` rejects working-memory titles matching status-stub prefixes (`Task started:`, `Research complete:`, `Spec created:`, `Plan created:`, `Implementation complete:`, `Tests complete:`, `Review queue /`) with `rpcErrInvalidParams` and a remediation hint pointing at `store_decision` / `store_runbook` / `end_task`. Stops a recurring class of recall pollution.
+- **`SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES=1`** opt-out env in `session_tracker.persistReviewQueue` — auto-generated review queue items (typically importance 0.35–0.55, 5–10 per `close_session`) are kept in `result.Actions` for the caller but no longer persisted as working memories. Useful while operators triage the inbox manually before flipping `auto_promote` on globally.
+
+### Operational note
+
+`MCP_TASK_ARCHIVE_ROOTS` must be set in the service config (`/opt/homebrew/etc/agent-memory-mcp/config.env` for brew installs) for `sweep_archive` and `end_task` to do anything. Without it, both tools now return a typed invalid-params error instead of running silently against nothing.
+
 ## [0.8.0] - 2026-05-06
 
 Round 3 remediation roadmap waves 0-2 closed plus Phase 3 partial. Highlights:

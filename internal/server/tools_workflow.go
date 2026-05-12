@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -920,7 +921,7 @@ func (srv *MCPServer) callEndTask(args map[string]any) (any, *rpcError) {
 	sweeper := lifecycle.NewSweeper(srv.memoryStore)
 	result, err := sweeper.EndTask(context.Background(), slug, sweepCfg)
 	if err != nil {
-		return nil, &rpcError{Code: rpcErrServerError, Message: "end_task failed", Data: err.Error()}
+		return nil, mapSweepError("end_task", err)
 	}
 
 	format, fmtErr := parseFormat(args)
@@ -945,7 +946,7 @@ func (srv *MCPServer) callSweepArchive(args map[string]any) (any, *rpcError) {
 	sweeper := lifecycle.NewSweeper(srv.memoryStore)
 	result, err := sweeper.SweepArchive(context.Background(), sweepCfg)
 	if err != nil {
-		return nil, &rpcError{Code: rpcErrServerError, Message: "sweep_archive failed", Data: err.Error()}
+		return nil, mapSweepError("sweep_archive", err)
 	}
 
 	format, fmtErr := parseFormat(args)
@@ -955,15 +956,34 @@ func (srv *MCPServer) callSweepArchive(args map[string]any) (any, *rpcError) {
 	return renderFormatted(format, result, func() string { return lifecycle.FormatSweepResult(result) }), nil
 }
 
+// mapSweepError translates lifecycle/sweep errors into typed JSON-RPC errors so
+// MCP clients see actionable messages instead of generic -32000 "X failed".
+// Falls back to the legacy server-error envelope for unknown root causes.
+func mapSweepError(op string, err error) *rpcError {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, lifecycle.ErrNoRoots) {
+		return &rpcError{
+			Code:    rpcErrInvalidParams,
+			Message: op + ": archive roots not configured",
+			Data:    "Set MCP_TASK_ARCHIVE_ROOTS in service config or pass roots[] explicitly",
+		}
+	}
+	return &rpcError{Code: rpcErrServerError, Message: op + " failed", Data: err.Error()}
+}
+
 // buildSweepConfigFromArgs resolves the ArchiveSweepConfig from MCP args,
 // falling back to the server's loaded config for roots and slug pattern.
 func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool) (lifecycle.ArchiveSweepConfig, *rpcError) {
+	autoPromote, _ := getBool(args, "auto_promote")
 	sweepCfg := lifecycle.ArchiveSweepConfig{
 		Roots:              append([]string(nil), srv.config.TaskArchiveRoots...),
 		SlugPattern:        srv.config.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: lifecycle.DefaultPromotionThreshold,
 		KeepTag:            lifecycle.KeepAfterArchiveTag,
+		AutoPromote:        autoPromote,
 	}
 	if argRoots := getStringSlice(args, "roots"); len(argRoots) > 0 {
 		sweepCfg.Roots = argRoots

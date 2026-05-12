@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -460,6 +461,14 @@ func (st *sessionTracker) saveCheckpointWithBoundary(session *trackedSession, bo
 
 func (st *sessionTracker) persistReviewQueue(ctx context.Context, boundary string, result *sessionclose.AnalysisResult) error {
 	if st == nil || result == nil {
+		return nil
+	}
+
+	// Env-controlled suppression: when SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES=1, skip persisting
+	// auto-generated review queue items as working memories. They accumulate as noise
+	// (typically 5-10 per session_close, low-importance 0.35–0.55) and pollute recall.
+	// Caller can still get them via close_session result.Actions in-memory.
+	if os.Getenv("SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES") == "1" {
 		return nil
 	}
 

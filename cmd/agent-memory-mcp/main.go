@@ -116,8 +116,8 @@ func runServe(args []string) {
 	// Start config file watcher for hot-reload (if config file is known).
 	if cfgPath := config.ConfigFilePath(); cfgPath != "" {
 		watcher := config.NewWatcher(cfgPath, 30*time.Second, func(oldCfg, newCfg config.Config) {
-			fmt.Fprintf(os.Stderr, "Config changed, reloading RAG engine...\n")
-			srv.ReloadRAG(newCfg)
+			fmt.Fprintf(os.Stderr, "Config changed, reloading config...\n")
+			srv.ReloadConfig(newCfg)
 		})
 		watcher.Start()
 		defer watcher.Stop()
@@ -138,8 +138,8 @@ func runServe(args []string) {
 				fmt.Fprintf(os.Stderr, "SIGHUP reload failed: %v\n", err)
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "SIGHUP received, reloading RAG engine...\n")
-			srv.ReloadRAG(newCfg)
+			fmt.Fprintf(os.Stderr, "SIGHUP received, reloading config...\n")
+			srv.ReloadConfig(newCfg)
 		}
 	}()
 

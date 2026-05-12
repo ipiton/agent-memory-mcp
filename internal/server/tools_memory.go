@@ -54,6 +54,14 @@ func (s *MCPServer) callStoreMemory(args map[string]any) (any, *rpcError) {
 		mem.Type = parsedType
 	}
 
+	if mem.Type == memory.TypeWorking && isNoisyStatusTitle(mem.Title) {
+		return nil, &rpcError{
+			Code:    rpcErrInvalidParams,
+			Message: "noisy working title pattern rejected",
+			Data:    "Titles like 'Task started:', 'Research complete:', 'Spec created:', 'Plan created:', 'Implementation complete:', 'Tests complete:', 'Review queue /' are status stubs already persisted in tasks/<slug>/*.md or DONE.md — they pollute recall. Save patterns/decisions/runbooks via store_decision/store_runbook, or final episodic via end_task.",
+		}
+	}
+
 	if p.Context != "" {
 		mem.Context = strings.TrimSpace(p.Context)
 	}
@@ -73,6 +81,26 @@ func (s *MCPServer) callStoreMemory(args map[string]any) (any, *rpcError) {
 
 	return toolResultText(fmt.Sprintf("Memory stored:\n- ID: %s\n- Type: %s\n- Title: %s",
 		mem.ID, mem.Type, mem.Title)), nil
+}
+
+var noisyStatusPrefixes = []string{
+	"Task started:",
+	"Research complete:",
+	"Spec created:",
+	"Plan created:",
+	"Implementation complete:",
+	"Tests complete:",
+	"Review queue /",
+}
+
+func isNoisyStatusTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	for _, p := range noisyStatusPrefixes {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MCPServer) callRecallMemory(args map[string]any) (any, *rpcError) {

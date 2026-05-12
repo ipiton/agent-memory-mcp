@@ -65,7 +65,13 @@ type storeAPI interface {
 	List(ctx context.Context, filters memory.Filters, limit int) ([]*memory.Memory, error)
 	Store(ctx context.Context, m *memory.Memory) error
 	MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error)
+	PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error)
 }
+
+// AutoPromoteOwner is the owner string written to memories that the sweep
+// promotes directly (cfg.AutoPromote=true). Distinct from user-driven
+// promotions so audit history can trace canonical entries back to the sweep.
+const AutoPromoteOwner = "archive-sweep"
 
 // ArchiveSweepConfig configures a single sweep invocation.
 type ArchiveSweepConfig struct {
@@ -90,6 +96,13 @@ type ArchiveSweepConfig struct {
 	// KeepTag is the tag that opts a memory out of the sweep. Empty → use
 	// KeepAfterArchiveTag.
 	KeepTag string
+
+	// AutoPromote: when true, promotion candidates are promoted to canonical
+	// in-place via store.PromoteToCanonical instead of emitting a
+	// review-queue item for human triage. Used for autonomous post-archive
+	// consolidation (T62) — reduces inbox growth proportional to closed
+	// tasks. DryRun still wins: nothing is written.
+	AutoPromote bool
 }
 
 // ArchiveAction is a single decision made during a sweep.
@@ -106,6 +119,7 @@ type ArchiveAction struct {
 type SlugStats struct {
 	OutdatedCount       int `json:"outdated_count"`
 	PromotionCandidates int `json:"promotion_candidates"`
+	Promoted            int `json:"promoted"` // T62: in-place canonical promotions (AutoPromote=true)
 	Skipped             int `json:"skipped"`
 }
 
@@ -115,6 +129,7 @@ type SweepResult struct {
 	PerSlug            map[string]*SlugStats `json:"per_slug,omitempty"`
 	TotalOutdated      int                   `json:"total_outdated"`
 	TotalPromotionCand int                   `json:"total_promotion_candidates"`
+	TotalPromoted      int                   `json:"total_promoted"` // T62: in-place canonical promotions
 	TotalSkipped       int                   `json:"total_skipped"`
 	Actions            []ArchiveAction       `json:"actions,omitempty"`
 	// Errors records per-memory partial failures as "<memory-id>: <error>"
@@ -395,8 +410,24 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 			result.TotalOutdated++
 		case "promotion_candidate":
 			if cfg.DryRun {
-				stats.PromotionCandidates++
-				result.TotalPromotionCand++
+				if cfg.AutoPromote {
+					stats.Promoted++
+					result.TotalPromoted++
+				} else {
+					stats.PromotionCandidates++
+					result.TotalPromotionCand++
+				}
+				break
+			}
+			if cfg.AutoPromote {
+				if _, err := sw.store.PromoteToCanonical(ctx, m.ID, AutoPromoteOwner); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("%s: promote to canonical: %v", m.ID, err))
+					sw.logger.Warn("archive-sweep: promote to canonical failed",
+						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
+					break
+				}
+				stats.Promoted++
+				result.TotalPromoted++
 				break
 			}
 			if err := sw.createPromotionCandidate(ctx, m, slug, existingReviews); err != nil {
@@ -418,8 +449,10 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 		zap.String("slug", slug),
 		zap.Int("outdated", stats.OutdatedCount),
 		zap.Int("promotion_candidates", stats.PromotionCandidates),
+		zap.Int("promoted", stats.Promoted),
 		zap.Int("skipped", stats.Skipped),
 		zap.Bool("dry_run", cfg.DryRun),
+		zap.Bool("auto_promote", cfg.AutoPromote),
 	)
 	return nil
 }
@@ -629,12 +662,15 @@ func FormatSweepResult(r *SweepResult) string {
 	}
 	fmt.Fprintf(&b, "- Outdated: %d\n", r.TotalOutdated)
 	fmt.Fprintf(&b, "- Promotion candidates: %d\n", r.TotalPromotionCand)
+	if r.TotalPromoted > 0 {
+		fmt.Fprintf(&b, "- Promoted: %d\n", r.TotalPromoted)
+	}
 	fmt.Fprintf(&b, "- Skipped: %d\n", r.TotalSkipped)
 	if len(r.PerSlug) > 0 {
 		b.WriteString("\nPer-slug:\n")
 		for slug, stats := range r.PerSlug {
-			fmt.Fprintf(&b, "- %s: outdated=%d, promotion=%d, skipped=%d\n",
-				slug, stats.OutdatedCount, stats.PromotionCandidates, stats.Skipped)
+			fmt.Fprintf(&b, "- %s: outdated=%d, promotion=%d, promoted=%d, skipped=%d\n",
+				slug, stats.OutdatedCount, stats.PromotionCandidates, stats.Promoted, stats.Skipped)
 		}
 	}
 	if len(r.Errors) > 0 {

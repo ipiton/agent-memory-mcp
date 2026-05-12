@@ -447,6 +447,75 @@ func TestSweep_ProceduralIsCandidate(t *testing.T) {
 	}
 }
 
+// TestSweep_AutoPromote_PromotesInsteadOfReviewItem (T62) verifies that when
+// cfg.AutoPromote=true, high-importance memories are promoted to canonical
+// in-place instead of producing a review-queue item. Inbox does not grow;
+// the source memory itself is updated to canonical knowledge_layer.
+func TestSweep_AutoPromote_PromotesInsteadOfReviewItem(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-autopromo")
+
+	target := seedWorkingMemory(t, store, "task-autopromo", "high-value", 0.85, nil, nil)
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{
+		Roots:       []string{root},
+		AutoPromote: true,
+	})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+	if result.TotalPromoted != 1 {
+		t.Fatalf("expected 1 promoted, got %d (actions=%+v)", result.TotalPromoted, result.Actions)
+	}
+	if result.TotalPromotionCand != 0 {
+		t.Fatalf("expected 0 promotion candidates (auto-promote on), got %d", result.TotalPromotionCand)
+	}
+	if n := countReviewQueueItemsForTarget(t, store, target.ID); n != 0 {
+		t.Fatalf("expected 0 review-queue items for target %s under auto_promote, got %d", target.ID, n)
+	}
+
+	updated, err := store.Get(target.ID)
+	if err != nil {
+		t.Fatalf("Get target after sweep: %v", err)
+	}
+	if updated.Metadata["knowledge_layer"] != "canonical" {
+		t.Fatalf("expected knowledge_layer=canonical, got %q", updated.Metadata["knowledge_layer"])
+	}
+	if updated.Metadata["canonical"] != "true" {
+		t.Fatalf("expected canonical=true metadata, got %q", updated.Metadata["canonical"])
+	}
+}
+
+// TestSweep_AutoPromote_DryRunDoesNotWrite (T62) verifies AutoPromote+DryRun
+// still emits zero writes and reports the count under the Promoted bucket.
+func TestSweep_AutoPromote_DryRunDoesNotWrite(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-autopromo-dry")
+
+	target := seedWorkingMemory(t, store, "task-autopromo-dry", "high-value", 0.85, nil, nil)
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{
+		Roots:       []string{root},
+		AutoPromote: true,
+		DryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+	if result.TotalPromoted != 1 {
+		t.Fatalf("dry-run expected to count 1 promoted, got %d", result.TotalPromoted)
+	}
+	updated, err := store.Get(target.ID)
+	if err != nil {
+		t.Fatalf("Get target: %v", err)
+	}
+	if updated.Metadata["canonical"] == "true" {
+		t.Fatalf("dry-run must not write canonical metadata")
+	}
+}
+
 // failingStore wraps a real memory.Store but forces MarkOutdated to fail for
 // a specific memory ID. Used by TestSweep_PartialFailure_ReportedInResult.
 type failingStore struct {
@@ -467,6 +536,13 @@ func (f *failingStore) MarkOutdated(ctx context.Context, id string, reason strin
 		return nil, err
 	}
 	return f.inner.MarkOutdated(ctx, id, reason, supersededBy)
+}
+
+func (f *failingStore) PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error) {
+	if err, ok := f.failIDs[id]; ok {
+		return nil, err
+	}
+	return f.inner.PromoteToCanonical(ctx, id, owner)
 }
 
 // TestSweep_PartialFailure_ReportedInResult injects a failing MarkOutdated for

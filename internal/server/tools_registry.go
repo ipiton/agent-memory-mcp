@@ -662,6 +662,11 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 						"default":     "keep-after-archive",
 						"description": "Tag that opts a memory out of the sweep",
 					},
+					"auto_promote": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "T62: promote candidates directly to canonical instead of creating review-queue items (autonomous mode)",
+					},
 					"format": map[string]any{
 						"type":        "string",
 						"enum":        []string{"text", "json"},
@@ -703,6 +708,11 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 						"type":        "string",
 						"default":     "keep-after-archive",
 						"description": "Tag that opts a memory out of the sweep",
+					},
+					"auto_promote": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "T62: promote candidates directly to canonical instead of creating review-queue items (autonomous mode)",
 					},
 					"format": map[string]any{
 						"type":        "string",

@@ -456,11 +456,16 @@ func (s *MCPServer) getMemoryStore() *memory.Store {
 	return s.memoryStore
 }
 
-// ReloadRAG stops the current RAG engine and creates a new one from newCfg.
-// If RAG is disabled in newCfg, the engine is stopped and set to nil.
-func (s *MCPServer) ReloadRAG(newCfg config.Config) {
+// ReloadConfig swaps the server's effective config and restarts the RAG engine.
+// Always updates s.config first so non-RAG-bound fields (e.g. TaskArchiveRoots)
+// reflect the new file even when RAG is disabled or fails to initialize. The
+// ragMu (RWMutex) doubles as the config write barrier — read paths that touch
+// s.config must take s.ragMu.RLock() if they require a consistent snapshot.
+func (s *MCPServer) ReloadConfig(newCfg config.Config) {
 	s.ragMu.Lock()
 	defer s.ragMu.Unlock()
+
+	s.config = newCfg
 
 	if s.ragEngine != nil {
 		s.ragEngine.Stop()
@@ -483,7 +488,6 @@ func (s *MCPServer) ReloadRAG(newCfg config.Config) {
 	}
 
 	s.ragEngine = engine
-	s.config = newCfg
 	if s.fileLogger != nil {
 		s.fileLogger.Info("Config reload: RAG engine restarted",
 			zap.String("root_path", newCfg.RootPath),
@@ -492,6 +496,12 @@ func (s *MCPServer) ReloadRAG(newCfg config.Config) {
 		)
 	}
 }
+
+// ReloadRAG is the legacy entry point kept for any external callers. New code
+// should use ReloadConfig.
+//
+// Deprecated: use ReloadConfig.
+func (s *MCPServer) ReloadRAG(newCfg config.Config) { s.ReloadConfig(newCfg) }
 
 // Shutdown gracefully shuts down the server, closing all resources.
 func (s *MCPServer) Shutdown() {
