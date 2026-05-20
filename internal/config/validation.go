@@ -28,6 +28,12 @@ func validateResolvedConfig(cfg Config) error {
 	if cfg.SedimentScheduleInterval < 0 {
 		return fmt.Errorf("MCP_SEDIMENT_SCHEDULE_INTERVAL must be 0 or greater")
 	}
+	if cfg.EmbeddingTimeout < 0 {
+		return fmt.Errorf("MCP_EMBEDDING_TIMEOUT must be 0 or greater")
+	}
+	if cfg.EmbeddingMaxRetries < 0 {
+		return fmt.Errorf("MCP_EMBEDDING_MAX_RETRIES must be 0 or greater")
+	}
 	if err := validateAllowedPaths(cfg.RootPath, cfg.AllowedPaths); err != nil {
 		return err
 	}

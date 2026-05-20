@@ -181,6 +181,15 @@ What still uses the network:
 
 If Ollama is not running or no supported local model is available, embedding requests fail with a local-only specific error telling you to start Ollama or disable `MCP_EMBEDDING_MODE=local-only`.
 
+On slow self-hosted hardware (Ollama with `bge-m3` on a low-core or ARM VPS), a single chunk can take 4-7 seconds to embed and the default 5s timeout will fire repeatedly. Raise the limits:
+
+```bash
+MCP_EMBEDDING_TIMEOUT=30s      # default 5s
+MCP_EMBEDDING_MAX_RETRIES=3    # default 1
+```
+
+Invalid values fall back to the defaults, so the service still starts.
+
 ### 2. Start the local server
 
 For MCP clients such as Claude Desktop, Cursor, or Codex:
@@ -777,6 +786,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
 | `MCP_EMBEDDING_DIMENSION` | `1024` | Vector dimension (change requires re-indexing) |
+| `MCP_EMBEDDING_TIMEOUT` | `5s` | Per-request embedding timeout; raise on slow local backends |
+| `MCP_EMBEDDING_MAX_RETRIES` | `1` | Embedding retry count on transient failures |
 | `MCP_INDEX_DIRS` | `docs` | Comma-separated directories and individual files to index for RAG. Code fallback is `docs`; the shipped `.env.example` preset sets `docs,README.md,CHANGELOG.md` for a typical project layout |
 | `MCP_RAG_AUTO_INDEX` | `true` | Index documents on startup. Code default is `true` (good for HTTP/service mode); the solo-local `.env.example` preset turns it off so you control indexing with explicit `agent-memory-mcp index` runs |
 | `MCP_RAG_FILE_WATCHER` | `false` | Watch `MCP_INDEX_DIRS` for changes and reindex incrementally; useful for long-running shared/service instances |
