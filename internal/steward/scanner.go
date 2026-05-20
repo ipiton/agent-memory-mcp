@@ -525,8 +525,13 @@ func hasContradictionSignals(a, b *memory.Memory) bool {
 	la := memory.LifecycleStatusOf(a)
 	lb := memory.LifecycleStatusOf(b)
 
-	// Different lifecycle statuses on same subject → likely contradiction.
-	if la != "" && lb != "" && la != lb {
+	// A bare lifecycle difference is NOT a contradiction. A raw session summary
+	// and the extracted/canonical entity for the same subject (dual encoding of
+	// one event) naturally sit at different lifecycle/knowledge layers, and
+	// draft→active→canonical is normal maturation. Only an explicit invalidation
+	// — one side outdated/superseded while the other is still live — is a real
+	// conflict. This collapses the dual-encoding false-positive class (T60).
+	if lifecycleInvalidationConflict(la, lb) {
 		return true
 	}
 
@@ -555,6 +560,22 @@ func hasContradictionSignals(a, b *memory.Memory) bool {
 	}
 
 	return false
+}
+
+// lifecycleInvalidationConflict reports whether two lifecycle statuses on the
+// same subject represent a genuine conflict: one entry has been explicitly
+// invalidated (outdated or superseded) while the other is still live (active,
+// canonical, or draft). Differences purely among the live statuses
+// (draft↔active↔canonical) are dual encoding / maturation of the same subject,
+// not contradictions, and must not be flagged.
+func lifecycleInvalidationConflict(a, b memory.LifecycleStatus) bool {
+	invalidated := func(s memory.LifecycleStatus) bool {
+		return s == memory.LifecycleOutdated || s == memory.LifecycleSuperseded
+	}
+	live := func(s memory.LifecycleStatus) bool {
+		return s == memory.LifecycleActive || s == memory.LifecycleCanonical || s == memory.LifecycleDraft
+	}
+	return (invalidated(a) && live(b)) || (invalidated(b) && live(a))
 }
 
 var contradictionKeywords = []string{
