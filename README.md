@@ -590,6 +590,14 @@ Then point your HTTP-capable MCP client or proxy at:
 http://localhost:18080/mcp
 ```
 
+The `/mcp` endpoint supports the MCP Streamable HTTP transport: JSON-RPC requests go over `POST`, and clients that need a server-push channel (Cursor and similar) open it with `GET` and `Accept: text/event-stream`. The server keeps that stream alive with periodic keepalive comments. A plain `GET` without the SSE `Accept` header still returns `405`.
+
+```bash
+curl -N -H "Accept: text/event-stream" \
+  -H "Authorization: Bearer $MCP_HTTP_AUTH_TOKEN" \
+  http://localhost:18080/mcp
+```
+
 For retrieval inspection in a browser, open:
 
 ```text

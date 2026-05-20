@@ -4,8 +4,10 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
@@ -43,6 +45,16 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		w.Header().Set("Access-Control-Allow-Origin", "")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// MCP Streamable HTTP transport: clients (Cursor, etc.) open a GET
+		// stream with Accept: text/event-stream for server-initiated messages.
+		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			if !authorizeHTTPRequest(w, r, authToken) {
+				return
+			}
+			serveMCPSSE(w, r)
 			return
 		}
 
@@ -214,6 +226,51 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 	})
 
 	return mux
+}
+
+// sseKeepAliveInterval is the cadence of keepalive comments on the GET /mcp
+// SSE stream. Kept below the server IdleTimeout (120s) so the open connection
+// is never reaped while idle.
+const sseKeepAliveInterval = 25 * time.Second
+
+// serveMCPSSE holds a Server-Sent Events stream open for the MCP Streamable
+// HTTP transport. The server currently has no server-initiated messages to
+// push, so the stream only emits keepalive comments until the client
+// disconnects; this is enough to satisfy clients (Cursor) that require the
+// GET channel to connect successfully.
+func serveMCPSSE(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	rc := http.NewResponseController(w)
+	// Long-lived stream: clear the write deadline so the server WriteTimeout
+	// does not abort it mid-stream.
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	if _, err := io.WriteString(w, ": stream open\n\n"); err != nil {
+		return
+	}
+	if err := rc.Flush(); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(sseKeepAliveInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			if err := rc.Flush(); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func authorizeHTTPRequest(w http.ResponseWriter, r *http.Request, authToken string) bool {

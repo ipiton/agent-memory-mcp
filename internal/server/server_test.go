@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -177,6 +178,114 @@ func TestHTTPMethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestHTTPGetSSEStreamOpens(t *testing.T) {
+	s := newTestServer(t, "")
+	srv := httptest.NewServer(buildMux(s))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/mcp", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /mcp: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
+	}
+
+	want := ": stream open\n\n"
+	buf := make([]byte, len(want))
+	if _, err := io.ReadFull(resp.Body, buf); err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if string(buf) != want {
+		t.Fatalf("first frame = %q, want %q", string(buf), want)
+	}
+}
+
+func TestHTTPGetSSERequiresAuth(t *testing.T) {
+	s := newTestServer(t, "secret")
+	srv := httptest.NewServer(buildMux(s))
+	defer srv.Close()
+
+	get := func(token string) *http.Response {
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/mcp", nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /mcp: %v", err)
+		}
+		return resp
+	}
+
+	respNoToken := get("")
+	defer func() { _ = respNoToken.Body.Close() }()
+	if respNoToken.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d, want 401", respNoToken.StatusCode)
+	}
+
+	respWrong := get("nope")
+	defer func() { _ = respWrong.Body.Close() }()
+	if respWrong.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status = %d, want 401", respWrong.StatusCode)
+	}
+
+	respOK := get("secret")
+	defer func() { _ = respOK.Body.Close() }()
+	if respOK.StatusCode != http.StatusOK {
+		t.Fatalf("valid token: status = %d, want 200", respOK.StatusCode)
+	}
+}
+
+func TestHTTPGetSSEReturnsOnClientCancel(t *testing.T) {
+	s := newTestServer(t, "")
+	mux := buildMux(s)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil).WithContext(ctx)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		mux.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	// Let the handler write the initial frame and block in the keepalive loop.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after context cancel")
+	}
+
+	if !strings.HasPrefix(rec.Body.String(), ": stream open") {
+		t.Fatalf("expected stream-open frame, got %q", rec.Body.String())
 	}
 }
 
