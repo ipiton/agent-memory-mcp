@@ -23,6 +23,8 @@ const (
 	defaultOllamaBaseURL      = "http://localhost:11434"
 	defaultOllamaPrimaryModel = "bge-m3:latest"
 	defaultOllamaBackupModel  = "mxbai-embed-large:latest"
+	defaultLlamaCPPBaseURL    = "http://127.0.0.1:8080/v1"
+	defaultLlamaCPPModel      = "bge-m3"
 )
 
 // Config holds provider credentials and tuning parameters for the Embedder.
@@ -32,10 +34,15 @@ type Config struct {
 	OpenAIBaseURL string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
 	OpenAIModel   string // Embedding model (default: text-embedding-3-small)
 	OllamaBaseURL string
-	Dimension     int    // Required embedding dimension (default: 1024)
-	Mode          string // auto or local-only
-	MaxRetries    int
-	Timeout       time.Duration
+	// llama.cpp (llama-server --embedding) exposes an OpenAI-compatible
+	// /v1/embeddings endpoint. Opt-in: only joins the provider chain when
+	// LlamaCPPBaseURL is non-empty. Works in local-only mode.
+	LlamaCPPBaseURL string
+	LlamaCPPModel   string // llama.cpp embedding model (default: bge-m3)
+	Dimension       int    // Required embedding dimension (default: 1024)
+	Mode            string // auto or local-only
+	MaxRetries      int
+	Timeout         time.Duration
 }
 
 type EmbeddingResult struct {
@@ -274,6 +281,9 @@ func (e *Embedder) singleCandidates(task string) []providerCandidate {
 	if !e.localOnlyMode() && e.config.OpenAIToken != "" {
 		candidates = append(candidates, providerCandidate{provider: openAIAdapter{embedder: e}})
 	}
+	if e.config.LlamaCPPBaseURL != "" {
+		candidates = append(candidates, providerCandidate{provider: llamaCPPAdapter{embedder: e}})
+	}
 	if e.config.OllamaBaseURL != "" {
 		candidates = append(candidates,
 			providerCandidate{provider: ollamaAdapter{embedder: e, model: defaultOllamaPrimaryModel}},
@@ -290,6 +300,9 @@ func (e *Embedder) batchCandidates(task string) []providerCandidate {
 	}
 	if !e.localOnlyMode() && e.config.OpenAIToken != "" {
 		candidates = append(candidates, providerCandidate{provider: openAIAdapter{embedder: e}})
+	}
+	if e.config.LlamaCPPBaseURL != "" {
+		candidates = append(candidates, providerCandidate{provider: llamaCPPAdapter{embedder: e}})
 	}
 	if e.config.OllamaBaseURL != "" {
 		candidates = append(candidates,
@@ -411,4 +424,16 @@ func (e *Embedder) ollamaModelID(model string) string {
 		baseURL = defaultOllamaBaseURL
 	}
 	return fmt.Sprintf("ollama:%s:%s:%d", strings.TrimRight(baseURL, "/"), model, e.Dimension)
+}
+
+func (e *Embedder) llamaCPPModelID() string {
+	baseURL := e.config.LlamaCPPBaseURL
+	if baseURL == "" {
+		baseURL = defaultLlamaCPPBaseURL
+	}
+	model := e.config.LlamaCPPModel
+	if model == "" {
+		model = defaultLlamaCPPModel
+	}
+	return fmt.Sprintf("llamacpp:%s:%s:%d", strings.TrimRight(baseURL, "/"), model, e.Dimension)
 }

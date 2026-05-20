@@ -251,3 +251,126 @@ func TestBatchEmbedDetailedFallsBackAfterHostedDimensionMismatch(t *testing.T) {
 		t.Fatalf("ModelID = %q, want %q", result.ModelID, wantModelID)
 	}
 }
+
+func TestEmbedUsesLlamaCPPAdapter(t *testing.T) {
+	var path string
+	var requestBody struct {
+		Input string `json:"input"`
+		Model string `json:"model"`
+		// llama.cpp does not accept dimensions; assert absence below.
+		Dimensions *int `json:"dimensions"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.5, 0.6, 0.7, 0.8}, "index": 0},
+			},
+		})
+	}))
+	defer server.Close()
+
+	e, err := New(Config{
+		LlamaCPPBaseURL: server.URL + "/v1",
+		Dimension:       4,
+		Mode:            "local-only",
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	result, err := e.EmbedDetailed(context.Background(), "hello llama")
+	if err != nil {
+		t.Fatalf("EmbedDetailed: %v", err)
+	}
+	if path != "/v1/embeddings" {
+		t.Fatalf("path = %q, want /v1/embeddings", path)
+	}
+	if requestBody.Input != "hello llama" {
+		t.Fatalf("input = %q, want %q", requestBody.Input, "hello llama")
+	}
+	if requestBody.Model != defaultLlamaCPPModel {
+		t.Fatalf("model = %q, want %q", requestBody.Model, defaultLlamaCPPModel)
+	}
+	if requestBody.Dimensions != nil {
+		t.Fatalf("dimensions = %v, want absent (llama.cpp ignores it)", *requestBody.Dimensions)
+	}
+	if len(result.Embedding) != 4 {
+		t.Fatalf("embedding length = %d, want 4", len(result.Embedding))
+	}
+	wantModelID := "llamacpp:" + server.URL + "/v1:" + defaultLlamaCPPModel + ":4"
+	if result.ModelID != wantModelID {
+		t.Fatalf("ModelID = %q, want %q", result.ModelID, wantModelID)
+	}
+}
+
+func TestBatchEmbedUsesLlamaCPPBeforeOllama(t *testing.T) {
+	var llamaHits, ollamaHits atomic.Int32
+
+	llamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			http.NotFound(w, r)
+			return
+		}
+		llamaHits.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"embedding": []float64{0.1, 0.2, 0.3, 0.4}, "index": 0},
+				{"embedding": []float64{0.5, 0.6, 0.7, 0.8}, "index": 1},
+			},
+		})
+	}))
+	defer llamaServer.Close()
+
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ollamaHits.Add(1)
+		http.Error(w, "should not be reached", http.StatusTeapot)
+	}))
+	defer ollamaServer.Close()
+
+	e, err := New(Config{
+		LlamaCPPBaseURL: llamaServer.URL + "/v1",
+		OllamaBaseURL:   ollamaServer.URL,
+		Dimension:       4,
+		Mode:            "local-only",
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	result, err := e.BatchEmbedDetailed(context.Background(), []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("BatchEmbedDetailed: %v", err)
+	}
+	if llamaHits.Load() != 1 {
+		t.Fatalf("llama.cpp hits = %d, want 1", llamaHits.Load())
+	}
+	if ollamaHits.Load() != 0 {
+		t.Fatalf("Ollama hits = %d, want 0 (llama.cpp should win)", ollamaHits.Load())
+	}
+	if len(result.Embeddings) != 2 {
+		t.Fatalf("embeddings count = %d, want 2", len(result.Embeddings))
+	}
+}
+
+func TestLlamaCPPDisabledWhenBaseURLEmpty(t *testing.T) {
+	e, err := New(Config{
+		LlamaCPPModel: "bge-m3", // model set but no base URL → must stay disabled
+		Dimension:     4,
+		Mode:          "local-only",
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, c := range e.singleCandidates("retrieval.passage") {
+		if c.provider.name() == "llamacpp" {
+			t.Fatal("llama.cpp must be opt-in via LLAMACPP_BASE_URL, but it joined the provider chain")
+		}
+	}
+}
