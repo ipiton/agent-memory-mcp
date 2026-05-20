@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-05-20
+
+Self-hosting and client-compatibility hardening. Slow local embedding
+backends no longer time out, llama.cpp joins the local-only path, MCP
+clients using the Streamable HTTP transport can connect, and the steward
+stops drowning the contradiction inbox with dual-encoding false positives.
+
+### Added
+
+- **T64 llama.cpp embedding backend** — a `llama-server --embedding` instance (OpenAI-compatible `/v1/embeddings`) can now serve embeddings as a second local-only option alongside Ollama. Opt-in via `LLAMACPP_BASE_URL` (empty disables it); when set it joins the fallback chain before Ollama (`Jina → OpenAI → llama.cpp → Ollama`) and works under `MCP_EMBEDDING_MODE=local-only`. `LLAMACPP_EMBEDDING_MODEL` defaults to `bge-m3`. The adapter reuses the shared OpenAI-compatible transport and omits the `dimensions` parameter (the model returns its native dimension, validated at recall time).
+- **T65 configurable embedding timeout and retries** — `MCP_EMBEDDING_TIMEOUT` (default `5s`) and `MCP_EMBEDDING_MAX_RETRIES` (default `1`) replace the previously hardcoded values in `EmbedderConfig()`. Slow self-hosted backends (Ollama with `bge-m3` on low-core/ARM VPS, where a single chunk takes 4–7s) no longer hit persistent timeouts. Negative values are rejected at config load; invalid values fall back to the defaults so the service still starts. Defaults match prior behaviour.
+- **T66 GET SSE endpoint on `/mcp`** — the MCP Streamable HTTP transport opens a server-push channel with `GET /mcp` and `Accept: text/event-stream`. Previously any non-POST request returned `405`, so clients like Cursor failed to connect and retried indefinitely. The stream is held open behind the same Bearer auth as POST, with a keepalive comment every 25s; the write deadline is cleared so the server `WriteTimeout` does not abort it. A plain `GET` without the SSE `Accept` header still returns `405`.
+
+### Fixed
+
+- **T60 steward dual-encoding contradiction false positives** — conflict detection treated any lifecycle difference between two similar memories as a contradiction. The same event is routinely stored at two layers — a raw session summary (`draft`) and the extracted/promoted entity (`active`/`canonical`) — so a full scan over ~1879 memories returned 64 contradictions, all dual-encoding pairs, forcing dozens of manual `suppress` actions per cleanup. A lifecycle difference now counts as a conflict only on explicit invalidation (one side `outdated`/`superseded` while the other is live); `draft`↔`active`↔`canonical` maturation is ignored. Genuine same-layer disagreements are still caught via explicit supersession links, temporal-window overlap, and content contradiction keywords. See `docs/STEWARDSHIP.md` for the dual-encoding policy.
+
 ## [0.8.1] - 2026-05-12
 
 Memory cleanup unblocked. `sweep_archive` no longer hides the underlying
