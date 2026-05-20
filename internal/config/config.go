@@ -74,6 +74,13 @@ type Config struct {
 	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
 	EmbeddingMode      string // Embedding mode: auto or local-only
 
+	// Embedding transport tuning. Defaults match the historical hardcoded
+	// values (5s / 1 retry); slow self-hosted backends (Ollama on low-core
+	// ARM VPS) need higher values to avoid persistent on-demand embedding
+	// timeouts.
+	EmbeddingTimeout    time.Duration // MCP_EMBEDDING_TIMEOUT (default: 5s)
+	EmbeddingMaxRetries int           // MCP_EMBEDDING_MAX_RETRIES (default: 1)
+
 	// RAG indexing behavior
 	AutoIndex        bool          // Auto-index on startup (default: true)
 	FileWatcher      bool          // Watch for file changes (default: true)
@@ -182,6 +189,8 @@ type envValues struct {
 	ollamaBaseURL                    string
 	embeddingDimension               int
 	embeddingMode                    string
+	embeddingTimeout                 string
+	embeddingMaxRetries              int
 	autoIndex                        bool
 	fileWatcher                      bool
 	watchInterval                    string
@@ -262,6 +271,8 @@ func readEnvValues() (envValues, error) {
 		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
 		embeddingDimension:               EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
 		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
+		embeddingTimeout:                 EnvOrDefault("MCP_EMBEDDING_TIMEOUT", "5s"),
+		embeddingMaxRetries:              EnvInt("MCP_EMBEDDING_MAX_RETRIES", 1),
 		autoIndex:                        EnvBool("MCP_RAG_AUTO_INDEX", true),
 		fileWatcher:                      EnvBool("MCP_RAG_FILE_WATCHER", true),
 		watchInterval:                    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
@@ -398,6 +409,9 @@ func resolvePaths(ev envValues) (Config, error) {
 		OllamaBaseURL:      ev.ollamaBaseURL,
 		EmbeddingDimension: ev.embeddingDimension,
 		EmbeddingMode:      ev.embeddingMode,
+
+		EmbeddingTimeout:    parseDurationOrDefault(ev.embeddingTimeout, 5*time.Second),
+		EmbeddingMaxRetries: ev.embeddingMaxRetries,
 
 		AutoIndex:        ev.autoIndex,
 		FileWatcher:      ev.fileWatcher,
@@ -661,8 +675,8 @@ func (c Config) EmbedderConfig() embedder.Config {
 		OllamaBaseURL: c.OllamaBaseURL,
 		Dimension:     c.EmbeddingDimension,
 		Mode:          c.EmbeddingMode,
-		MaxRetries:    1,
-		Timeout:       5 * time.Second,
+		MaxRetries:    c.EmbeddingMaxRetries,
+		Timeout:       c.EmbeddingTimeout,
 	}
 }
 
