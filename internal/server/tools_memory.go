@@ -525,7 +525,7 @@ func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcEr
 	}
 
 	filtered := filterCanonicalEntries(entries, service, requiredTags, limit)
-	return toolResultText(formatCanonicalKnowledgeList(filtered, memContext, service)), nil
+	return toolResultText(s.formatCanonicalKnowledgeList(filtered, memContext, service)), nil
 }
 
 func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpcError) {
@@ -562,5 +562,5 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 	}
 
 	filtered := filterCanonicalSearchResults(results, service, requiredTags, limit)
-	return toolResultText(formatCanonicalKnowledgeRecall(query, filtered, memContext, service)), nil
+	return toolResultText(s.formatCanonicalKnowledgeRecall(query, filtered, memContext, service)), nil
 }
