@@ -71,6 +71,8 @@ type Config struct {
 	OpenAIBaseURL      string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
 	OpenAIModel        string // OpenAI embedding model (default: text-embedding-3-small)
 	OllamaBaseURL      string // Ollama base URL (default: http://localhost:11434)
+	LlamaCPPBaseURL    string // llama.cpp OpenAI-compatible base URL; empty = disabled. Env: LLAMACPP_BASE_URL
+	LlamaCPPModel      string // llama.cpp embedding model (default: bge-m3). Env: LLAMACPP_EMBEDDING_MODEL
 	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
 	EmbeddingMode      string // Embedding mode: auto or local-only
 
@@ -187,6 +189,8 @@ type envValues struct {
 	openaiBaseURL                    string
 	openaiModel                      string
 	ollamaBaseURL                    string
+	llamaCPPBaseURL                  string
+	llamaCPPModel                    string
 	embeddingDimension               int
 	embeddingMode                    string
 	embeddingTimeout                 string
@@ -269,6 +273,8 @@ func readEnvValues() (envValues, error) {
 		openaiBaseURL:                    EnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		openaiModel:                      EnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
 		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
+		llamaCPPBaseURL:                  EnvOrDefault("LLAMACPP_BASE_URL", ""),
+		llamaCPPModel:                    EnvOrDefault("LLAMACPP_EMBEDDING_MODEL", "bge-m3"),
 		embeddingDimension:               EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
 		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
 		embeddingTimeout:                 EnvOrDefault("MCP_EMBEDDING_TIMEOUT", "5s"),
@@ -407,6 +413,8 @@ func resolvePaths(ev envValues) (Config, error) {
 		OpenAIBaseURL:      ev.openaiBaseURL,
 		OpenAIModel:        ev.openaiModel,
 		OllamaBaseURL:      ev.ollamaBaseURL,
+		LlamaCPPBaseURL:    strings.TrimSpace(ev.llamaCPPBaseURL),
+		LlamaCPPModel:      ev.llamaCPPModel,
 		EmbeddingDimension: ev.embeddingDimension,
 		EmbeddingMode:      ev.embeddingMode,
 
@@ -668,15 +676,17 @@ func resolveStewardEnabled(ev envValues) bool {
 // EmbedderConfig returns the embedder.Config derived from this server config.
 func (c Config) EmbedderConfig() embedder.Config {
 	return embedder.Config{
-		JinaToken:     c.JinaAPIKey,
-		OpenAIToken:   c.OpenAIAPIKey,
-		OpenAIBaseURL: c.OpenAIBaseURL,
-		OpenAIModel:   c.OpenAIModel,
-		OllamaBaseURL: c.OllamaBaseURL,
-		Dimension:     c.EmbeddingDimension,
-		Mode:          c.EmbeddingMode,
-		MaxRetries:    c.EmbeddingMaxRetries,
-		Timeout:       c.EmbeddingTimeout,
+		JinaToken:       c.JinaAPIKey,
+		OpenAIToken:     c.OpenAIAPIKey,
+		OpenAIBaseURL:   c.OpenAIBaseURL,
+		OpenAIModel:     c.OpenAIModel,
+		OllamaBaseURL:   c.OllamaBaseURL,
+		LlamaCPPBaseURL: c.LlamaCPPBaseURL,
+		LlamaCPPModel:   c.LlamaCPPModel,
+		Dimension:       c.EmbeddingDimension,
+		Mode:            c.EmbeddingMode,
+		MaxRetries:      c.EmbeddingMaxRetries,
+		Timeout:         c.EmbeddingTimeout,
 	}
 }
 

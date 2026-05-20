@@ -173,13 +173,30 @@ In `local-only` mode:
 
 - `agent-memory-mcp` never calls Jina AI
 - `agent-memory-mcp` never calls OpenAI-compatible embedding APIs
-- embeddings are generated only through your local Ollama endpoint
+- embeddings are generated only through a local backend: Ollama or llama.cpp
 
 What still uses the network:
 
 - the local Ollama HTTP endpoint, typically `http://localhost:11434`
+- or a local llama.cpp server, typically `http://127.0.0.1:8080/v1`
 
-If Ollama is not running or no supported local model is available, embedding requests fail with a local-only specific error telling you to start Ollama or disable `MCP_EMBEDDING_MODE=local-only`.
+If no local backend is running or no supported local model is available, embedding requests fail with a local-only specific error telling you to start the backend or disable `MCP_EMBEDDING_MODE=local-only`.
+
+### Alternative local backend: llama.cpp
+
+If you already run `llama.cpp` (Apple Silicon native, GGUF models), point the server at its OpenAI-compatible `/v1/embeddings` endpoint instead of installing Ollama. It is opt-in — set `LLAMACPP_BASE_URL` to enable it. Once set it joins the fallback chain before Ollama (`Jina → OpenAI → llama.cpp → Ollama`) and works in `local-only` mode.
+
+```bash
+# Start llama.cpp with an embedding model
+llama-server -m bge-m3.gguf --embedding --pooling cls -c 8192 -ub 8192
+
+# Then configure the MCP server
+LLAMACPP_BASE_URL=http://127.0.0.1:8080/v1
+LLAMACPP_EMBEDDING_MODEL=bge-m3
+MCP_EMBEDDING_MODE=local-only
+```
+
+llama.cpp returns the model's native embedding dimension, so make sure `MCP_EMBEDDING_DIMENSION` matches it (1024 for bge-m3) — a mismatch is rejected at recall time.
 
 On slow self-hosted hardware (Ollama with `bge-m3` on a low-core or ARM VPS), a single chunk can take 4-7 seconds to embed and the default 5s timeout will fire repeatedly. Raise the limits:
 
@@ -792,6 +809,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
+| `LLAMACPP_BASE_URL` | - | llama.cpp OpenAI-compatible base URL (e.g. `http://127.0.0.1:8080/v1`); empty disables it |
+| `LLAMACPP_EMBEDDING_MODEL` | `bge-m3` | llama.cpp embedding model (used only when `LLAMACPP_BASE_URL` is set) |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
 | `MCP_EMBEDDING_DIMENSION` | `1024` | Vector dimension (change requires re-indexing) |
 | `MCP_EMBEDDING_TIMEOUT` | `5s` | Per-request embedding timeout; raise on slow local backends |

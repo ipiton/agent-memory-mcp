@@ -83,6 +83,47 @@ func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnvLlamaCPPDisabledByDefault(t *testing.T) {
+	t.Setenv("MCP_ROOT", ".")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.LlamaCPPBaseURL != "" {
+		t.Fatalf("LlamaCPPBaseURL = %q, want empty (opt-in)", cfg.LlamaCPPBaseURL)
+	}
+	// Model still has a default so the adapter has a value once enabled.
+	if cfg.LlamaCPPModel != "bge-m3" {
+		t.Fatalf("LlamaCPPModel = %q, want bge-m3", cfg.LlamaCPPModel)
+	}
+	if ec := cfg.EmbedderConfig(); ec.LlamaCPPBaseURL != "" {
+		t.Fatalf("EmbedderConfig().LlamaCPPBaseURL = %q, want empty", ec.LlamaCPPBaseURL)
+	}
+}
+
+func TestLoadFromEnvLlamaCPPLocalOnlyOverrides(t *testing.T) {
+	t.Setenv("MCP_ROOT", ".")
+	t.Setenv("MCP_EMBEDDING_MODE", "local-only")
+	t.Setenv("LLAMACPP_BASE_URL", "http://127.0.0.1:8080/v1")
+	t.Setenv("LLAMACPP_EMBEDDING_MODEL", "nomic-embed-text")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.EmbeddingMode != "local-only" {
+		t.Fatalf("EmbeddingMode = %q, want local-only", cfg.EmbeddingMode)
+	}
+	ec := cfg.EmbedderConfig()
+	if ec.LlamaCPPBaseURL != "http://127.0.0.1:8080/v1" {
+		t.Fatalf("EmbedderConfig().LlamaCPPBaseURL = %q", ec.LlamaCPPBaseURL)
+	}
+	if ec.LlamaCPPModel != "nomic-embed-text" {
+		t.Fatalf("EmbedderConfig().LlamaCPPModel = %q, want nomic-embed-text", ec.LlamaCPPModel)
+	}
+}
+
 func TestLoadFromEnvHTTPDefaults(t *testing.T) {
 	t.Setenv("MCP_ROOT", ".")
 
