@@ -36,6 +36,22 @@ Each scanner produces actions. Actions are classified as:
 - `safe_auto_apply` — low-risk, applied automatically when `dry_run=false`
 - `review_required` — sent to the stewardship inbox for human or agent review
 
+#### Dual-encoding policy (conflict detection)
+
+Conflict detection deliberately does **not** treat a bare lifecycle difference as a
+contradiction. The same event is routinely stored at two layers — a raw session
+summary (`Session close / X`, lifecycle `draft`) and the extracted or promoted
+entity (`Task complete: X`, lifecycle `active`/`canonical`). These pairs are
+semantically near-identical by design (dual encoding), so flagging them produced a
+large class of false positives.
+
+A lifecycle difference counts as a conflict only when it is an explicit
+**invalidation**: one side is `outdated` or `superseded` while the other is still
+live (`active`, `canonical`, or `draft`). Differences purely among the live
+statuses (`draft`↔`active`↔`canonical`) are normal maturation and are ignored.
+Genuine same-layer disagreements are still caught through explicit supersession
+links, overlapping temporal validity windows, and content contradiction keywords.
+
 ### Canonical Health
 
 When scope includes `canonical` or `full`, the report includes a health summary:
