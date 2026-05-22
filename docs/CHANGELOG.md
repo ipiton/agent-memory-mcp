@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-05-22
+
+Bugfix release. The llama.cpp backend shipped in 0.8.2 never reached the RAG
+indexing path, so `index_documents` failed on any host without Ollama.
+
+### Fixed
+
+- **RAG embedder ignored llama.cpp** — `internal/rag/rag.go` built its embedder from a hand-written `embedder.Config` literal that omitted `LlamaCPPBaseURL`/`LlamaCPPModel` (and hardcoded `MaxRetries`/`Timeout`). T64 wired llama.cpp into `Config.EmbedderConfig()` and both embedder candidate chains, but this inline literal was never updated — so RAG indexing silently skipped llama.cpp and fell back to Ollama. With Ollama down, `index_documents` failed with `all embedding providers failed` surfaced as a generic `-32000`, while memory (which uses `cfg.EmbedderConfig()`) kept working. The RAG engine now uses `cfg.EmbedderConfig()` as the single source of truth, matching `server.go` and the CLI helpers, and honors `MCP_EMBEDDING_TIMEOUT`/`MCP_EMBEDDING_MAX_RETRIES`.
+- **`LoadFromEnv` config tests leaked machine config.env** — `LoadFromEnv` walks the dotenv chain (`CWD/.env → XDG → Homebrew prefix`), so a real `/opt/homebrew/etc/agent-memory-mcp/config.env` with `LLAMACPP_BASE_URL` set broke `TestLoadFromEnvLlamaCPPDisabledByDefault` and siblings locally (CI lacks the file, so it passed there). A `hermeticDotEnv` test helper now points every chain source at an empty temp dir.
+
 ## [0.8.2] - 2026-05-20
 
 Self-hosting and client-compatibility hardening. Slow local embedding

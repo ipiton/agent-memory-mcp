@@ -5,7 +5,22 @@ import (
 	"time"
 )
 
+// hermeticDotEnv isolates the dotenv search chain from any config.env present
+// on the developer machine. LoadFromEnv walks CWD/.env → XDG → Homebrew prefix,
+// and a real /opt/homebrew/etc/agent-memory-mcp/config.env leaks values such as
+// LLAMACPP_BASE_URL into these tests — making opt-in/default assertions fail
+// locally while passing in the clean CI environment. Pointing every chain
+// source at an empty temp dir makes the tests deterministic anywhere.
+func hermeticDotEnv(t *testing.T) {
+	t.Helper()
+	empty := t.TempDir()
+	t.Chdir(empty)                     // no CWD/.env
+	t.Setenv("XDG_CONFIG_HOME", empty) // no {xdg}/agent-memory-mcp/config.env
+	t.Setenv("HOMEBREW_PREFIX", empty) // no {prefix}/etc/...; blocks /opt/homebrew fallback
+}
+
 func TestLoadFromEnvEmbeddingModeLocalOnly(t *testing.T) {
+	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
 	t.Setenv("MCP_EMBEDDING_MODE", "local-only")
 
@@ -19,6 +34,7 @@ func TestLoadFromEnvEmbeddingModeLocalOnly(t *testing.T) {
 }
 
 func TestLoadFromEnvEmbeddingTuningDefaults(t *testing.T) {
+	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
 
 	cfg, err := LoadFromEnv()
@@ -42,6 +58,7 @@ func TestLoadFromEnvEmbeddingTuningDefaults(t *testing.T) {
 }
 
 func TestLoadFromEnvEmbeddingTuningOverrides(t *testing.T) {
+	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
 	t.Setenv("MCP_EMBEDDING_TIMEOUT", "30s")
 	t.Setenv("MCP_EMBEDDING_MAX_RETRIES", "3")
@@ -67,6 +84,7 @@ func TestLoadFromEnvEmbeddingTuningOverrides(t *testing.T) {
 }
 
 func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
+	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
 	t.Setenv("MCP_EMBEDDING_TIMEOUT", "garbage")
 	t.Setenv("MCP_EMBEDDING_MAX_RETRIES", "not-a-number")
@@ -84,6 +102,7 @@ func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
 }
 
 func TestLoadFromEnvLlamaCPPDisabledByDefault(t *testing.T) {
+	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
 
 	cfg, err := LoadFromEnv()
