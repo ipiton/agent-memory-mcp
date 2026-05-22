@@ -193,17 +193,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 
 	docSvc := newDocumentService(dsCfg, zapLogger)
 
-	emb, err := embedder.New(embedder.Config{
-		JinaToken:     cfg.JinaAPIKey,
-		OpenAIToken:   cfg.OpenAIAPIKey,
-		OpenAIBaseURL: cfg.OpenAIBaseURL,
-		OpenAIModel:   cfg.OpenAIModel,
-		OllamaBaseURL: cfg.OllamaBaseURL,
-		Dimension:     cfg.EmbeddingDimension,
-		Mode:          cfg.EmbeddingMode,
-		MaxRetries:    2,
-		Timeout:       10 * time.Second,
-	}, zapLogger)
+	emb, err := embedder.New(cfg.EmbedderConfig(), zapLogger)
 	if err != nil {
 		if fileLogger != nil {
 			fileLogger.Error("Failed to initialize embedder",
