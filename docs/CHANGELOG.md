@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2026-05-23
+
+Bugfix release. Removes the last concurrent-writer path that could still reach
+`SQLITE_BUSY` after 0.8.4 (RC5 in the SQLite busy incident postmortem).
+
+### Fixed
+
+- **Foreground `index_documents` could write concurrently with the file-watcher** — `server.callIndexDocuments` called `Engine.IndexDocuments` directly, bypassing the `indexWithLock` guard (`re.indexing`) that only the startup and file-watcher paths used. So a manual `index_documents` and a background watcher index could write to `vectors.db` at the same time. 0.8.4 made them queue politely (busy_timeout up to 5s), but a heavy index holding a write transaction longer than that could still hit `SQLITE_BUSY`. `IndexDocuments` now holds a dedicated `Engine.indexMu` for its whole duration, serialising every indexing run regardless of caller. The watcher's `indexing` flag is unchanged (it still coalesces debounced ticks); foreground callers now wait on the mutex and index for real instead of being skipped. Regression test `TestIndexDocumentsSerialisesWriters` asserts a second call blocks while the lock is held and completes once released. See `06-planning/2026-05-05-sqlite-busy-incident.md` §7 RC5.
+
 ## [0.8.4] - 2026-05-23
 
 Bugfix release. Closes the SQLITE_BUSY recurrence on `index_documents` that the
