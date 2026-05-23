@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2026-05-23
+
+Bugfix release. Closes the SQLITE_BUSY recurrence on `index_documents` that the
+0.8.0 incident fix (`internal/dbutil`) did not fully resolve.
+
+### Fixed
+
+- **SQLITE_BUSY recurred because `busy_timeout` never reached the whole pool** — `dbutil.OpenSQLite` applied the pragmas via `db.Exec` after Open. `journal_mode=WAL` is persisted at the database-file level (so WAL did engage), but `busy_timeout` is **per-connection**: a single `Exec` only configures the one pooled connection that served it, and every other connection `database/sql` opened for concurrent work defaulted to `busy_timeout=0` → instant `SQLITE_BUSY`. Observed when the background file-watcher index raced a write (logs 2026-05-22 14:54 `delete chunks`, 2026-05-23 00:24 `upsert chunk`, `trigger: file_watcher`). `OpenSQLite` now passes the pragmas through the DSN (`_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)`), which `modernc.org/sqlite` runs on **every** new pool connection (`Driver.Open`), plus `_txlock=immediate` so writers take the write lock at `BEGIN` — `busy_timeout` is not honored when a deferred transaction fails to upgrade a read lock to a write lock (SQLite returns `SQLITE_BUSY` immediately without invoking the busy handler). Regression test `TestOpenSQLite_BusyTimeoutPerConnection` asserts the timeout holds on a second pooled connection. The original `?_journal_mode=WAL` DSN form (incident RC2) was also a non-existent `modernc` parameter — the driver only honors `_pragma=...` — which is why the rollback journal appeared on disk in the first place. See `06-planning/2026-05-05-sqlite-busy-incident.md` §7. Known follow-ups (tracked in the incident doc): foreground `index_documents` bypasses the file-watcher's write guard (RC5), and heavy indexing can still hit the embedding HTTP timeout.
+
 ## [0.8.3] - 2026-05-22
 
 Bugfix release. The llama.cpp backend shipped in 0.8.2 never reached the RAG
