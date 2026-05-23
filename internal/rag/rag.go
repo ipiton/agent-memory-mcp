@@ -95,6 +95,14 @@ type Engine struct {
 	vecService     *vectorService
 	mu             sync.Mutex
 	indexing       bool
+	// indexMu serialises the whole IndexDocuments write path so two indexing
+	// runs never write to vectors.db concurrently. The file-watcher path
+	// (indexWithLock) coalesces debounced ticks via the `indexing` flag, but
+	// the foreground index_documents MCP tool calls IndexDocuments directly —
+	// without this mutex the two could race and hit SQLITE_BUSY (RC5 in
+	// 06-planning/2026-05-05-sqlite-busy-incident.md). Foreground callers wait
+	// here and then index for real, rather than being skipped.
+	indexMu        sync.Mutex
 	lastIndexCheck time.Time
 	stopWatcher    chan struct{}
 	stopOnce       sync.Once
@@ -404,6 +412,11 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if re == nil || re.docService == nil || re.vecService == nil {
 		return fmt.Errorf("RAG engine not available")
 	}
+
+	// Serialise all indexing runs (foreground tool + background watcher) so
+	// they never write to vectors.db concurrently. See Engine.indexMu.
+	re.indexMu.Lock()
+	defer re.indexMu.Unlock()
 
 	startTime := time.Now().UTC()
 	// chunkerVersion bumps trigger a full rebuild on next IndexDocuments.

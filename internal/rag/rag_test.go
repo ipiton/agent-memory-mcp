@@ -182,6 +182,84 @@ func TestIndexDocumentsRecoversAfterDirtyCommitFailure(t *testing.T) {
 	}
 }
 
+// TestIndexDocumentsSerialisesWriters guards RC5: IndexDocuments must hold the
+// engine's write lock for its whole duration so the foreground index_documents
+// tool and the background file-watcher never write to vectors.db concurrently.
+// We hold indexMu (simulating an in-progress run) and assert a second call
+// blocks until it is released, then completes for real.
+func TestIndexDocumentsSerialisesWriters(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "docs", "runbook.md"), []byte("# Runbook\nrollback ingress safely"), 0o644); err != nil {
+		t.Fatalf("write runbook: %v", err)
+	}
+
+	embeddingServer := newTestEmbeddingServer(t)
+	defer embeddingServer.Close()
+
+	emb, err := embedder.New(embedder.Config{
+		OllamaBaseURL: embeddingServer.URL,
+		Dimension:     2,
+		Mode:          "local-only",
+		MaxRetries:    0,
+		Timeout:       time.Second,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("embedder.New: %v", err)
+	}
+
+	store, err := vectorstore.NewSQLiteStore(filepath.Join(t.TempDir(), "vectors.db"), 2, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	engine := &Engine{
+		config:   config.Config{RootPath: repoRoot, RAGMaxResults: 10},
+		repoRoot: repoRoot,
+		logger:   zap.NewNop(),
+		docService: newDocumentService(docServiceConfig{
+			RepoRoot:     repoRoot,
+			IndexDirs:    []string{"docs"},
+			ChunkSize:    2000,
+			ChunkOverlap: 200,
+		}, zap.NewNop()),
+		vecService: &vectorService{
+			config: vecServiceConfig{Embedder: emb, MaxResults: 10},
+			logger: zap.NewNop(),
+			store:  store,
+		},
+		stopWatcher: make(chan struct{}),
+	}
+
+	// Simulate an indexing run already holding the writer lock.
+	engine.indexMu.Lock()
+
+	done := make(chan error, 1)
+	go func() { done <- engine.IndexDocuments(context.Background()) }()
+
+	select {
+	case <-done:
+		engine.indexMu.Unlock()
+		t.Fatal("IndexDocuments ran while indexMu was held — writers are not serialised")
+	case <-time.After(150 * time.Millisecond):
+		// Expected: the second run is blocked on indexMu.
+	}
+
+	engine.indexMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("IndexDocuments after lock release: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("IndexDocuments did not complete after indexMu was released")
+	}
+}
+
 func TestCalculateIndexChanges_NewFiles(t *testing.T) {
 	e := &Engine{}
 
