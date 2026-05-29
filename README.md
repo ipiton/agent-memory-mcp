@@ -207,6 +207,28 @@ MCP_EMBEDDING_MAX_RETRIES=3    # default 1
 
 Invalid values fall back to the defaults, so the service still starts.
 
+#### Concurrency tuning when auto-index / file watcher is on
+
+A single-slot `llama-server` processes requests strictly serially. With `MCP_RAG_AUTO_INDEX` / `MCP_RAG_FILE_WATCHER` enabled, background reindex batches (50 chunks each) hold the only slot for tens of seconds, so interactive `recall` / `semantic_search` / `index_documents` queue behind them and hit `context deadline exceeded` — the server looks "degraded" even though throughput is fine. Give the embedding server parallel slots so interactive calls slip in alongside the batch:
+
+```bash
+llama-server -m bge-m3.gguf --embedding --pooling cls \
+  -c 32768 -b 8192 -ub 8192 \   # 8192 ctx PER SLOT (see note) — fits the largest chunk
+  -np 4 -cb \                   # 4 slots + continuous batching: interactive calls don't wait for the batch
+  --metrics                     # exposes Prometheus /metrics; /slots shows live slot occupancy
+```
+
+> **`-np` splits the context.** Per-slot context is `ctx_size / n_parallel`. bge-m3 is an encoder — every chunk must fit in one slot whole, and `-b`/`-ub` must be ≥ the largest chunk in tokens, or it fails with "input too large to process". So with `-np 4` you need `-c 32768` to keep 8192 per slot; **do not** lower `-c`, `-b`, or `-ub` below the single-slot value when adding slots.
+
+Measured effect (Apple Silicon, bge-m3 Q8_0): a 50-input batch drops from ~50s to ~5s, and an interactive probe under batch load drops from 8–20s to ~0.03s.
+
+Also smooth the reindex avalanche for large, frequently-edited files (whole-file re-chunk on every edit can re-trigger mid-cycle):
+
+```bash
+MCP_RAG_DEBOUNCE=2m         # default 30s — collapses bursts of edits into one reindex
+MCP_RAG_WATCH_INTERVAL=5m   # periodic full-scan cadence
+```
+
 ### 2. Start the local server
 
 For MCP clients such as Claude Desktop, Cursor, or Codex:
