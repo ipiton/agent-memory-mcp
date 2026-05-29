@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] - 2026-05-29
+
+Feature release. Memory preview truncation in MCP tool responses is now
+configurable, and the legacy byte-slice truncation that could corrupt
+multibyte content is gone.
+
+### Added
+
+- **`MCP_MEMORY_PREVIEW_RUNES` — configurable preview truncation** — memory `content`/`summary` fields in MCP tool responses (`recall_memory`, `list_memories`, `search_runbooks`, canonical-knowledge views, …) were hardcoded to per-surface caps (150/220/300). The new env var overrides that policy: `0` (default) keeps the built-in per-surface caps, a positive value forces that single rune cap on every surface, and a negative value disables truncation entirely so agents can read the full body of a runbook/decision. All preview paths now route through a single rune-aware `previewText` helper.
+
+### Fixed
+
+- **UTF-8 corruption on truncated previews** — `formatMemoryResults`/`formatMemoryList` still cut with the byte-based `s[:300]` idiom, which splits a multibyte sequence mid-codepoint on Cyrillic/CJK/emoji content and emits invalid UTF-8. Truncation is now rune-aware via `textfmt.Truncate` everywhere. Regression test `TestPreviewText` asserts the three policy branches and that a Cyrillic cut stays valid UTF-8.
+
 ## [0.8.5] - 2026-05-23
 
 Bugfix release. Removes the last concurrent-writer path that could still reach
