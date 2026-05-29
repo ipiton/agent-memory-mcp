@@ -104,7 +104,7 @@ func (s *MCPServer) formatProjectContextSummary(context string, focus string, se
 
 	sections := 0
 	if len(canonicalEntries) > 0 {
-		buf.WriteString(formatCanonicalKnowledgeList(canonicalEntries, context, service))
+		buf.WriteString(s.formatCanonicalKnowledgeList(canonicalEntries, context, service))
 		sections++
 	}
 	if len(decisions) > 0 {
@@ -234,7 +234,7 @@ func (s *MCPServer) formatProjectBankView(result *memory.ProjectBankViewResult) 
 				fmt.Fprintf(&buf, "   Updated: %s\n", item.UpdatedAt.UTC().Format(time.RFC3339))
 			}
 			if item.Summary != "" {
-				fmt.Fprintf(&buf, "   %s\n", truncateText(item.Summary, 220))
+				fmt.Fprintf(&buf, "   %s\n", s.previewText(item.Summary, 220))
 			}
 		}
 	}
@@ -242,7 +242,7 @@ func (s *MCPServer) formatProjectBankView(result *memory.ProjectBankViewResult) 
 	return strings.TrimSpace(buf.String())
 }
 
-func formatCanonicalKnowledgeList(entries []*memory.CanonicalKnowledge, context string, service string) string {
+func (s *MCPServer) formatCanonicalKnowledgeList(entries []*memory.CanonicalKnowledge, context string, service string) string {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "Canonical knowledge (%d):\n", len(entries))
 	for i, entry := range entries {
@@ -262,12 +262,12 @@ func formatCanonicalKnowledgeList(entries []*memory.CanonicalKnowledge, context 
 		if entry.Trust != nil {
 			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(entry.Trust))
 		}
-		fmt.Fprintf(&buf, "   %s\n", truncateText(entry.Summary, 220))
+		fmt.Fprintf(&buf, "   %s\n", s.previewText(entry.Summary, 220))
 	}
 	return buf.String()
 }
 
-func formatCanonicalKnowledgeRecall(query string, results []*memory.CanonicalSearchResult, context string, service string) string {
+func (s *MCPServer) formatCanonicalKnowledgeRecall(query string, results []*memory.CanonicalSearchResult, context string, service string) string {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "Canonical knowledge for '%s'\n", query)
 	if context != "" {
@@ -293,7 +293,7 @@ func formatCanonicalKnowledgeRecall(query string, results []*memory.CanonicalSea
 		if entry.Trust != nil {
 			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(entry.Trust))
 		}
-		fmt.Fprintf(&buf, "   %s\n", truncateText(entry.Summary, 220))
+		fmt.Fprintf(&buf, "   %s\n", s.previewText(entry.Summary, 220))
 	}
 	return buf.String()
 }
@@ -313,7 +313,7 @@ func (s *MCPServer) formatWorkflowMemoryResults(heading string, results []*memor
 		if result.Trust != nil {
 			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(result.Trust))
 		}
-		fmt.Fprintf(&buf, "   %s\n", truncateText(mem.Content, 220))
+		fmt.Fprintf(&buf, "   %s\n", s.previewText(mem.Content, 220))
 	}
 	return buf.String()
 }
@@ -329,7 +329,7 @@ func (s *MCPServer) formatWorkflowMemoryList(heading string, memories []*memory.
 		if len(mem.Tags) > 0 {
 			fmt.Fprintf(&buf, "   Tags: %v\n", mem.Tags)
 		}
-		fmt.Fprintf(&buf, "   %s\n", truncateText(mem.Content, 220))
+		fmt.Fprintf(&buf, "   %s\n", s.previewText(mem.Content, 220))
 	}
 	return buf.String()
 }
@@ -359,6 +359,29 @@ func (s *MCPServer) formatWorkflowDocResults(heading string, results *rag.Search
 // minimize churn across call sites.
 func truncateText(value string, maxLen int) string {
 	return textfmt.Truncate(value, maxLen)
+}
+
+// previewText applies the configured preview length policy for memory content
+// and summary fields in MCP tool responses.
+//
+//   - config.MemoryPreviewRunes == 0 (default): use the per-surface defaultLimit
+//     (currently 150 / 220 / 300 depending on the caller).
+//   - > 0: override every surface with that single rune cap.
+//   - < 0: disable truncation entirely and return the full text.
+//
+// Always rune-aware via textfmt.Truncate, so multibyte content (Cyrillic / CJK /
+// emoji) is never cut mid-codepoint — replaces the legacy byte-slice idiom that
+// was still in formatMemoryResults / formatMemoryList.
+func (s *MCPServer) previewText(value string, defaultLimit int) string {
+	override := s.config.MemoryPreviewRunes
+	if override < 0 {
+		return value
+	}
+	limit := defaultLimit
+	if override > 0 {
+		limit = override
+	}
+	return textfmt.Truncate(value, limit)
 }
 
 // Memory result formatting
@@ -395,11 +418,7 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 			fmt.Fprintf(&buf, "   Trust: %s\n", userio.FormatTrust(r.Trust))
 		}
 
-		snippet := m.Content
-		if len(snippet) > 300 {
-			snippet = snippet[:300] + "..."
-		}
-		fmt.Fprintf(&buf, "   Content: %s\n", snippet)
+		fmt.Fprintf(&buf, "   Content: %s\n", s.previewText(m.Content, 300))
 		fmt.Fprintf(&buf, "   Importance: %.1f | Access count: %d\n\n", m.Importance, m.AccessCount)
 	}
 
@@ -412,11 +431,7 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 		if len(m.Tags) > 0 {
 			fmt.Fprintf(&buf, "   Tags: %v\n", m.Tags)
 		}
-		snippet := m.Content
-		if len(snippet) > 300 {
-			snippet = snippet[:300] + "..."
-		}
-		fmt.Fprintf(&buf, "   Content: %s\n\n", snippet)
+		fmt.Fprintf(&buf, "   Content: %s\n\n", s.previewText(m.Content, 300))
 	}
 
 	return buf.String()
@@ -439,11 +454,7 @@ func (s *MCPServer) formatMemoryList(memories []*memory.Memory) string {
 			fmt.Fprintf(&buf, "   Context: %s\n", m.Context)
 		}
 
-		snippet := m.Content
-		if len(snippet) > 150 {
-			snippet = snippet[:150] + "..."
-		}
-		fmt.Fprintf(&buf, "   %s\n", snippet)
+		fmt.Fprintf(&buf, "   %s\n", s.previewText(m.Content, 150))
 		fmt.Fprintf(&buf, "   Created: %s\n\n", m.CreatedAt.Format("2006-01-02 15:04"))
 	}
 

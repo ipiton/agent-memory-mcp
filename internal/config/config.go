@@ -45,6 +45,12 @@ type Config struct {
 
 	// Memory configuration
 	MemoryEnabled bool
+	// MemoryPreviewRunes overrides the per-surface default truncation cap (rune-based)
+	// applied to memory content/summary fields in MCP tool responses. Default 0
+	// keeps the built-in per-surface caps (150/220/300). A positive value forces all
+	// surfaces to that limit. A negative value disables truncation entirely (full text).
+	// Env: MCP_MEMORY_PREVIEW_RUNES.
+	MemoryPreviewRunes int
 
 	// Document indexing configuration
 	IndexDirs         []string // Directories and files to index for RAG (relative to RootPath or absolute)
@@ -168,6 +174,7 @@ type envValues struct {
 	ragEnabled                       bool
 	ragMaxResults                    int
 	memoryEnabled                    bool
+	memoryPreviewRunes               int
 	dataPath                         string
 	ragIndexPath                     string
 	memoryDBPath                     string
@@ -252,6 +259,7 @@ func readEnvValues() (envValues, error) {
 		ragEnabled:                       EnvBool("MCP_RAG_ENABLED", true),
 		ragMaxResults:                    EnvInt("MCP_RAG_MAX_RESULTS", 10),
 		memoryEnabled:                    EnvBool("MCP_MEMORY_ENABLED", true),
+		memoryPreviewRunes:               EnvInt("MCP_MEMORY_PREVIEW_RUNES", 0),
 		dataPath:                         EnvOrDefault("MCP_DATA_PATH", ""),
 		ragIndexPath:                     EnvOrDefault("MCP_RAG_INDEX_PATH", ""),
 		memoryDBPath:                     EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
@@ -390,9 +398,10 @@ func resolvePaths(ev envValues) (Config, error) {
 		MemoryDBPath: memoryDBPath,
 		LogPath:      logPath,
 
-		RAGEnabled:    ev.ragEnabled,
-		RAGMaxResults: ev.ragMaxResults,
-		MemoryEnabled: ev.memoryEnabled,
+		RAGEnabled:         ev.ragEnabled,
+		RAGMaxResults:      ev.ragMaxResults,
+		MemoryEnabled:      ev.memoryEnabled,
+		MemoryPreviewRunes: ev.memoryPreviewRunes,
 
 		IndexDirs:         indexDirsList,
 		IndexExcludeDirs:  indexExcludeDirs,
