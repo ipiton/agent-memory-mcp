@@ -374,3 +374,37 @@ func TestLlamaCPPDisabledWhenBaseURLEmpty(t *testing.T) {
 		}
 	}
 }
+
+// TestOllamaNotDefaultedWhenLlamaCPPConfigured guards the fix for the dead
+// Ollama fallback: with llama.cpp wired up and OLLAMA_BASE_URL empty, Ollama
+// must NOT be force-defaulted into the chain (otherwise every llama.cpp failure
+// triggered connection-refused retries against a host that was removed).
+func TestOllamaNotDefaultedWhenLlamaCPPConfigured(t *testing.T) {
+	e, err := New(Config{
+		LlamaCPPBaseURL: "http://127.0.0.1:8090/v1",
+		LlamaCPPModel:   "bge-m3",
+		Dimension:       4,
+		Mode:            "local-only",
+		// OllamaBaseURL intentionally empty
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if e.config.OllamaBaseURL != "" {
+		t.Fatalf("OllamaBaseURL was force-defaulted to %q despite llama.cpp being configured", e.config.OllamaBaseURL)
+	}
+	for _, c := range e.batchCandidates("retrieval.passage") {
+		if strings.HasPrefix(c.provider.name(), "ollama/") {
+			t.Fatalf("Ollama (%s) joined the batch chain despite empty OLLAMA_BASE_URL + configured llama.cpp", c.provider.name())
+		}
+	}
+
+	// Conversely, with no local backend at all, Ollama still defaults (back-compat).
+	e2, err := New(Config{Dimension: 4, Mode: "local-only"}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if e2.config.OllamaBaseURL != defaultOllamaBaseURL {
+		t.Fatalf("Ollama should default when no other backend is set, got %q", e2.config.OllamaBaseURL)
+	}
+}

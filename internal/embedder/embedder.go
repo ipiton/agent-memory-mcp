@@ -87,7 +87,12 @@ func New(config Config, logger *zap.Logger) (*Embedder, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	if config.OllamaBaseURL == "" {
+	// Default to Ollama only when no other local backend is configured. With
+	// llama.cpp wired up, an empty OLLAMA_BASE_URL means "don't use Ollama" —
+	// forcing the default left a dead provider in the fallback chain, so every
+	// llama.cpp failure was followed by two connection-refused Ollama retries
+	// (bge-m3 + mxbai), tripling the failures and adding retry latency.
+	if config.OllamaBaseURL == "" && config.LlamaCPPBaseURL == "" {
 		config.OllamaBaseURL = defaultOllamaBaseURL
 	}
 	if config.Timeout == 0 {

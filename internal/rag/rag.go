@@ -510,6 +510,30 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			docsByID[doc.ID] = doc
 		}
 
+		// Build a content-hash → embedding reuse map from the existing chunks of
+		// each file we're about to re-index, BEFORE deleting them. Structure-aware
+		// chunking (T49) keeps unchanged sections byte-identical, so editing one
+		// section of a large file reuses the embeddings of every other section
+		// instead of re-embedding the whole file (T70 incremental re-index).
+		// Skipped on a full rebuild: the model or chunker may have changed, so old
+		// vectors are not reusable.
+		reuseEmbeddings := make(map[string][]float32)
+		if !needsRebuild {
+			for path := range chunkCountsByFile {
+				existing, err := re.vecService.store.ChunksByDocPath(path)
+				if err != nil {
+					re.logger.Warn("Failed to load existing chunks for reuse",
+						zap.String("path", path), zap.Error(err))
+					continue
+				}
+				for _, c := range existing {
+					if len(c.Embedding) > 0 {
+						reuseEmbeddings[calculateFileHash(c.Content)] = c.Embedding
+					}
+				}
+			}
+		}
+
 		// Delete old chunks before re-indexing to prevent stale data.
 		// Upsert (INSERT OR REPLACE) only replaces by chunk ID; if chunk
 		// count changes, orphaned chunks with higher indices would remain.
@@ -541,7 +565,7 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 				zap.Int("batch", batchNum+1),
 				zap.Int("total", totalBatches))
 
-			result, err := re.vecService.indexDocuments(ctx, batch)
+			result, err := re.vecService.indexDocuments(ctx, batch, reuseEmbeddings)
 			if err != nil {
 				return fmt.Errorf("failed to index: %w", err)
 			}
@@ -1157,36 +1181,61 @@ func applyRerankScores(results []SearchResult, scored []reranker.Scored, topN in
 	return final
 }
 
-func (vs *vectorService) indexDocuments(ctx context.Context, docs []document) (*indexResult, error) {
+// indexDocuments embeds and stores a batch of chunks. reuse maps a chunk's
+// content hash to an embedding carried over from a previous index of the same
+// file (T70 incremental re-index): chunks whose content is unchanged skip the
+// embedder entirely and reuse the existing vector, so editing one section of a
+// large file no longer re-embeds the whole file. reuse may be nil.
+func (vs *vectorService) indexDocuments(ctx context.Context, docs []document, reuse map[string][]float32) (*indexResult, error) {
 	result := &indexResult{
 		SuccessIDs: make([]string, 0, len(docs)),
 		FailedIDs:  make([]string, 0),
 		Errors:     make([]error, 0),
 	}
 
-	// Collect texts for batch embedding
-	texts := make([]string, len(docs))
+	// Partition into chunks we can reuse (content unchanged) and chunks that
+	// still need embedding. embedDocIdx maps each embedded text back to its
+	// position in docs.
+	reused := make(map[int][]float32, len(docs))
+	texts := make([]string, 0, len(docs))
+	embedDocIdx := make([]int, 0, len(docs))
 	for i, doc := range docs {
-		texts[i] = doc.Content
+		if emb, ok := reuse[calculateFileHash(doc.Content)]; ok && len(emb) > 0 {
+			reused[i] = emb
+			continue
+		}
+		texts = append(texts, doc.Content)
+		embedDocIdx = append(embedDocIdx, i)
 	}
 
-	// Batch embed all texts at once
-	batchResult, err := vs.config.Embedder.BatchEmbedDetailed(ctx, texts)
-	if err != nil {
-		// Batch failed entirely — mark all as failed
-		for _, doc := range docs {
-			result.FailedIDs = append(result.FailedIDs, doc.ID)
-		}
-		result.Errors = append(result.Errors, err)
-		vs.logger.Error("Batch embedding failed", zap.Error(err), zap.Int("count", len(docs)))
-		return result, nil
+	// finalEmb[i] is the embedding for docs[i] — reused or freshly computed.
+	finalEmb := make([][]float32, len(docs))
+	for i, emb := range reused {
+		finalEmb[i] = emb
 	}
-	result.ModelID = batchResult.ModelID
-	embeddings := batchResult.Embeddings
+	if len(texts) > 0 {
+		batchResult, err := vs.config.Embedder.BatchEmbedDetailed(ctx, texts)
+		if err != nil {
+			// Batch failed entirely — mark all as failed
+			for _, doc := range docs {
+				result.FailedIDs = append(result.FailedIDs, doc.ID)
+			}
+			result.Errors = append(result.Errors, err)
+			vs.logger.Error("Batch embedding failed", zap.Error(err), zap.Int("count", len(docs)))
+			return result, nil
+		}
+		result.ModelID = batchResult.ModelID
+		for pos, docIdx := range embedDocIdx {
+			if pos < len(batchResult.Embeddings) {
+				finalEmb[docIdx] = batchResult.Embeddings[pos]
+			}
+		}
+	}
 
 	var chunks []vectorstore.Chunk
 	for i, doc := range docs {
-		if i >= len(embeddings) || embeddings[i] == nil {
+		emb := finalEmb[i]
+		if emb == nil {
 			vs.logger.Warn("Nil embedding for document", zap.String("id", doc.ID))
 			result.FailedIDs = append(result.FailedIDs, doc.ID)
 			result.Errors = append(result.Errors, fmt.Errorf("nil embedding for doc %s", doc.ID))
@@ -1199,10 +1248,16 @@ func (vs *vectorService) indexDocuments(ctx context.Context, docs []document) (*
 			Content:      doc.Content,
 			Title:        doc.Title,
 			LastModified: doc.LastModified,
-			Embedding:    embeddings[i],
+			Embedding:    emb,
 		})
 
 		result.SuccessIDs = append(result.SuccessIDs, doc.ID)
+	}
+
+	if reusedCount := len(reused); reusedCount > 0 {
+		vs.logger.Info("Reused embeddings for unchanged chunks",
+			zap.Int("reused", reusedCount),
+			zap.Int("embedded", len(texts)))
 	}
 
 	if len(chunks) > 0 {

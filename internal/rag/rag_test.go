@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1157,5 +1158,139 @@ func TestApplyReranker_ClampsTopN_To_100(t *testing.T) {
 	}
 	if len(cap.received) < 100 {
 		t.Fatalf("reranker received %d candidates, want exactly 100 (clamp should apply)", len(cap.received))
+	}
+}
+
+// newCountingEmbeddingServer is an Ollama-compatible embedding server that
+// returns one embedding per input text and counts how many texts it embedded,
+// so tests can assert incremental re-index reused unchanged chunks.
+func newCountingEmbeddingServer(t *testing.T, counter *atomic.Int64) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/embed": // batch — counts toward re-embedded chunks
+			var req struct {
+				Input []string `json:"input"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			counter.Add(int64(len(req.Input)))
+			embs := make([][]float64, len(req.Input))
+			for i := range embs {
+				embs[i] = []float64{0.9, 0.1}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": embs})
+		case "/api/embeddings": // single — used by detectModelID, not counted
+			_ = json.NewEncoder(w).Encode(map[string]any{"embedding": []float64{0.9, 0.1}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+// TestIndexDocumentsReusesUnchangedChunks is the T70 guard: editing one section
+// of a multi-section file must re-embed only that section's chunk(s) and reuse
+// the embeddings of the unchanged sections, instead of re-embedding the whole
+// file as the old file-level diff did.
+func TestIndexDocumentsReusesUnchangedChunks(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	docPath := filepath.Join(repoRoot, "docs", "big.md")
+
+	v1 := "# Big Doc\n\n" +
+		"## Section A\n" + strings.Repeat("alpha content here. ", 20) + "\n\n" +
+		"## Section B\n" + strings.Repeat("beta content here. ", 20) + "\n\n" +
+		"## Section C\n" + strings.Repeat("gamma content here. ", 20) + "\n"
+	if err := os.WriteFile(docPath, []byte(v1), 0o644); err != nil {
+		t.Fatalf("write v1: %v", err)
+	}
+
+	var embedded atomic.Int64
+	server := newCountingEmbeddingServer(t, &embedded)
+	defer server.Close()
+
+	emb, err := embedder.New(embedder.Config{
+		OllamaBaseURL: server.URL,
+		Dimension:     2,
+		Mode:          "local-only",
+		MaxRetries:    0,
+		Timeout:       time.Second,
+	}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("embedder.New: %v", err)
+	}
+
+	store, err := vectorstore.NewSQLiteStore(filepath.Join(t.TempDir(), "vectors.db"), 2, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	engine := &Engine{
+		config:   config.Config{RootPath: repoRoot, RAGMaxResults: 10},
+		repoRoot: repoRoot,
+		logger:   zap.NewNop(),
+		docService: newDocumentService(docServiceConfig{
+			RepoRoot:     repoRoot,
+			IndexDirs:    []string{"docs"},
+			ChunkSize:    2000,
+			ChunkOverlap: 200,
+		}, zap.NewNop()),
+		vecService: &vectorService{
+			config: vecServiceConfig{Embedder: emb, MaxResults: 10},
+			logger: zap.NewNop(),
+			store:  store,
+		},
+		stopWatcher: make(chan struct{}),
+	}
+
+	// First index: every chunk embedded.
+	if err := engine.IndexDocuments(context.Background()); err != nil {
+		t.Fatalf("first IndexDocuments: %v", err)
+	}
+	totalChunks := store.Count()
+	if totalChunks < 3 {
+		t.Fatalf("expected >=3 chunks (3 sections), got %d", totalChunks)
+	}
+	if first := embedded.Load(); first < int64(totalChunks) {
+		t.Fatalf("first run embedded %d, want >= %d (all chunks)", first, totalChunks)
+	}
+
+	// Edit only Section B; A and C stay byte-identical.
+	v2 := strings.Replace(v1,
+		"## Section B\n"+strings.Repeat("beta content here. ", 20),
+		"## Section B\n"+strings.Repeat("beta REVISED content. ", 25), 1)
+	if v2 == v1 {
+		t.Fatal("edit did not change the document")
+	}
+	if err := os.WriteFile(docPath, []byte(v2), 0o644); err != nil {
+		t.Fatalf("write v2: %v", err)
+	}
+
+	embedded.Store(0) // reset for the second run
+	if err := engine.IndexDocuments(context.Background()); err != nil {
+		t.Fatalf("second IndexDocuments: %v", err)
+	}
+	second := embedded.Load()
+
+	if second == 0 {
+		t.Fatal("second run embedded 0 chunks; the edited section was not re-embedded")
+	}
+	if second >= int64(totalChunks) {
+		t.Fatalf("second run embedded %d of %d chunks; reuse did not kick in", second, totalChunks)
+	}
+
+	// The revised content must be present in the index.
+	chunks, err := store.ChunksByDocPath("docs/big.md")
+	if err != nil {
+		t.Fatalf("ChunksByDocPath: %v", err)
+	}
+	var joined strings.Builder
+	for _, c := range chunks {
+		joined.WriteString(c.Content)
+	}
+	if !strings.Contains(joined.String(), "REVISED") {
+		t.Fatal("revised section content not found in index after re-index")
 	}
 }
