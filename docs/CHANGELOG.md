@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2026-05-30
+
+Performance release. Fixes the recurring `index_documents` slowdown/timeouts on
+local embedding backends by re-embedding only what actually changed and removing
+a dead fallback provider.
+
+### Added
+
+- **Incremental re-index — reuse embeddings of unchanged chunks (T70)** — the indexer diffed at the file level: any edit (or even a `mod_time`-only touch) re-embedded **every** chunk of the file. A one-line change to a 507-chunk planning doc recomputed all 507 embeddings, producing 6-minute reindex cycles, embedding-slot starvation, and 60s batch timeouts on the local bge-m3 backend. `indexDocuments` now builds a content-hash → embedding reuse map from the file's existing chunks before deleting them; structure-aware chunking (T49) keeps unchanged sections byte-identical, so only the edited section's chunks are re-embedded and the rest reuse their stored vectors. Reuse is skipped on a full rebuild (a model or chunker-version change invalidates old vectors). An unchanged file now reuses every embedding (zero embed calls), neutralising the `mod_time`-triggers-full-reindex path.
+
+### Fixed
+
+- **Dead Ollama fallback tripled every llama.cpp failure** — `Embedder.New` force-defaulted `OLLAMA_BASE_URL` to `localhost:11434` whenever it was empty, so Ollama always joined the candidate chain. After a host switched from Ollama to llama.cpp, every llama.cpp batch failure was followed by two connection-refused retries (`bge-m3` + `mxbai-embed-large`) — hundreds of dead failures per day in the logs plus retry latency on the indexing hot path. Ollama now defaults only when no other local backend (llama.cpp) is configured; an explicit `OLLAMA_BASE_URL` still enables it, and Ollama-only setups are unaffected.
+
 ## [0.8.6] - 2026-05-29
 
 Feature release. Memory preview truncation in MCP tool responses is now
