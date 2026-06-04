@@ -873,6 +873,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_RERANK_TIMEOUT` | `5s` | Hard timeout for one rerank call; on timeout the hybrid order is kept and `rerank_failed:timeout` is added to debug signals |
 | `MCP_RERANK_TOP_N` | `40` | Number of top hybrid candidates sent to the reranker; clamped to `100` at call time |
 | `MCP_SEDIMENT_ENABLED` | `false` | Enable layer-aware retrieval scoring (character always surfaced, surface excluded outside context). Schema migration + backfill always run; only retrieval weighting is gated. See `docs/SEDIMENTATION.md` |
+| `MCP_RECALL_HALFLIFE_DAYS` | `30` | T68 exponential age decay on recall scoring (half-life in days; a card this old scores at half weight). `0` disables decay. Evergreen entries (canonical knowledge, character layer) never decay |
 | `MCP_RAG_KEEP_NOISE` | `false` | T49 escape hatch: keep noisy Markdown sections (Table of Contents / References / Changelog / etc.) in the index instead of dropping them at chunking time |
 | `MCP_TRIPLE_EXTRACTOR_ENABLED` | `false` | T50 knowledge-graph layer. Enable to fire an async LLM call on every memory write that extracts 3-7 (subj, rel, obj) triples powering `recall_multihop` |
 | `MCP_TRIPLE_EXTRACTOR_BASE_URL` | - | OpenAI-compatible `/chat/completions` endpoint (DeepSeek, Together, Groq, Qwen, …); falls back to `OPENAI_BASE_URL` when empty |

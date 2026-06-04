@@ -172,6 +172,12 @@ type Store struct {
 	// a lock. Default (false) preserves pre-T48 Recall behaviour verbatim.
 	sedimentEnabled atomic.Bool
 
+	// recallDecayLambda holds math.Float64bits(λ) for T68 exponential age
+	// decay in Recall scoring. Set via SetRecallHalfLife; retrieval reads the
+	// atomic without a lock. Default (0) means decay off — direct NewStore
+	// callers (and tests) keep pre-T68 Recall behaviour until configured.
+	recallDecayLambda atomic.Uint64
+
 	// tripleExtractor (T50 slice 2) is an optional LLM-backed component that
 	// turns a stored memory into knowledge-graph (subj, rel, obj) triples
 	// asynchronously. Nil when MCP_TRIPLE_EXTRACTOR_ENABLED is false; the

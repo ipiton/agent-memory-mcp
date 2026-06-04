@@ -31,6 +31,8 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
+	// T68: match server-side recall scoring (exponential age decay).
+	store.SetRecallHalfLife(cfg.RecallHalfLifeDays)
 
 	cleanup := func() { _ = store.Close() }
 	return store, cleanup, nil

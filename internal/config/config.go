@@ -145,6 +145,12 @@ type Config struct {
 	// not change behaviour.
 	SedimentEnabled bool // MCP_SEDIMENT_ENABLED (default: false)
 
+	// RecallHalfLifeDays controls T68 exponential age decay in recall scoring:
+	// a memory one half-life old scores at half its undecayed weight. 0 (or
+	// negative) disables decay entirely. Evergreen entries (canonical knowledge,
+	// character layer) never decay regardless of this value.
+	RecallHalfLifeDays float64 // MCP_RECALL_HALFLIFE_DAYS (default: 30; 0 = off)
+
 	// SedimentScheduleInterval — opt-in background schedule for
 	// RunSedimentCycle. Zero = never scheduled (CLI / MCP tool only).
 	// Scheduling only fires when SedimentEnabled==true AND the interval > 0.
@@ -234,6 +240,7 @@ type envValues struct {
 	rerankTopN                       int
 	sedimentEnabled                  bool
 	sedimentScheduleInterval         string
+	recallHalfLifeDays               float64
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -319,6 +326,7 @@ func readEnvValues() (envValues, error) {
 		rerankTopN:                       EnvInt("MCP_RERANK_TOP_N", 40),
 		sedimentEnabled:                  EnvBool("MCP_SEDIMENT_ENABLED", false),
 		sedimentScheduleInterval:         EnvOrDefault("MCP_SEDIMENT_SCHEDULE_INTERVAL", "0"),
+		recallHalfLifeDays:               EnvFloat("MCP_RECALL_HALFLIFE_DAYS", 30),
 	}, nil
 }
 
@@ -467,6 +475,7 @@ func resolvePaths(ev envValues) (Config, error) {
 
 		SedimentEnabled:          ev.sedimentEnabled,
 		SedimentScheduleInterval: parseDurationOrDefault(ev.sedimentScheduleInterval, 0),
+		RecallHalfLifeDays:       ev.recallHalfLifeDays,
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
 		re, err := regexp.Compile(slugPattern)

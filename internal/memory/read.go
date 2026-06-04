@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -99,6 +100,37 @@ func (ms *Store) LastInContext(ctx context.Context, contextName string, since ti
 	return full, nil
 }
 
+// SetRecallHalfLife configures exponential age decay for Recall scoring (T68).
+// days <= 0 disables decay; otherwise λ = ln(2)/days so a memory exactly one
+// half-life old scores at half its undecayed weight. Set once at startup
+// (idempotent); retrieval reads the atomic without a lock.
+func (ms *Store) SetRecallHalfLife(days float64) {
+	var lambda float64
+	if days > 0 {
+		lambda = math.Ln2 / days
+	}
+	ms.recallDecayLambda.Store(math.Float64bits(lambda))
+}
+
+// recallDecayMultiplier returns e^(-λ·ageDays) for m (T68), or 1.0 when decay is
+// disabled (λ<=0) or m is evergreen. Evergreen = canonical knowledge
+// (lifecycle/knowledge-layer canonical) or character-layer identity, both of
+// which are stable by design and must not lose rank purely with age.
+func (ms *Store) recallDecayMultiplier(m *cachedMemory, now time.Time) float64 {
+	lambda := math.Float64frombits(ms.recallDecayLambda.Load())
+	if lambda <= 0 {
+		return 1.0
+	}
+	if m.Lifecycle == LifecycleCanonical || m.KnowledgeLayer == "canonical" || m.SedimentLayer == LayerCharacter {
+		return 1.0
+	}
+	ageDays := now.Sub(m.CreatedAt).Hours() / 24
+	if ageDays <= 0 {
+		return 1.0
+	}
+	return math.Exp(-lambda * ageDays)
+}
+
 // Recall searches memories by semantic similarity, applying filters and importance weighting.
 func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limit int) ([]*SearchResult, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
@@ -181,6 +213,14 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 
 		weightedScore := score*(baseW+m.Importance*importanceW+trust.Confidence*confidenceW) + trust.FreshnessScore*freshnessW
+
+		// T68: exponential age decay — a MULTIPLIER on the relevance/trust
+		// score (decision variant (a)). This is a distinct axis from
+		// trust.FreshnessScore (source-verification recency); decay reflects
+		// calendar age since created_at. Applied before the additive layer
+		// boosts below so character's always-surface boost is never eroded by
+		// age, and so a stale non-evergreen card can fall under minScore.
+		weightedScore *= ms.recallDecayMultiplier(m, now)
 
 		// T48 layer boost. Character memories are always-surfaced — they
 		// skip the minScore cutoff below so even unrelated queries see

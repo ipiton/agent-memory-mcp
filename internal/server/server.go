@@ -157,6 +157,9 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			// Recall knows whether to apply layer-aware scoring.
 			memoryStore.SetSedimentEnabled(cfg.SedimentEnabled)
 
+			// T68: configure exponential age decay for recall scoring.
+			memoryStore.SetRecallHalfLife(cfg.RecallHalfLifeDays)
+
 			// T50 slice 2: optional knowledge-graph triple extractor.
 			// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If
 			// configuration is incomplete we log a warning and proceed
