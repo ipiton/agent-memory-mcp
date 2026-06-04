@@ -240,10 +240,90 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 		mem.Metadata[key] = value
 	}
 
+	// T71: idempotent write boundary — only for the terminal session-summary
+	// write (the auto-hook SessionEnd raw summary and explicit close_session).
+	// Checkpoints and review-queue items keep their own pipelines (checkpoints
+	// have their own near-duplicate gate via hooks.Check / T45). If a terminal
+	// episodic for this slug already exists within the session window (a prior
+	// session summary or a /finalize "Task complete:" record), fold this summary
+	// into it instead of creating a second near-identical episodic. Cross-session
+	// duplicates are left to the steward (T69).
+	if recordKind == memory.RecordKindSessionSummary {
+		target, err := s.findConsolidationTarget(ctx, summary)
+		if err != nil {
+			return "", err
+		}
+		if target != nil {
+			updates := memory.Update{
+				Tags:     mergeTags(target.Tags, mem.Tags),
+				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+			}
+			if shouldReplaceContent(target.Content, mem.Content) {
+				updates.Content = mem.Content
+			}
+			if mem.Importance > target.Importance {
+				importance := mem.Importance
+				updates.Importance = &importance
+			}
+			if err := s.store.Update(ctx, target.ID, updates); err != nil {
+				return "", err
+			}
+			return target.ID, nil
+		}
+	}
+
 	if err := s.store.Store(ctx, mem); err != nil {
 		return "", err
 	}
 	return mem.ID, nil
+}
+
+// consolidationWindow bounds how far back the session-close writer looks for an
+// existing terminal episodic of the same slug to fold into. It covers a single
+// working session; cross-session duplicates are deferred to the steward (T69).
+const consolidationWindow = 6 * time.Hour
+
+// findConsolidationTarget returns the most recent terminal episodic memory in
+// summary.Context created within consolidationWindow, or nil when none exists.
+func (s *Service) findConsolidationTarget(ctx context.Context, summary memory.SessionSummary) (*memory.Memory, error) {
+	slug := strings.TrimSpace(summary.Context)
+	if slug == "" {
+		return nil, nil
+	}
+	existing, err := s.store.List(ctx, memory.Filters{Context: slug, Type: memory.TypeEpisodic}, 0)
+	if err != nil {
+		return nil, err
+	}
+	cutoff := s.now().Add(-consolidationWindow)
+	var target *memory.Memory
+	for _, m := range existing {
+		if m == nil || m.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if !isTerminalRecord(m) {
+			continue
+		}
+		if target == nil || m.CreatedAt.After(target.CreatedAt) {
+			target = m
+		}
+	}
+	return target, nil
+}
+
+// isTerminalRecord reports whether m is a session-terminal episodic that T71
+// deduplicates: a prior session summary (record_kind=session_summary) or a
+// /finalize "Task complete:" record (recognised by title prefix, since that
+// path carries no reliable record_kind). Session checkpoints are explicitly
+// excluded — they are intra-session ticks with their own dedup gate (T45) and
+// share the session-close tags, so a tag heuristic would wrongly fold them.
+func isTerminalRecord(m *memory.Memory) bool {
+	switch m.Metadata[memory.MetadataRecordKind] {
+	case memory.RecordKindSessionSummary:
+		return true
+	case memory.RecordKindSessionCheckpoint:
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(m.Title), "Task complete:")
 }
 
 func normalizeSummary(summary memory.SessionSummary, now time.Time) (memory.SessionSummary, error) {
