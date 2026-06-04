@@ -25,30 +25,30 @@ const (
 type PolicyMode string
 
 const (
-	PolicyModeOff          PolicyMode = "off"
-	PolicyModeManual       PolicyMode = "manual"
-	PolicyModeScheduled    PolicyMode = "scheduled"
-	PolicyModeEventDriven  PolicyMode = "event_driven"
+	PolicyModeOff         PolicyMode = "off"
+	PolicyModeManual      PolicyMode = "manual"
+	PolicyModeScheduled   PolicyMode = "scheduled"
+	PolicyModeEventDriven PolicyMode = "event_driven"
 )
 
 // ActionKind describes what a steward action does.
 type ActionKind string
 
 const (
-	ActionMergeDuplicates       ActionKind = "merge_duplicates"
-	ActionMarkStale             ActionKind = "mark_stale"
-	ActionPromoteCanonical      ActionKind = "promote_canonical"
-	ActionRefreshFreshness      ActionKind = "refresh_freshness"
-	ActionFlagConflict          ActionKind = "flag_conflict"
-	ActionFlagContradiction     ActionKind = "flag_contradiction"
-	ActionDeleteExpiredWorking  ActionKind = "delete_expired_working"
+	ActionMergeDuplicates      ActionKind = "merge_duplicates"
+	ActionMarkStale            ActionKind = "mark_stale"
+	ActionPromoteCanonical     ActionKind = "promote_canonical"
+	ActionRefreshFreshness     ActionKind = "refresh_freshness"
+	ActionFlagConflict         ActionKind = "flag_conflict"
+	ActionFlagContradiction    ActionKind = "flag_contradiction"
+	ActionDeleteExpiredWorking ActionKind = "delete_expired_working"
 )
 
 // ActionHandling indicates whether an action can be auto-applied.
 type ActionHandling string
 
 const (
-	HandlingSafeAutoApply ActionHandling = "safe_auto_apply"
+	HandlingSafeAutoApply  ActionHandling = "safe_auto_apply"
 	HandlingReviewRequired ActionHandling = "review_required"
 )
 
@@ -78,14 +78,23 @@ type Policy struct {
 
 	// Working memory has a separate, more aggressive TTL because working entries
 	// are short-lived by design (transient task state, session-extracted noise).
-	WorkingMemoryTTLDays           int     `json:"working_memory_ttl_days"`           // 0 = disabled
-	WorkingDeleteImportanceCutoff  float64 `json:"working_delete_importance_cutoff"`  // entries above are sent to review, not auto-deleted
+	WorkingMemoryTTLDays          int     `json:"working_memory_ttl_days"`          // 0 = disabled
+	WorkingDeleteImportanceCutoff float64 `json:"working_delete_importance_cutoff"` // entries above are sent to review, not auto-deleted
 
 	// Auto-apply rules — only applied when dry_run=false.
-	AutoMergeExactDuplicates   bool `json:"auto_merge_exact_duplicates"`     // default false
-	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`     // 0 = disabled
-	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"`   // default true
-	AutoDeleteExpiredWorking   bool `json:"auto_delete_expired_working"`     // default true
+	AutoMergeExactDuplicates   bool `json:"auto_merge_exact_duplicates"`   // default false
+	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`   // 0 = disabled
+	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"` // default true
+	AutoDeleteExpiredWorking   bool `json:"auto_delete_expired_working"`   // default true
+
+	// Auto-merge of subject-key duplicate groups (T69). Opt-in and guarded:
+	// a group auto-merges only when its detection confidence >= MinConfidence
+	// AND every non-primary member is textually near-identical to the primary
+	// (Jaccard >= the content-similarity threshold) AND no member is canonical.
+	// MinConfidence <= 0 disables auto-merge entirely (default and the safe value
+	// for policies loaded from DB before these fields existed).
+	AutoMergeDuplicateMinConfidence   float64 `json:"auto_merge_duplicate_min_confidence"`   // default 0.95; <=0 = disabled
+	AutoMergeRequireContentSimilarity float64 `json:"auto_merge_require_content_similarity"` // default 0.85; min Jaccard(primary,dup)
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -117,23 +126,36 @@ func (p Policy) EffectiveWorkingDeleteImportanceCutoff() float64 {
 	return p.WorkingDeleteImportanceCutoff
 }
 
+// EffectiveAutoMergeContentSimilarity returns the minimum Jaccard similarity a
+// non-primary duplicate must share with the primary before an auto-merge is
+// allowed, falling back to 0.85 when unset (so enabling auto-merge via
+// MinConfidence alone still keeps a high content guard).
+func (p Policy) EffectiveAutoMergeContentSimilarity() float64 {
+	if p.AutoMergeRequireContentSimilarity <= 0 {
+		return 0.85
+	}
+	return p.AutoMergeRequireContentSimilarity
+}
+
 // DefaultPolicy returns the starting policy for new installations.
 func DefaultPolicy() Policy {
 	return Policy{
-		Mode:                          PolicyModeManual,
-		ScheduleInterval:              "24h",
-		EventTriggers:                 []string{"session_close"},
-		DuplicateSimilarity:           0.85,
-		StaleDays:                     30,
-		CanonicalMinConfidence:        0.80,
-		CanonicalMinEvidence:          2,
-		WorkingMemoryTTLDays:          14,
-		WorkingDeleteImportanceCutoff: 0.5,
-		AutoMergeExactDuplicates:      false,
-		AutoMarkStaleBeyondDays:       0,
-		AutoRefreshFreshnessScores:    true,
-		AutoDeleteExpiredWorking:      true,
-		UpdatedAt:                     time.Now().UTC(),
+		Mode:                              PolicyModeManual,
+		ScheduleInterval:                  "24h",
+		EventTriggers:                     []string{"session_close"},
+		DuplicateSimilarity:               0.85,
+		StaleDays:                         30,
+		CanonicalMinConfidence:            0.80,
+		CanonicalMinEvidence:              2,
+		WorkingMemoryTTLDays:              14,
+		WorkingDeleteImportanceCutoff:     0.5,
+		AutoMergeExactDuplicates:          false,
+		AutoMarkStaleBeyondDays:           0,
+		AutoRefreshFreshnessScores:        true,
+		AutoDeleteExpiredWorking:          true,
+		AutoMergeDuplicateMinConfidence:   0.95,
+		AutoMergeRequireContentSimilarity: 0.85,
+		UpdatedAt:                         time.Now().UTC(),
 	}
 }
 
@@ -151,15 +173,15 @@ type Action struct {
 
 // RunStats summarizes a steward run.
 type RunStats struct {
-	Scanned               int `json:"scanned"`
-	DuplicatesFound       int `json:"duplicates_found"`
-	ConflictsFound        int `json:"conflicts_found"`
-	ContradictionsFound   int `json:"contradictions_found"`
-	StaleFound            int `json:"stale_found"`
-	ExpiredWorkingFound   int `json:"expired_working_found"`
-	PromotionCandidates   int `json:"promotion_candidates"`
-	ActionsApplied        int `json:"actions_applied"`
-	ActionsPendingReview  int `json:"actions_pending_review"`
+	Scanned              int `json:"scanned"`
+	DuplicatesFound      int `json:"duplicates_found"`
+	ConflictsFound       int `json:"conflicts_found"`
+	ContradictionsFound  int `json:"contradictions_found"`
+	StaleFound           int `json:"stale_found"`
+	ExpiredWorkingFound  int `json:"expired_working_found"`
+	PromotionCandidates  int `json:"promotion_candidates"`
+	ActionsApplied       int `json:"actions_applied"`
+	ActionsPendingReview int `json:"actions_pending_review"`
 }
 
 // Report is the result of a steward run.
@@ -179,12 +201,12 @@ type Report struct {
 
 // CanonicalHealth summarizes the state of canonical knowledge entries.
 type CanonicalHealth struct {
-	Total         int                `json:"total"`
-	Stale         int                `json:"stale"`
-	Unverified    int                `json:"unverified"`
-	Conflicting   int                `json:"conflicting"`
-	LowSupport    int                `json:"low_support"`
-	Issues        []CanonicalIssue   `json:"issues,omitempty"`
+	Total       int              `json:"total"`
+	Stale       int              `json:"stale"`
+	Unverified  int              `json:"unverified"`
+	Conflicting int              `json:"conflicting"`
+	LowSupport  int              `json:"low_support"`
+	Issues      []CanonicalIssue `json:"issues,omitempty"`
 }
 
 // CanonicalIssue describes a problem with a canonical entry.

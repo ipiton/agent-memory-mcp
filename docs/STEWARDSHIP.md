@@ -106,9 +106,35 @@ Policy fields:
   "canonical_min_evidence": 2,
   "auto_merge_exact_duplicates": false,
   "auto_mark_stale_beyond_days": 0,
-  "auto_refresh_freshness_scores": true
+  "auto_refresh_freshness_scores": true,
+  "auto_merge_duplicate_min_confidence": 0.95,
+  "auto_merge_require_content_similarity": 0.85
 }
 ```
+
+#### Auto-merge duplicates (opt-in)
+
+Subject-key duplicate groups (e.g. several `Session close / X` for one context)
+are detected with a fixed confidence of `0.75` and, by default, queued as
+`review_required` — the default `auto_merge_duplicate_min_confidence` of `0.95`
+is above that detection confidence, so nothing auto-merges and existing behavior
+is preserved.
+
+Lower `auto_merge_duplicate_min_confidence` to `0.75` (or below) to let a steward
+run with `dry_run=false` apply these merges automatically. A group only
+auto-merges when **all** of the following hold:
+
+- the detection confidence (`0.75`) is at or above the configured min-confidence;
+- every non-primary member is textually near-identical to the primary —
+  `JaccardSimilarity(primary, member) >= auto_merge_require_content_similarity`
+  (default `0.85`) — so archiving it loses no unique content;
+- no member is canonical (canonical knowledge is never auto-archived).
+
+Groups that fail the content-similarity guard or contain canonical entries stay
+`review_required`. A value of `0` for `auto_merge_duplicate_min_confidence`
+disables auto-merge entirely (this is also how policies persisted before these
+fields existed behave). This is the cleanup-side complement to the write-time
+idempotency that prevents most duplicate session-close records at the source.
 
 ### steward_status
 

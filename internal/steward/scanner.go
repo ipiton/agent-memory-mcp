@@ -6,9 +6,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 )
+
+// dupGroupConfidence is the fixed detection confidence assigned to subject-key
+// duplicate groups. It is the single source of truth shared by the emitted
+// Action and the auto-merge gate (a group auto-merges only when the policy's
+// min-confidence is at or below this value).
+const dupGroupConfidence = 0.75
 
 // maxScanMemories is the safety limit for the number of memories loaded into RAM
 // during a single scan pass. Prevents OOM on large knowledge bases.
@@ -134,17 +141,59 @@ func scanDuplicates(memories []*memory.Memory, policy Policy, result *ScanResult
 
 		title := displayTitle(g.members[0], 60)
 
+		handling := HandlingReviewRequired
+		evidence := []string{fmt.Sprintf("group_size=%d", len(g.members))}
+		if minSim, ok := shouldAutoMergeGroup(g.members, policy); ok {
+			handling = HandlingSafeAutoApply
+			evidence = append(evidence, fmt.Sprintf("min_content_similarity=%.2f", minSim))
+		}
+
 		result.Actions = append(result.Actions, Action{
 			Kind:       ActionMergeDuplicates,
-			Handling:   HandlingReviewRequired,
+			Handling:   handling,
 			State:      StatePlanned,
 			TargetIDs:  ids,
 			Title:      fmt.Sprintf("Duplicate group: %s (%d entries)", title, len(g.members)),
 			Rationale:  fmt.Sprintf("Memories share the same entity/service/context/subject key: %s", g.key),
-			Evidence:   []string{fmt.Sprintf("group_size=%d", len(g.members))},
-			Confidence: 0.75,
+			Evidence:   evidence,
+			Confidence: dupGroupConfidence,
 		})
 	}
+}
+
+// shouldAutoMergeGroup reports whether a subject-key duplicate group is safe to
+// auto-merge (T69), returning the minimum primary-vs-duplicate content
+// similarity observed. A group qualifies only when:
+//   - the policy opts in via AutoMergeDuplicateMinConfidence (<=0 disables it,
+//     which is also the safe default for policies persisted before this field)
+//     and that threshold is at or below the group's detection confidence;
+//   - no member is canonical (canonical knowledge is never auto-archived);
+//   - every non-primary member is textually near-identical to the primary
+//     (Jaccard >= the content-similarity threshold), so merging archives no
+//     unique content.
+func shouldAutoMergeGroup(members []*memory.Memory, policy Policy) (float64, bool) {
+	minConf := policy.AutoMergeDuplicateMinConfidence
+	if minConf <= 0 || dupGroupConfidence < minConf {
+		return 0, false
+	}
+	for _, m := range members {
+		if memory.IsCanonicalMemory(m) {
+			return 0, false
+		}
+	}
+	threshold := policy.EffectiveAutoMergeContentSimilarity()
+	primary := members[0]
+	minSim := 1.0
+	for _, m := range members[1:] {
+		sim := hooks.JaccardSimilarity(primary.Content, m.Content)
+		if sim < minSim {
+			minSim = sim
+		}
+		if sim < threshold {
+			return 0, false
+		}
+	}
+	return minSim, true
 }
 
 // scanConflicts finds memories with conflicting statuses or multiple canonical entries.
