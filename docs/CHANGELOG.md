@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] - 2026-06-04
+
+Feature release. Recall now applies exponential age decay so stale memories sink,
+and the duplicate `Session close / X` records that bloated the steward review
+inbox are tackled on both sides — prevented at write time and auto-mergeable in
+the steward.
+
+### Added
+
+- **Temporal decay for recall scoring (T68)** — recall ranking weighted relevance by importance, confidence, and a soft trust-freshness term, but had no explicit decay by age: a month-old episodic competed almost head-to-head with today's note. `Recall` now multiplies the weighted score by `e^(-ln2/halflife × ageDays)` (age from `created_at`), so a card at one half-life scores at ~50% and naturally falls under the `minScore` cutoff as it ages. The half-life is configurable via `MCP_RECALL_HALFLIFE_DAYS` (default 30; `0` disables decay). Decay is a multiplier kept deliberately separate from the existing `trust.FreshnessScore` term — they are different axes (source-verification recency vs calendar age) — and is applied before the additive sediment-layer boosts so character's always-surface boost is never eroded. Evergreen entries never decay: canonical knowledge (lifecycle/knowledge-layer `canonical`) and the character sediment layer. Unit tests cover the boundary values, monotonicity, evergreen/off exemptions, and an end-to-end recall ordering where the fresher of two equal-relevance memories ranks first.
+- **Opt-in steward auto-merge for near-duplicate groups (T69)** — subject-key duplicate groups (e.g. several `Session close / X` for one context) were detected at confidence `0.75` but always queued as `review_required`, so an auto-mode steward accumulated hundreds of pending merges it never applied. `steward_policy` gains `auto_merge_duplicate_min_confidence` (default `0.95` = off, also the safe behaviour for policies persisted before the field) and `auto_merge_require_content_similarity` (default `0.85`). A group auto-applies only when the detection confidence is at or above the min-confidence **and** every non-primary member is textually near-identical to the primary (Jaccard ≥ the threshold, reusing the session-checkpoint dedup hashing so no embeddings are needed) **and** no member is canonical — otherwise it stays `review_required`. This is the cleanup-side complement to the write-time fix below.
+
+### Changed
+
+- **Idempotent session-close writes (T71)** — two independent paths wrote near-identical episodic records per slug: the `/finalize` workflow's `Task complete: X` and the `SessionEnd` auto-hook's `Session close / X`. On a large corpus this produced hundreds of duplicate pairs that the steward then flagged as duplicates/contradictions, drowning the review inbox. The session-close raw-summary write now folds into a recent terminal episodic of the same slug (a prior session summary or a `Task complete:` finalize record, within a 6h window) instead of creating a second one — merging tags/metadata, keeping the richer content and the higher importance. Only the terminal session-summary write consolidates; checkpoints and review-queue items keep their own pipelines. Cross-session duplicates remain the steward's job (now auto-mergeable via T69).
+
 ## [0.8.7] - 2026-05-30
 
 Performance release. Fixes the recurring `index_documents` slowdown/timeouts on

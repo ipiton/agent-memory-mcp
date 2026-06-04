@@ -108,6 +108,9 @@ Reference docs: [HOOKS](docs/HOOKS.md) · [MCP_TOOLS](docs/MCP_TOOLS.md) · [SHA
 - **Temporal knowledge**: memories can carry `valid_from` / `valid_until` timestamps, and `recall_as_of` retrieves knowledge that was valid at a specific point in time
 - **Supersession chains**: `mark_outdated` with a superseding entry automatically builds bidirectional links (`superseded_by` / `replaces`) and sets temporal boundaries
 - **Knowledge timeline**: `knowledge_timeline` shows the chronological evolution of knowledge on a topic
+- **Age-aware recall**: recall scoring applies a configurable exponential age decay so stale, non-evergreen memories sink in results while canonical knowledge and character/identity stay put — tune the half-life with `MCP_RECALL_HALFLIFE_DAYS` (default 30 days; `0` disables)
+- **Self-healing duplicate cleanup**: the steward can auto-merge high-confidence, near-identical duplicate groups instead of only queuing them for review — opt-in and guarded by a content-similarity threshold so nothing unique is archived (`auto_merge_duplicate_min_confidence` in `steward_policy`)
+- **No more double session-close records**: closing a task folds the auto-captured session summary into the finalize record instead of writing a second near-identical memory per slug, cutting the duplicate pairs the steward used to flag as false contradictions
 
 ## Start Local In 3 Minutes
 
