@@ -279,7 +279,14 @@ func scanStale(memories []*memory.Memory, policy Policy, now time.Time, result *
 		if policy.AutoMarkStaleBeyondDays > 0 {
 			staleSince := now.Sub(verified)
 			autoThreshold := time.Duration(policy.AutoMarkStaleBeyondDays) * 24 * time.Hour
-			if staleSince >= autoThreshold {
+			// T72: auto-mark only low-importance, non-canonical entries. Marking
+			// stale is reversible (a lifecycle flag), but high-importance or
+			// canonical knowledge always goes to review — auto-staling live signal
+			// unattended would hide it. Everything else past the threshold is safe
+			// to apply so an un-maintained store self-cleans instead of piling up.
+			if staleSince >= autoThreshold &&
+				m.Importance < policy.EffectiveAutoMarkStaleImportanceCutoff() &&
+				!memory.IsCanonicalMemory(m) {
 				handling = HandlingSafeAutoApply
 			}
 		}
@@ -337,8 +344,10 @@ func scanExpiredWorking(memories []*memory.Memory, policy Policy, now time.Time,
 		// Decide handling based on importance.
 		// - Below cutoff → safe_auto_apply (delete the noise)
 		// - At or above cutoff → review_required (could be promotion candidate)
+		// - Canonical → review_required (T72 safety net; canonical is never noise,
+		//   even if it somehow carries the working type).
 		handling := HandlingSafeAutoApply
-		if m.Importance >= cutoff {
+		if m.Importance >= cutoff || memory.IsCanonicalMemory(m) {
 			handling = HandlingReviewRequired
 		}
 		// AutoDelete kill-switch: when disabled, all entries go to review.
@@ -571,6 +580,16 @@ func scanSemanticConflicts(memories []*memory.Memory, policy Policy, result *Sca
 // show signs of contradiction: different lifecycle, temporal supersession,
 // or opposing content patterns.
 func hasContradictionSignals(a, b *memory.Memory) bool {
+	// T72: a "Task complete: X" ↔ "Session close / X" pair is the T71 dual-write
+	// class — two terminal episodics of the same task, not a contradiction. The
+	// scanner only pairs same-subject memories, so both being terminal records
+	// identifies this class. Suppress before any keyword/lifecycle signal fires,
+	// otherwise a task-complete summary mentioning "removed"/"switched to" gets
+	// mis-flagged and buries real conflicts in the review inbox.
+	if memory.IsTerminalRecord(a) && memory.IsTerminalRecord(b) {
+		return false
+	}
+
 	la := memory.LifecycleStatusOf(a)
 	lb := memory.LifecycleStatusOf(b)
 

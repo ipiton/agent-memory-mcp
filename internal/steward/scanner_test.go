@@ -2,6 +2,7 @@ package steward
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
@@ -147,4 +148,87 @@ func countContradictions(res *ScanResult) int {
 		}
 	}
 	return n
+}
+
+// TestHasContradictionSignals_SuppressesTerminalPair asserts the T72 fix: a
+// legacy "Task complete: X" ↔ "Session close / X" pair is suppressed even when
+// its content carries a contradiction keyword ("removed", "switched to"), which
+// the T60 fix alone would not catch because those keywords trip the content
+// signal. A non-terminal pair with the same keyword still flags.
+func TestHasContradictionSignals_SuppressesTerminalPair(t *testing.T) {
+	taskComplete := &memory.Memory{
+		ID:      "tc-1",
+		Title:   "Task complete: cache-refactor",
+		Content: "Removed the old cache layer and switched to the new store.",
+		Type:    memory.TypeEpisodic,
+		Context: "cache-refactor",
+	}
+	sessionClose := &memory.Memory{
+		ID:       "sc-1",
+		Title:    "Session close / cache-refactor",
+		Content:  "Wrapped the cache refactor; the previous approach was removed.",
+		Type:     memory.TypeWorking,
+		Context:  "cache-refactor",
+		Metadata: map[string]string{memory.MetadataRecordKind: memory.RecordKindSessionSummary},
+	}
+	if hasContradictionSignals(taskComplete, sessionClose) {
+		t.Fatal("terminal Task complete ↔ Session close pair must NOT be flagged as a contradiction (T72)")
+	}
+
+	// Sanity: the same contradiction keyword between two non-terminal memories
+	// still flags, so the guard is scoped to the terminal dual-write class.
+	liveNote := &memory.Memory{
+		ID:      "note-live",
+		Title:   "Cache uses Redis",
+		Content: "The cache uses Redis.",
+		Type:    memory.TypeSemantic,
+		Context: "cache-refactor",
+	}
+	changedNote := &memory.Memory{
+		ID:      "note-changed",
+		Title:   "Cache store",
+		Content: "The cache switched to an in-memory store instead of Redis.",
+		Type:    memory.TypeSemantic,
+		Context: "cache-refactor",
+	}
+	if !hasContradictionSignals(liveNote, changedNote) {
+		t.Fatal("non-terminal pair with a contradiction keyword must still flag")
+	}
+}
+
+// TestScanStale_AutoApplyGuards covers the T72 auto-mark classification: past
+// the auto-threshold a low-importance non-canonical entry is safe_auto_apply,
+// while high-importance and canonical entries stay review_required.
+func TestScanStale_AutoApplyGuards(t *testing.T) {
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	old := now.AddDate(0, 0, -90) // well past StaleDays and AutoMarkStaleBeyondDays
+
+	policy := DefaultPolicy() // StaleDays=30, AutoMarkStaleBeyondDays=30, cutoff=0.6
+
+	lowImp := &memory.Memory{ID: "stale-low", Title: "Old note", Type: memory.TypeSemantic, Importance: 0.4, UpdatedAt: old}
+	highImp := &memory.Memory{ID: "stale-high", Title: "Old important", Type: memory.TypeSemantic, Importance: 0.9, UpdatedAt: old}
+	canon := &memory.Memory{
+		ID: "stale-canon", Title: "Old canonical", Type: memory.TypeSemantic, Importance: 0.4, UpdatedAt: old,
+		Metadata: map[string]string{"knowledge_layer": "canonical"},
+	}
+
+	res := &ScanResult{}
+	scanStale([]*memory.Memory{lowImp, highImp, canon}, policy, now, res)
+
+	handling := map[string]ActionHandling{}
+	for _, a := range res.Actions {
+		if a.Kind == ActionMarkStale && len(a.TargetIDs) == 1 {
+			handling[a.TargetIDs[0]] = a.Handling
+		}
+	}
+
+	if got := handling["stale-low"]; got != HandlingSafeAutoApply {
+		t.Errorf("low-importance stale: handling = %q, want safe_auto_apply", got)
+	}
+	if got := handling["stale-high"]; got != HandlingReviewRequired {
+		t.Errorf("high-importance stale: handling = %q, want review_required", got)
+	}
+	if got := handling["stale-canon"]; got != HandlingReviewRequired {
+		t.Errorf("canonical stale: handling = %q, want review_required", got)
+	}
 }

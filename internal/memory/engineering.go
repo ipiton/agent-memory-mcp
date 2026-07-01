@@ -212,6 +212,27 @@ func IsReviewQueueMemory(m *Memory) bool {
 	return strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataRecordKind]), RecordKindReviewQueueItem)
 }
 
+// IsTerminalRecord reports whether m is a session-terminal episodic record: a
+// session summary (record_kind=session_summary) or a /finalize "Task complete:"
+// / "Session close" record recognised by title prefix (those paths carry no
+// reliable record_kind). Session checkpoints are intra-session ticks and are
+// explicitly excluded. Shared by the T71 session-close idempotent writer and the
+// T72 steward contradiction-suppression guard (a "Task complete: X" ↔ "Session
+// close / X" pair is dual-write of one task, not a contradiction).
+func IsTerminalRecord(m *Memory) bool {
+	if m == nil {
+		return false
+	}
+	if IsSessionCheckpointMemory(m) {
+		return false
+	}
+	if IsSessionSummaryMemory(m) {
+		return true
+	}
+	title := strings.TrimSpace(m.Title)
+	return strings.HasPrefix(title, "Task complete:") || strings.HasPrefix(title, "Session close")
+}
+
 func BuildEngineeringTags(entity EngineeringType, service string, severity string, status string, reviewRequired bool, extra []string) []string {
 	tags := append([]string(nil), extra...)
 	if entity != "" {

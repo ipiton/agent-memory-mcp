@@ -311,19 +311,12 @@ func (s *Service) findConsolidationTarget(ctx context.Context, summary memory.Se
 }
 
 // isTerminalRecord reports whether m is a session-terminal episodic that T71
-// deduplicates: a prior session summary (record_kind=session_summary) or a
-// /finalize "Task complete:" record (recognised by title prefix, since that
-// path carries no reliable record_kind). Session checkpoints are explicitly
-// excluded — they are intra-session ticks with their own dedup gate (T45) and
-// share the session-close tags, so a tag heuristic would wrongly fold them.
+// deduplicates (session summary, "Task complete:" / "Session close" record).
+// Session checkpoints are intra-session ticks with their own dedup gate (T45),
+// so they are excluded. The classification lives in the memory package so the
+// steward's T72 contradiction-suppression guard reuses the exact same rule.
 func isTerminalRecord(m *memory.Memory) bool {
-	switch m.Metadata[memory.MetadataRecordKind] {
-	case memory.RecordKindSessionSummary:
-		return true
-	case memory.RecordKindSessionCheckpoint:
-		return false
-	}
-	return strings.HasPrefix(strings.TrimSpace(m.Title), "Task complete:")
+	return memory.IsTerminalRecord(m)
 }
 
 func normalizeSummary(summary memory.SessionSummary, now time.Time) (memory.SessionSummary, error) {

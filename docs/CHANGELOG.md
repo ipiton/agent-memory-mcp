@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9] - 2026-07-01
+
+Steward hygiene release. On an un-maintained store the maintenance steward now
+self-cleans instead of growing its review inbox: low-value stale and expired
+working entries auto-apply under importance/canonical guards, and the legacy
+`Task complete: X` ↔ `Session close / X` record pairs are no longer mis-flagged
+as contradictions.
+
+### Changed
+
+- **Contradiction detector suppresses the T71 dual-write class (T72)** — after T71 stopped writing new `Task complete: X` / `Session close / X` duplicate pairs, the steward still flagged ~57 legacy pairs as contradictions: a `/finalize` task-complete summary naturally mentions words like "removed", "switched to" or "previously", tripping the content-signal check even though both records describe the same finished task. `hasContradictionSignals` now short-circuits when both members of a same-subject pair are terminal episodics (a session summary, or a `Task complete:` / `Session close` record), before any keyword or lifecycle signal fires. The terminal-record classification moved from `sessionclose` into a shared `memory.IsTerminalRecord` helper so the T71 idempotent writer and this guard apply the exact same rule.
+- **Steward defaults tuned for self-cleaning (T72)** — `DefaultPolicy` now ships aggressive auto-cleanup: `auto_mark_stale_beyond_days` `0 → 30` and `working_delete_importance_cutoff` `0.5 → 0.6` (the effective fallback moves to `0.6` too). New installs, and stores whose persisted policy leaves these fields unset, self-clean out of the box. Auto-apply still only runs in auto/scheduled mode (the default is manual), so the classification change alone deletes nothing. A policy persisted with explicit `0.5`/`0` values keeps them — enabling self-clean there is a one-time `steward_policy` update.
+
+### Added
+
+- **Importance/canonical guards on auto-apply (T72)** — the `mark_stale` auto-apply path (`auto_mark_stale_beyond_days > 0`) now only auto-applies entries below the new `auto_mark_stale_importance_cutoff` policy field (default/fallback `0.6`) that are not canonical; high-importance or canonical knowledge always routes to review even when well past the threshold. Marking stale is reversible (a lifecycle flag), so this is safe to auto-run. The `delete_expired_working` scanner gains a canonical safety-net — a canonical entry never auto-deletes, even if it somehow carries the working type. Unit tests cover terminal-pair suppression (including the keyword case a non-terminal pair still flags) and the stale auto-apply guards (low-importance auto-applies; high-importance and canonical stay in review).
+
 ## [0.8.8] - 2026-06-04
 
 Feature release. Recall now applies exponential age decay so stale memories sink,

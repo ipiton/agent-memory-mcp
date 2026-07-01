@@ -83,9 +83,14 @@ type Policy struct {
 
 	// Auto-apply rules — only applied when dry_run=false.
 	AutoMergeExactDuplicates   bool `json:"auto_merge_exact_duplicates"`   // default false
-	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`   // 0 = disabled
+	AutoMarkStaleBeyondDays    int  `json:"auto_mark_stale_beyond_days"`   // 0 = disabled; default 30
 	AutoRefreshFreshnessScores bool `json:"auto_refresh_freshness_scores"` // default true
 	AutoDeleteExpiredWorking   bool `json:"auto_delete_expired_working"`   // default true
+
+	// AutoMarkStaleImportanceCutoff caps which stale entries auto-mark (T72):
+	// only entries below this importance are auto-staled; at or above it they go
+	// to review even when past AutoMarkStaleBeyondDays. <=0 falls back to 0.6.
+	AutoMarkStaleImportanceCutoff float64 `json:"auto_mark_stale_importance_cutoff"`
 
 	// Auto-merge of subject-key duplicate groups (T69). Opt-in and guarded:
 	// a group auto-merges only when its detection confidence >= MinConfidence
@@ -121,9 +126,20 @@ func (p Policy) EffectiveWorkingTTLDays() int {
 // which expired working entries go to review queue instead of auto-delete.
 func (p Policy) EffectiveWorkingDeleteImportanceCutoff() float64 {
 	if p.WorkingDeleteImportanceCutoff <= 0 {
-		return 0.5
+		return 0.6
 	}
 	return p.WorkingDeleteImportanceCutoff
+}
+
+// EffectiveAutoMarkStaleImportanceCutoff returns the importance ceiling below
+// which stale entries may auto-mark (T72), falling back to 0.6 when unset so
+// stores with a policy persisted before this field still guard high-importance
+// knowledge from unattended auto-staling.
+func (p Policy) EffectiveAutoMarkStaleImportanceCutoff() float64 {
+	if p.AutoMarkStaleImportanceCutoff <= 0 {
+		return 0.6
+	}
+	return p.AutoMarkStaleImportanceCutoff
 }
 
 // EffectiveAutoMergeContentSimilarity returns the minimum Jaccard similarity a
@@ -148,9 +164,10 @@ func DefaultPolicy() Policy {
 		CanonicalMinConfidence:            0.80,
 		CanonicalMinEvidence:              2,
 		WorkingMemoryTTLDays:              14,
-		WorkingDeleteImportanceCutoff:     0.5,
+		WorkingDeleteImportanceCutoff:     0.6,
 		AutoMergeExactDuplicates:          false,
-		AutoMarkStaleBeyondDays:           0,
+		AutoMarkStaleBeyondDays:           30,
+		AutoMarkStaleImportanceCutoff:     0.6,
 		AutoRefreshFreshnessScores:        true,
 		AutoDeleteExpiredWorking:          true,
 		AutoMergeDuplicateMinConfidence:   0.95,
