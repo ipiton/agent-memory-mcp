@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -96,70 +97,54 @@ func LoadFromFile(path string) (Config, error) {
 	return resolvePaths(ev)
 }
 
-// ragConfigChanged returns true if any RAG-related config fields differ between old and new.
-func ragConfigChanged(old, new Config) bool {
-	if old.RAGEnabled != new.RAGEnabled {
-		return true
-	}
-	if old.RootPath != new.RootPath {
-		return true
-	}
-	if old.RAGIndexPath != new.RAGIndexPath {
-		return true
-	}
-	if old.EmbeddingMode != new.EmbeddingMode {
-		return true
-	}
-	if old.JinaAPIKey != new.JinaAPIKey {
-		return true
-	}
-	if old.OpenAIAPIKey != new.OpenAIAPIKey {
-		return true
-	}
-	if old.OpenAIBaseURL != new.OpenAIBaseURL {
-		return true
-	}
-	if old.OpenAIModel != new.OpenAIModel {
-		return true
-	}
-	if old.OllamaBaseURL != new.OllamaBaseURL {
-		return true
-	}
-	if old.ChunkSize != new.ChunkSize {
-		return true
-	}
-	if old.ChunkOverlap != new.ChunkOverlap {
-		return true
-	}
-	if old.AutoIndex != new.AutoIndex {
-		return true
-	}
-	if old.FileWatcher != new.FileWatcher {
-		return true
-	}
-	if old.RedactSecrets != new.RedactSecrets {
-		return true
-	}
-	if !stringSlicesEqual(old.IndexDirs, new.IndexDirs) {
-		return true
-	}
-	if !stringSlicesEqual(old.IndexExcludeDirs, new.IndexExcludeDirs) {
-		return true
-	}
-	if !stringSlicesEqual(old.IndexExcludeGlobs, new.IndexExcludeGlobs) {
-		return true
-	}
-	return false
+// ragFingerprint projects exactly the config fields whose change requires the
+// RAG engine to be rebuilt on hot-reload. Round 3 H13 replaced ~17 hand-written
+// field comparisons (and a bespoke slice-equality helper) with a single
+// reflect.DeepEqual over this projection — the field set (and thus the reload
+// semantics) is unchanged; adding a RAG-affecting field means adding it here.
+type ragFingerprint struct {
+	Enabled           bool
+	RootPath          string
+	IndexPath         string
+	EmbeddingMode     string
+	JinaAPIKey        string
+	OpenAIAPIKey      string
+	OpenAIBaseURL     string
+	OpenAIModel       string
+	OllamaBaseURL     string
+	ChunkSize         int
+	ChunkOverlap      int
+	AutoIndex         bool
+	FileWatcher       bool
+	RedactSecrets     bool
+	IndexDirs         []string
+	IndexExcludeDirs  []string
+	IndexExcludeGlobs []string
 }
 
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+func ragFingerprintOf(c Config) ragFingerprint {
+	return ragFingerprint{
+		Enabled:           c.RAG.Enabled,
+		RootPath:          c.RootPath,
+		IndexPath:         c.RAG.IndexPath,
+		EmbeddingMode:     c.Embeddings.Mode,
+		JinaAPIKey:        c.Embeddings.JinaAPIKey,
+		OpenAIAPIKey:      c.Embeddings.OpenAIAPIKey,
+		OpenAIBaseURL:     c.Embeddings.OpenAIBaseURL,
+		OpenAIModel:       c.Embeddings.OpenAIModel,
+		OllamaBaseURL:     c.Embeddings.OllamaBaseURL,
+		ChunkSize:         c.RAG.ChunkSize,
+		ChunkOverlap:      c.RAG.ChunkOverlap,
+		AutoIndex:         c.RAG.AutoIndex,
+		FileWatcher:       c.RAG.FileWatcher,
+		RedactSecrets:     c.RAG.RedactSecrets,
+		IndexDirs:         c.RAG.IndexDirs,
+		IndexExcludeDirs:  c.RAG.IndexExcludeDirs,
+		IndexExcludeGlobs: c.RAG.IndexExcludeGlobs,
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+}
+
+// ragConfigChanged returns true if any RAG-related config fields differ between old and new.
+func ragConfigChanged(old, new Config) bool {
+	return !reflect.DeepEqual(ragFingerprintOf(old), ragFingerprintOf(new))
 }

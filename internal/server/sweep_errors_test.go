@@ -50,17 +50,17 @@ func TestMapSweepError_UnknownFallsBack(t *testing.T) {
 // branch, so SIGHUP could not pick up a freshly added MCP_TASK_ARCHIVE_ROOTS.
 func TestReloadConfig_UpdatesNonRAGFields(t *testing.T) {
 	srv := newTestServer(t, "")
-	if got := len(srv.config.TaskArchiveRoots); got != 0 {
-		t.Fatalf("baseline: TaskArchiveRoots = %v, want empty", srv.config.TaskArchiveRoots)
+	if got := len(srv.config.Lifecycle.TaskArchiveRoots); got != 0 {
+		t.Fatalf("baseline: TaskArchiveRoots = %v, want empty", srv.config.Lifecycle.TaskArchiveRoots)
 	}
 
 	newCfg := srv.config
-	newCfg.RAGEnabled = false // simulate post-install reload before RAG ever spins up
-	newCfg.TaskArchiveRoots = []string{"/tmp/archive-a", "/tmp/archive-b"}
+	newCfg.RAG.Enabled = false // simulate post-install reload before RAG ever spins up
+	newCfg.Lifecycle.TaskArchiveRoots = []string{"/tmp/archive-a", "/tmp/archive-b"}
 
 	srv.ReloadConfig(newCfg)
 
-	if got := srv.config.TaskArchiveRoots; len(got) != 2 || got[0] != "/tmp/archive-a" {
+	if got := srv.config.Lifecycle.TaskArchiveRoots; len(got) != 2 || got[0] != "/tmp/archive-a" {
 		t.Fatalf("post-reload TaskArchiveRoots = %v, want [/tmp/archive-a /tmp/archive-b]", got)
 	}
 }
@@ -71,9 +71,9 @@ func TestReloadConfig_UpdatesNonRAGFields(t *testing.T) {
 func TestReloadConfig_LegacyAlias(t *testing.T) {
 	srv := newTestServer(t, "")
 	newCfg := srv.config
-	newCfg.TaskArchiveRoots = []string{"/tmp/legacy"}
+	newCfg.Lifecycle.TaskArchiveRoots = []string{"/tmp/legacy"}
 	srv.ReloadRAG(newCfg)
-	if got := srv.config.TaskArchiveRoots; len(got) != 1 || got[0] != "/tmp/legacy" {
+	if got := srv.config.Lifecycle.TaskArchiveRoots; len(got) != 1 || got[0] != "/tmp/legacy" {
 		t.Fatalf("ReloadRAG (legacy alias) did not update config: got %v", got)
 	}
 }

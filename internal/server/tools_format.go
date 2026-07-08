@@ -373,7 +373,7 @@ func truncateText(value string, maxLen int) string {
 // emoji) is never cut mid-codepoint — replaces the legacy byte-slice idiom that
 // was still in formatMemoryResults / formatMemoryList.
 func (s *MCPServer) previewText(value string, defaultLimit int) string {
-	override := s.config.MemoryPreviewRunes
+	override := s.config.Memory.PreviewRunes
 	if override < 0 {
 		return value
 	}

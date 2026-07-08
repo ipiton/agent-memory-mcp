@@ -42,26 +42,26 @@ type Logger struct {
 
 // NewLogger creates a stats Logger from the given config, or returns nil if disabled.
 func NewLogger(cfg config.Config) *Logger {
-	if !cfg.StatsEnabled || cfg.StatsPath == "" {
+	if !cfg.Stats.Enabled || cfg.Stats.Path == "" {
 		return nil
 	}
-	if cfg.StatsSampleRate <= 0 {
+	if cfg.Stats.SampleRate <= 0 {
 		return nil
 	}
-	if cfg.StatsSampleRate > 1 {
-		cfg.StatsSampleRate = 1
+	if cfg.Stats.SampleRate > 1 {
+		cfg.Stats.SampleRate = 1
 	}
-	dir := filepath.Dir(cfg.StatsPath)
+	dir := filepath.Dir(cfg.Stats.Path)
 	if dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
 	}
-	file, err := os.OpenFile(cfg.StatsPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(cfg.Stats.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil
 	}
 	return &Logger{
 		enabled:    true,
-		sampleRate: cfg.StatsSampleRate,
+		sampleRate: cfg.Stats.SampleRate,
 		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		file:       file,
 	}

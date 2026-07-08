@@ -126,8 +126,8 @@ func runEndTask(args []string) error {
 // long-lived config.TaskArchiveRoots slice.
 func buildSweepConfig(cfg config.Config, rootsCSV, pattern string, threshold float64, keepTag string, dryRun bool) (lifecycle.ArchiveSweepConfig, error) {
 	sweepCfg := lifecycle.ArchiveSweepConfig{
-		Roots:              append([]string(nil), cfg.TaskArchiveRoots...),
-		SlugPattern:        cfg.TaskSlugPattern,
+		Roots:              append([]string(nil), cfg.Lifecycle.TaskArchiveRoots...),
+		SlugPattern:        cfg.Lifecycle.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: threshold,
 		KeepTag:            keepTag,

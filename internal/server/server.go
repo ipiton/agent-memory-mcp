@@ -103,7 +103,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		sessionTracker:    newSessionTracker(cfg, memoryStore, fileLogger),
 		stewardService:    stewardSvc,
 		stewardScheduler:  stewardSched,
-		sedimentScheduler: newSedimentScheduler(memoryStore, fileLogger, cfg.SedimentEnabled, cfg.SedimentScheduleInterval),
+		sedimentScheduler: newSedimentScheduler(memoryStore, fileLogger, cfg.Sediment.Enabled, cfg.Sediment.ScheduleInterval),
 	}
 	// Start the sediment background loop now so it runs regardless of
 	// transport (stdio or HTTP). newSedimentScheduler returns nil when
@@ -174,7 +174,7 @@ func RunHTTP(ctx context.Context, server *MCPServer) error {
 	if server.fileLogger != nil {
 		server.fileLogger.Info("Starting HTTP server",
 			zap.String("address", addr),
-			zap.String("mode", server.config.HTTPMode),
+			zap.String("mode", server.config.HTTP.Mode),
 		)
 	}
 
@@ -329,7 +329,7 @@ func (s *MCPServer) ReloadConfig(newCfg config.Config) {
 		s.ragEngine = nil
 	}
 
-	if !newCfg.RAGEnabled {
+	if !newCfg.RAG.Enabled {
 		if s.fileLogger != nil {
 			s.fileLogger.Info("Config reload: RAG disabled")
 		}
@@ -348,8 +348,8 @@ func (s *MCPServer) ReloadConfig(newCfg config.Config) {
 	if s.fileLogger != nil {
 		s.fileLogger.Info("Config reload: RAG engine restarted",
 			zap.String("root_path", newCfg.RootPath),
-			zap.Bool("rag_enabled", newCfg.RAGEnabled),
-			zap.Strings("index_dirs", newCfg.IndexDirs),
+			zap.Bool("rag_enabled", newCfg.RAG.Enabled),
+			zap.Strings("index_dirs", newCfg.RAG.IndexDirs),
 		)
 	}
 }

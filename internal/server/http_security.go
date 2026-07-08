@@ -11,24 +11,24 @@ import (
 )
 
 func httpListenAddr(cfg config.Config) string {
-	host := strings.TrimSpace(cfg.HTTPHost)
+	host := strings.TrimSpace(cfg.HTTP.Host)
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	return net.JoinHostPort(host, strconv.Itoa(cfg.HTTPPort))
+	return net.JoinHostPort(host, strconv.Itoa(cfg.HTTP.Port))
 }
 
 func validateHTTPExposure(cfg config.Config) error {
-	if cfg.HTTPMode != "http" {
+	if cfg.HTTP.Mode != "http" {
 		return nil
 	}
 
-	host := strings.TrimSpace(cfg.HTTPHost)
+	host := strings.TrimSpace(cfg.HTTP.Host)
 	if host == "" {
 		host = "127.0.0.1"
 	}
 
-	if isLoopbackHost(host) || strings.TrimSpace(cfg.HTTPAuthToken) != "" || cfg.HTTPInsecureAllowUnauthenticated {
+	if isLoopbackHost(host) || strings.TrimSpace(cfg.HTTP.AuthToken) != "" || cfg.HTTP.InsecureAllowUnauthenticated {
 		return nil
 	}
 
@@ -43,26 +43,26 @@ func logHTTPExposurePolicy(server *MCPServer) {
 		return
 	}
 
-	host := strings.TrimSpace(server.config.HTTPHost)
+	host := strings.TrimSpace(server.config.HTTP.Host)
 	if host == "" {
 		host = "127.0.0.1"
 	}
 
 	switch {
-	case strings.TrimSpace(server.config.HTTPAuthToken) != "":
+	case strings.TrimSpace(server.config.HTTP.AuthToken) != "":
 		server.fileLogger.Info("HTTP authentication enabled",
 			zap.String("host", host),
-			zap.Int("port", server.config.HTTPPort),
+			zap.Int("port", server.config.HTTP.Port),
 		)
-	case server.config.HTTPInsecureAllowUnauthenticated:
+	case server.config.HTTP.InsecureAllowUnauthenticated:
 		server.fileLogger.Warn("HTTP server explicitly allows unauthenticated access on configured host",
 			zap.String("host", host),
-			zap.Int("port", server.config.HTTPPort),
+			zap.Int("port", server.config.HTTP.Port),
 		)
 	case isLoopbackHost(host):
 		server.fileLogger.Info("HTTP server running without auth on loopback-only bind",
 			zap.String("host", host),
-			zap.Int("port", server.config.HTTPPort),
+			zap.Int("port", server.config.HTTP.Port),
 		)
 	}
 }

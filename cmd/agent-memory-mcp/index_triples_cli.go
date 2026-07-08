@@ -189,22 +189,22 @@ type indexTriplesStats struct {
 // envs as live ingest. Returns an error if extraction is disabled or
 // misconfigured — callers in --dry-run mode can ignore the error.
 func buildIndexTriplesExtractor(cfg config.Config) (memory.TripleExtractor, error) {
-	if !cfg.TripleExtractorEnabled {
+	if !cfg.TripleExtractor.Enabled {
 		return nil, fmt.Errorf("MCP_TRIPLE_EXTRACTOR_ENABLED is false")
 	}
-	apiKey := cfg.TripleExtractorAPIKey
+	apiKey := cfg.TripleExtractor.APIKey
 	if apiKey == "" {
-		apiKey = cfg.OpenAIAPIKey
+		apiKey = cfg.Embeddings.OpenAIAPIKey
 	}
-	baseURL := cfg.TripleExtractorBaseURL
+	baseURL := cfg.TripleExtractor.BaseURL
 	if baseURL == "" {
-		baseURL = cfg.OpenAIBaseURL
+		baseURL = cfg.Embeddings.OpenAIBaseURL
 	}
 	return memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
-		Model:   cfg.TripleExtractorModel,
-		Timeout: cfg.TripleExtractorTimeout,
+		Model:   cfg.TripleExtractor.Model,
+		Timeout: cfg.TripleExtractor.Timeout,
 	}, zap.NewNop())
 }
 

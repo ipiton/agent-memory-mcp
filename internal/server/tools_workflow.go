@@ -986,8 +986,8 @@ func mapSweepError(op string, err error) *rpcError {
 func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool) (lifecycle.ArchiveSweepConfig, *rpcError) {
 	autoPromote, _ := getBool(args, "auto_promote")
 	sweepCfg := lifecycle.ArchiveSweepConfig{
-		Roots:              append([]string(nil), srv.config.TaskArchiveRoots...),
-		SlugPattern:        srv.config.TaskSlugPattern,
+		Roots:              append([]string(nil), srv.config.Lifecycle.TaskArchiveRoots...),
+		SlugPattern:        srv.config.Lifecycle.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: lifecycle.DefaultPromotionThreshold,
 		KeepTag:            lifecycle.KeepAfterArchiveTag,

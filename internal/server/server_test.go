@@ -16,10 +16,9 @@ func newTestServer(t *testing.T, authToken string) *MCPServer {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{
-		RootPath:      root,
-		HTTPHost:      "127.0.0.1",
-		HTTPAuthToken: authToken,
-		OutputMode:    "line",
+		RootPath:   root,
+		OutputMode: "line",
+		HTTP:       config.HTTPConfig{Host: "127.0.0.1", AuthToken: authToken},
 	}
 	guard, err := paths.NewGuard(cfg)
 	if err != nil {
@@ -47,10 +46,10 @@ func newMemoryTestServer(t *testing.T) *MCPServer {
 func newAutoSessionTestServer(t *testing.T, idleTimeout time.Duration, checkpointInterval time.Duration, minEvents int) *MCPServer {
 	t.Helper()
 	s := newMemoryTestServer(t)
-	s.config.SessionTrackingEnabled = true
-	s.config.SessionIdleTimeout = idleTimeout
-	s.config.SessionCheckpointInterval = checkpointInterval
-	s.config.SessionMinEvents = minEvents
+	s.config.Session.TrackingEnabled = true
+	s.config.Session.IdleTimeout = idleTimeout
+	s.config.Session.CheckpointInterval = checkpointInterval
+	s.config.Session.MinEvents = minEvents
 	s.sessionTracker = newSessionTracker(s.config, s.memoryStore, nil)
 	return s
 }

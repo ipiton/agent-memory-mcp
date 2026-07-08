@@ -22,10 +22,10 @@ import (
 // tracker share construction logic.
 func dedupConfigFrom(cfg config.Config) hooks.DedupConfig {
 	return hooks.NewDedupConfig(
-		cfg.CheckpointDedupDisabled,
-		cfg.CheckpointDedupThreshold,
-		cfg.CheckpointDedupMinChars,
-		cfg.CheckpointDedupWindow,
+		cfg.HooksDedup.Disabled,
+		cfg.HooksDedup.Threshold,
+		cfg.HooksDedup.MinChars,
+		cfg.HooksDedup.Window,
 	)
 }
 
@@ -77,7 +77,7 @@ func runContextInject(args []string) error {
 		return err
 	}
 
-	db, err := sql.Open("sqlite", cfg.MemoryDBPath+"?_journal_mode=WAL&mode=ro")
+	db, err := sql.Open("sqlite", cfg.Memory.DBPath+"?_journal_mode=WAL&mode=ro")
 	if err != nil {
 		return err
 	}

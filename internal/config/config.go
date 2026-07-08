@@ -21,7 +21,9 @@ const (
 	DefaultMaxDepth        = 3
 )
 
-// Config holds all MCP server configuration.
+// Config holds all MCP server configuration. Round 3 H13 grouped the former
+// flat ~55-field struct into cohesive sub-structs; a handful of cross-cutting
+// core fields remain at the top level.
 type Config struct {
 	// Core settings
 	RootPath         string   // Repository root path
@@ -30,132 +32,150 @@ type Config struct {
 	MaxSearchResults int
 	MaxDepth         int
 	OutputMode       string
-	StatsEnabled     bool
-	StatsPath        string
-	StatsSampleRate  float64
+	DataPath         string // Base path for all data (default: {RootPath}/data)
+	LogPath          string // Path to diagnostic log file (default: {RootPath}/logs/mcp-diagnostics.log)
 
-	// Data storage paths
-	DataPath     string // Base path for all data (default: {RootPath}/data)
-	RAGIndexPath string // Path to RAG vector index (default: {DataPath}/rag-index)
-	MemoryDBPath string // Path to memory database (default: {DataPath}/memory-store/memories.db)
-	LogPath      string // Path to diagnostic log file (default: {RootPath}/logs/mcp-diagnostics.log)
+	Stats           StatsConfig
+	Memory          MemoryConfig
+	RAG             RAGConfig
+	Embeddings      EmbeddingsConfig
+	TripleExtractor TripleExtractorConfig
+	HTTP            HTTPConfig
+	Session         SessionConfig
+	Steward         StewardConfig
+	HooksDedup      HooksDedupConfig
+	Lifecycle       LifecycleConfig
+	Rerank          RerankConfig
+	Sediment        SedimentConfig
+}
 
-	// RAG configuration
-	RAGEnabled    bool
-	RAGMaxResults int
+// StatsConfig holds MCP usage-stats logging settings.
+type StatsConfig struct {
+	Enabled    bool
+	Path       string
+	SampleRate float64
+}
 
-	// Memory configuration
-	MemoryEnabled bool
-	// MemoryPreviewRunes overrides the per-surface default truncation cap (rune-based)
+// MemoryConfig holds typed-memory store settings.
+type MemoryConfig struct {
+	Enabled bool
+	DBPath  string // Path to memory database (default: {DataPath}/memory-store/memories.db)
+	// PreviewRunes overrides the per-surface default truncation cap (rune-based)
 	// applied to memory content/summary fields in MCP tool responses. Default 0
 	// keeps the built-in per-surface caps (150/220/300). A positive value forces all
 	// surfaces to that limit. A negative value disables truncation entirely (full text).
 	// Env: MCP_MEMORY_PREVIEW_RUNES.
-	MemoryPreviewRunes int
+	PreviewRunes int
+}
 
-	// Document indexing configuration
+// RAGConfig holds RAG retrieval + document-indexing settings.
+type RAGConfig struct {
+	Enabled           bool
+	MaxResults        int
+	IndexPath         string   // Path to RAG vector index (default: {DataPath}/rag-index)
 	IndexDirs         []string // Directories and files to index for RAG (relative to RootPath or absolute)
 	IndexExcludeDirs  []string // Directory names or repo-relative paths to exclude from RAG indexing
 	IndexExcludeGlobs []string // Glob patterns matched against slash-separated repo-relative paths
 	RedactSecrets     bool     // Redact common secret-like content before indexing
 	ChunkSize         int      // Characters per chunk (default: 2000)
 	ChunkOverlap      int      // Overlap between chunks (default: 200)
-	RagKeepNoise      bool     // MCP_RAG_KEEP_NOISE — disable noise filter (T49 slice 3)
+	KeepNoise         bool     // MCP_RAG_KEEP_NOISE — disable noise filter (T49 slice 3)
+	AutoIndex         bool     // Auto-index on startup (default: true)
+	FileWatcher       bool     // Watch for file changes (default: true)
+	WatchInterval     time.Duration
+	DebounceDuration  time.Duration
+}
 
-	// Knowledge-graph triple extractor (T50 slice 2). Default disabled.
-	// When enabled the Store fires an async fan-out per write, calling an
-	// OpenAI-compatible /chat/completions endpoint to derive 3-7 triples
-	// per memory. Errors degrade gracefully — extraction never blocks ingest.
-	TripleExtractorEnabled bool          // MCP_TRIPLE_EXTRACTOR_ENABLED
-	TripleExtractorBaseURL string        // MCP_TRIPLE_EXTRACTOR_BASE_URL
-	TripleExtractorAPIKey  string        // MCP_TRIPLE_EXTRACTOR_API_KEY (falls back to OPENAI_API_KEY when empty)
-	TripleExtractorModel   string        // MCP_TRIPLE_EXTRACTOR_MODEL
-	TripleExtractorTimeout time.Duration // MCP_TRIPLE_EXTRACTOR_TIMEOUT (default 30s)
+// EmbeddingsConfig holds embedding provider + transport settings.
+type EmbeddingsConfig struct {
+	JinaAPIKey      string // Jina AI API key
+	OpenAIAPIKey    string // OpenAI API key (or compatible: Together, Mistral, etc.)
+	OpenAIBaseURL   string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
+	OpenAIModel     string // OpenAI embedding model (default: text-embedding-3-small)
+	OllamaBaseURL   string // Ollama base URL (default: http://localhost:11434)
+	LlamaCPPBaseURL string // llama.cpp OpenAI-compatible base URL; empty = disabled. Env: LLAMACPP_BASE_URL
+	LlamaCPPModel   string // llama.cpp embedding model (default: bge-m3). Env: LLAMACPP_EMBEDDING_MODEL
+	Dimension       int    // Embedding vector dimension (default: 1024)
+	Mode            string // Embedding mode: auto or local-only
+	// Transport tuning. Defaults match the historical hardcoded values
+	// (5s / 1 retry); slow self-hosted backends need higher values.
+	Timeout    time.Duration // MCP_EMBEDDING_TIMEOUT (default: 5s)
+	MaxRetries int           // MCP_EMBEDDING_MAX_RETRIES (default: 1)
+}
 
-	// Embeddings configuration
-	JinaAPIKey         string // Jina AI API key
-	OpenAIAPIKey       string // OpenAI API key (or compatible: Together, Mistral, etc.)
-	OpenAIBaseURL      string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
-	OpenAIModel        string // OpenAI embedding model (default: text-embedding-3-small)
-	OllamaBaseURL      string // Ollama base URL (default: http://localhost:11434)
-	LlamaCPPBaseURL    string // llama.cpp OpenAI-compatible base URL; empty = disabled. Env: LLAMACPP_BASE_URL
-	LlamaCPPModel      string // llama.cpp embedding model (default: bge-m3). Env: LLAMACPP_EMBEDDING_MODEL
-	EmbeddingDimension int    // Embedding vector dimension (default: 1024)
-	EmbeddingMode      string // Embedding mode: auto or local-only
+// TripleExtractorConfig holds the optional knowledge-graph triple extractor
+// (T50 slice 2). Errors degrade gracefully — extraction never blocks ingest.
+type TripleExtractorConfig struct {
+	Enabled bool          // MCP_TRIPLE_EXTRACTOR_ENABLED
+	BaseURL string        // MCP_TRIPLE_EXTRACTOR_BASE_URL
+	APIKey  string        // MCP_TRIPLE_EXTRACTOR_API_KEY (falls back to OPENAI_API_KEY when empty)
+	Model   string        // MCP_TRIPLE_EXTRACTOR_MODEL
+	Timeout time.Duration // MCP_TRIPLE_EXTRACTOR_TIMEOUT (default 30s)
+}
 
-	// Embedding transport tuning. Defaults match the historical hardcoded
-	// values (5s / 1 retry); slow self-hosted backends (Ollama on low-core
-	// ARM VPS) need higher values to avoid persistent on-demand embedding
-	// timeouts.
-	EmbeddingTimeout    time.Duration // MCP_EMBEDDING_TIMEOUT (default: 5s)
-	EmbeddingMaxRetries int           // MCP_EMBEDDING_MAX_RETRIES (default: 1)
+// HTTPConfig holds HTTP transport settings.
+type HTTPConfig struct {
+	Mode                         string // "stdio" or "http" (default: "stdio")
+	Host                         string // HTTP bind host (default: 127.0.0.1)
+	Port                         int    // HTTP server port (default: 18080)
+	AuthToken                    string // Optional Bearer token for HTTP auth
+	InsecureAllowUnauthenticated bool   // Allow unauthenticated HTTP on non-loopback hosts
+}
 
-	// RAG indexing behavior
-	AutoIndex        bool          // Auto-index on startup (default: true)
-	FileWatcher      bool          // Watch for file changes (default: true)
-	WatchInterval    time.Duration // File watcher poll interval (default: 5m)
-	DebounceDuration time.Duration // Debounce before reindexing (default: 30s)
+// SessionConfig holds background session-tracking settings.
+type SessionConfig struct {
+	TrackingEnabled    bool          // Enable automatic session tracking and background close-session orchestration
+	IdleTimeout        time.Duration // Idle timeout before auto-close
+	CheckpointInterval time.Duration // Periodic raw checkpoint interval during active sessions
+	MinEvents          int           // Minimum observed tool events before auto-close
+}
 
-	// HTTP server configuration
-	HTTPMode                         string // "stdio" or "http" (default: "stdio")
-	HTTPHost                         string // HTTP bind host (default: 127.0.0.1)
-	HTTPPort                         int    // HTTP server port (default: 18080)
-	HTTPAuthToken                    string // Optional Bearer token for HTTP auth
-	HTTPInsecureAllowUnauthenticated bool   // Allow unauthenticated HTTP on non-loopback hosts
+// StewardConfig holds knowledge-stewardship settings.
+type StewardConfig struct {
+	Enabled            bool    // Enable knowledge stewardship service
+	Mode               string  // Policy mode: off, manual, scheduled, event_driven
+	ScheduleInterval   string  // Schedule interval (e.g. "24h")
+	DuplicateThreshold float64 // Similarity threshold for duplicate detection (default: 0.85)
+	StaleDays          int     // Days before a memory is considered stale (default: 30)
+	CanonicalMinConf   float64 // Minimum confidence for canonical promotion (default: 0.80)
+}
 
-	// Background session tracking
-	SessionTrackingEnabled    bool          // Enable automatic session tracking and background close-session orchestration
-	SessionIdleTimeout        time.Duration // Idle timeout before auto-close
-	SessionCheckpointInterval time.Duration // Periodic raw checkpoint interval during active sessions
-	SessionMinEvents          int           // Minimum observed tool events before auto-close
+// HooksDedupConfig holds hooks-CLI checkpoint dedup settings (T45) — prevents a
+// flood of near-duplicate session-checkpoint records from the auto-capture and
+// checkpoint hook CLI paths. MCP programmatic store_memory is unaffected.
+type HooksDedupConfig struct {
+	Disabled  bool          // Escape hatch — true disables the filter
+	Threshold float64       // Jaccard similarity at/above which a record is a duplicate (default: 0.9)
+	Window    time.Duration // How far back to scan for a recent duplicate (default: 10m)
+	MinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
+}
 
-	// Stewardship configuration
-	StewardEnabled            bool    // Enable knowledge stewardship service
-	StewardMode               string  // Policy mode: off, manual, scheduled, event_driven
-	StewardScheduleInterval   string  // Schedule interval (e.g. "24h")
-	StewardDuplicateThreshold float64 // Similarity threshold for duplicate detection (default: 0.85)
-	StewardStaleDays          int     // Days before a memory is considered stale (default: 30)
-	StewardCanonicalMinConf   float64 // Minimum confidence for canonical promotion (default: 0.80)
-
-	// Hooks CLI dedup (T45) — prevents flood of near-duplicate session-checkpoint
-	// records coming from the `auto-capture` and `checkpoint` hook CLI paths.
-	// MCP programmatic `store_memory` is unaffected.
-	CheckpointDedupDisabled  bool          // Escape hatch — true disables the filter
-	CheckpointDedupThreshold float64       // Jaccard similarity at/above which a record is considered a duplicate (default: 0.9)
-	CheckpointDedupWindow    time.Duration // How far back to scan for a recent duplicate (default: 10m)
-	CheckpointDedupMinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
-
-	// Task archive sweep (T47) — pull-mode archive consolidation. Each root is
-	// scanned for subdirectories (task slugs); working memories whose Context
-	// matches a slug are marked outdated (high-importance ones go to review queue).
+// LifecycleConfig holds task-archive sweep settings (T47).
+type LifecycleConfig struct {
 	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
 	TaskSlugPattern  *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
+}
 
-	// Neural reranker (T44) — opt-in cross-encoder that re-orders the top-N
-	// hybrid-search candidates. Disabled by default; the retrieval pipeline
-	// must degrade gracefully on timeout or provider error.
-	RerankEnabled     bool          // MCP_RERANK_ENABLED (default: false)
-	RerankProvider    string        // MCP_RERANK_PROVIDER: "jina" or "disabled" (default: "disabled")
-	JinaRerankerModel string        // JINA_RERANKER_MODEL (default: jina-reranker-v2-base-multilingual)
-	RerankTimeout     time.Duration // MCP_RERANK_TIMEOUT (default: 5s)
-	RerankTopN        int           // MCP_RERANK_TOP_N (default: 40)
+// RerankConfig holds the optional neural reranker (T44). Disabled by default;
+// the retrieval pipeline degrades gracefully on timeout or provider error.
+type RerankConfig struct {
+	Enabled   bool          // MCP_RERANK_ENABLED (default: false)
+	Provider  string        // MCP_RERANK_PROVIDER: "jina" or "disabled" (default: "disabled")
+	JinaModel string        // JINA_RERANKER_MODEL (default: jina-reranker-v2-base-multilingual)
+	Timeout   time.Duration // MCP_RERANK_TIMEOUT (default: 5s)
+	TopN      int           // MCP_RERANK_TOP_N (default: 40)
+}
 
-	// Memory sedimentation (T48) — feature flag governing transition rules
-	// and layer-aware retrieval weighting. When false, the sediment_layer
-	// column still exists (migration is mandatory) but recall and cycle do
-	// not change behaviour.
-	SedimentEnabled bool // MCP_SEDIMENT_ENABLED (default: false)
-
+// SedimentConfig holds memory-sedimentation settings (T48) and T68 recall decay.
+type SedimentConfig struct {
+	Enabled bool // MCP_SEDIMENT_ENABLED (default: false)
+	// ScheduleInterval — opt-in background schedule for RunSedimentCycle. Zero =
+	// never scheduled (CLI / MCP tool only). Fires only when Enabled && interval > 0.
+	ScheduleInterval time.Duration // MCP_SEDIMENT_SCHEDULE_INTERVAL (default: 0 = disabled)
 	// RecallHalfLifeDays controls T68 exponential age decay in recall scoring:
 	// a memory one half-life old scores at half its undecayed weight. 0 (or
-	// negative) disables decay entirely. Evergreen entries (canonical knowledge,
-	// character layer) never decay regardless of this value.
+	// negative) disables decay. Evergreen entries never decay regardless.
 	RecallHalfLifeDays float64 // MCP_RECALL_HALFLIFE_DAYS (default: 30; 0 = off)
-
-	// SedimentScheduleInterval — opt-in background schedule for
-	// RunSedimentCycle. Zero = never scheduled (CLI / MCP tool only).
-	// Scheduling only fires when SedimentEnabled==true AND the interval > 0.
-	SedimentScheduleInterval time.Duration // MCP_SEDIMENT_SCHEDULE_INTERVAL (default: 0 = disabled)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -414,92 +434,115 @@ func resolvePaths(ev envValues) (Config, error) {
 		MaxSearchResults: ev.maxSearch,
 		MaxDepth:         ev.maxDepth,
 		OutputMode:       normalizeOutputMode(ev.outputMode),
-		StatsEnabled:     ev.statsEnabled,
-		StatsPath:        statsPath,
-		StatsSampleRate:  ev.statsSample,
+		DataPath:         dataPath,
+		LogPath:          logPath,
 
-		DataPath:     dataPath,
-		RAGIndexPath: ragIndexPath,
-		MemoryDBPath: memoryDBPath,
-		LogPath:      logPath,
+		Stats: StatsConfig{
+			Enabled:    ev.statsEnabled,
+			Path:       statsPath,
+			SampleRate: ev.statsSample,
+		},
 
-		RAGEnabled:         ev.ragEnabled,
-		RAGMaxResults:      ev.ragMaxResults,
-		MemoryEnabled:      ev.memoryEnabled,
-		MemoryPreviewRunes: ev.memoryPreviewRunes,
+		Memory: MemoryConfig{
+			Enabled:      ev.memoryEnabled,
+			DBPath:       memoryDBPath,
+			PreviewRunes: ev.memoryPreviewRunes,
+		},
 
-		IndexDirs:         indexDirsList,
-		IndexExcludeDirs:  indexExcludeDirs,
-		IndexExcludeGlobs: indexExcludeGlobs,
-		RedactSecrets:     ev.redactSecrets,
-		ChunkSize:         ev.chunkSize,
-		ChunkOverlap:      ev.chunkOverlap,
-		RagKeepNoise:      ev.ragKeepNoise,
+		RAG: RAGConfig{
+			Enabled:           ev.ragEnabled,
+			MaxResults:        ev.ragMaxResults,
+			IndexPath:         ragIndexPath,
+			IndexDirs:         indexDirsList,
+			IndexExcludeDirs:  indexExcludeDirs,
+			IndexExcludeGlobs: indexExcludeGlobs,
+			RedactSecrets:     ev.redactSecrets,
+			ChunkSize:         ev.chunkSize,
+			ChunkOverlap:      ev.chunkOverlap,
+			KeepNoise:         ev.ragKeepNoise,
+			AutoIndex:         ev.autoIndex,
+			FileWatcher:       ev.fileWatcher,
+			WatchInterval:     parseDurationOrDefault(ev.watchInterval, 5*time.Minute),
+			DebounceDuration:  parseDurationOrDefault(ev.debounceDuration, 30*time.Second),
+		},
 
-		TripleExtractorEnabled: ev.tripleExtractorEnabled,
-		TripleExtractorBaseURL: ev.tripleExtractorBaseURL,
-		TripleExtractorAPIKey:  ev.tripleExtractorAPIKey,
-		TripleExtractorModel:   ev.tripleExtractorModel,
-		TripleExtractorTimeout: parseDurationOrDefault(ev.tripleExtractorTimeout, 30*time.Second),
+		Embeddings: EmbeddingsConfig{
+			JinaAPIKey:      ev.jinaAPIKey,
+			OpenAIAPIKey:    ev.openaiAPIKey,
+			OpenAIBaseURL:   ev.openaiBaseURL,
+			OpenAIModel:     ev.openaiModel,
+			OllamaBaseURL:   ev.ollamaBaseURL,
+			LlamaCPPBaseURL: strings.TrimSpace(ev.llamaCPPBaseURL),
+			LlamaCPPModel:   ev.llamaCPPModel,
+			Dimension:       ev.embeddingDimension,
+			Mode:            ev.embeddingMode,
+			Timeout:         parseDurationOrDefault(ev.embeddingTimeout, 5*time.Second),
+			MaxRetries:      ev.embeddingMaxRetries,
+		},
 
-		JinaAPIKey:         ev.jinaAPIKey,
-		OpenAIAPIKey:       ev.openaiAPIKey,
-		OpenAIBaseURL:      ev.openaiBaseURL,
-		OpenAIModel:        ev.openaiModel,
-		OllamaBaseURL:      ev.ollamaBaseURL,
-		LlamaCPPBaseURL:    strings.TrimSpace(ev.llamaCPPBaseURL),
-		LlamaCPPModel:      ev.llamaCPPModel,
-		EmbeddingDimension: ev.embeddingDimension,
-		EmbeddingMode:      ev.embeddingMode,
+		TripleExtractor: TripleExtractorConfig{
+			Enabled: ev.tripleExtractorEnabled,
+			BaseURL: ev.tripleExtractorBaseURL,
+			APIKey:  ev.tripleExtractorAPIKey,
+			Model:   ev.tripleExtractorModel,
+			Timeout: parseDurationOrDefault(ev.tripleExtractorTimeout, 30*time.Second),
+		},
 
-		EmbeddingTimeout:    parseDurationOrDefault(ev.embeddingTimeout, 5*time.Second),
-		EmbeddingMaxRetries: ev.embeddingMaxRetries,
+		HTTP: HTTPConfig{
+			Mode:                         ev.httpMode,
+			Host:                         strings.TrimSpace(ev.httpHost),
+			Port:                         ev.httpPort,
+			AuthToken:                    ev.httpAuthToken,
+			InsecureAllowUnauthenticated: ev.httpInsecureAllowUnauthenticated,
+		},
 
-		AutoIndex:        ev.autoIndex,
-		FileWatcher:      ev.fileWatcher,
-		WatchInterval:    parseDurationOrDefault(ev.watchInterval, 5*time.Minute),
-		DebounceDuration: parseDurationOrDefault(ev.debounceDuration, 30*time.Second),
+		Session: SessionConfig{
+			TrackingEnabled:    ev.sessionTrackingEnabled,
+			IdleTimeout:        parseDurationOrDefault(ev.sessionIdleTimeout, 10*time.Minute),
+			CheckpointInterval: parseDurationOrDefault(ev.sessionCheckpointInterval, 30*time.Minute),
+			MinEvents:          sessionMinEvents,
+		},
 
-		HTTPMode:                         ev.httpMode,
-		HTTPHost:                         strings.TrimSpace(ev.httpHost),
-		HTTPPort:                         ev.httpPort,
-		HTTPAuthToken:                    ev.httpAuthToken,
-		HTTPInsecureAllowUnauthenticated: ev.httpInsecureAllowUnauthenticated,
-		SessionTrackingEnabled:           ev.sessionTrackingEnabled,
-		SessionIdleTimeout:               parseDurationOrDefault(ev.sessionIdleTimeout, 10*time.Minute),
-		SessionCheckpointInterval:        parseDurationOrDefault(ev.sessionCheckpointInterval, 30*time.Minute),
-		SessionMinEvents:                 sessionMinEvents,
+		Steward: StewardConfig{
+			Enabled:            resolveStewardEnabled(ev),
+			Mode:               ev.stewardMode,
+			ScheduleInterval:   ev.stewardScheduleInterval,
+			DuplicateThreshold: ev.stewardDuplicateThreshold,
+			StaleDays:          ev.stewardStaleDays,
+			CanonicalMinConf:   ev.stewardCanonicalMinConf,
+		},
 
-		StewardEnabled:            resolveStewardEnabled(ev),
-		StewardMode:               ev.stewardMode,
-		StewardScheduleInterval:   ev.stewardScheduleInterval,
-		StewardDuplicateThreshold: ev.stewardDuplicateThreshold,
-		StewardStaleDays:          ev.stewardStaleDays,
-		StewardCanonicalMinConf:   ev.stewardCanonicalMinConf,
+		HooksDedup: HooksDedupConfig{
+			Disabled:  ev.checkpointDedupDisabled,
+			Threshold: ev.checkpointDedupThreshold,
+			Window:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
+			MinChars:  ev.checkpointDedupMinChars,
+		},
 
-		CheckpointDedupDisabled:  ev.checkpointDedupDisabled,
-		CheckpointDedupThreshold: ev.checkpointDedupThreshold,
-		CheckpointDedupWindow:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
-		CheckpointDedupMinChars:  ev.checkpointDedupMinChars,
+		Lifecycle: LifecycleConfig{
+			TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+		},
 
-		TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+		Rerank: RerankConfig{
+			Enabled:   ev.rerankEnabled,
+			Provider:  ev.rerankProvider,
+			JinaModel: ev.jinaRerankerModel,
+			Timeout:   parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
+			TopN:      ev.rerankTopN,
+		},
 
-		RerankEnabled:     ev.rerankEnabled,
-		RerankProvider:    ev.rerankProvider,
-		JinaRerankerModel: ev.jinaRerankerModel,
-		RerankTimeout:     parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
-		RerankTopN:        ev.rerankTopN,
-
-		SedimentEnabled:          ev.sedimentEnabled,
-		SedimentScheduleInterval: parseDurationOrDefault(ev.sedimentScheduleInterval, 0),
-		RecallHalfLifeDays:       ev.recallHalfLifeDays,
+		Sediment: SedimentConfig{
+			Enabled:            ev.sedimentEnabled,
+			ScheduleInterval:   parseDurationOrDefault(ev.sedimentScheduleInterval, 0),
+			RecallHalfLifeDays: ev.recallHalfLifeDays,
+		},
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
 		re, err := regexp.Compile(slugPattern)
 		if err != nil {
 			return Config{}, fmt.Errorf("invalid MCP_TASK_SLUG_PATTERN %q: %w", slugPattern, err)
 		}
-		cfg.TaskSlugPattern = re
+		cfg.Lifecycle.TaskSlugPattern = re
 	}
 	if err := validateResolvedConfig(cfg); err != nil {
 		return Config{}, err
@@ -749,17 +792,17 @@ func resolveStewardEnabled(ev envValues) bool {
 // EmbedderConfig returns the embedder.Config derived from this server config.
 func (c Config) EmbedderConfig() embedder.Config {
 	return embedder.Config{
-		JinaToken:       c.JinaAPIKey,
-		OpenAIToken:     c.OpenAIAPIKey,
-		OpenAIBaseURL:   c.OpenAIBaseURL,
-		OpenAIModel:     c.OpenAIModel,
-		OllamaBaseURL:   c.OllamaBaseURL,
-		LlamaCPPBaseURL: c.LlamaCPPBaseURL,
-		LlamaCPPModel:   c.LlamaCPPModel,
-		Dimension:       c.EmbeddingDimension,
-		Mode:            c.EmbeddingMode,
-		MaxRetries:      c.EmbeddingMaxRetries,
-		Timeout:         c.EmbeddingTimeout,
+		JinaToken:       c.Embeddings.JinaAPIKey,
+		OpenAIToken:     c.Embeddings.OpenAIAPIKey,
+		OpenAIBaseURL:   c.Embeddings.OpenAIBaseURL,
+		OpenAIModel:     c.Embeddings.OpenAIModel,
+		OllamaBaseURL:   c.Embeddings.OllamaBaseURL,
+		LlamaCPPBaseURL: c.Embeddings.LlamaCPPBaseURL,
+		LlamaCPPModel:   c.Embeddings.LlamaCPPModel,
+		Dimension:       c.Embeddings.Dimension,
+		Mode:            c.Embeddings.Mode,
+		MaxRetries:      c.Embeddings.MaxRetries,
+		Timeout:         c.Embeddings.Timeout,
 	}
 }
 

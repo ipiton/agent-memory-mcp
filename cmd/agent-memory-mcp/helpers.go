@@ -17,7 +17,7 @@ import (
 // initMemoryStore creates an embedder and memory store from config.
 // Returns store, cleanup function, and error.
 func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.MemoryDBPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfg.Memory.DBPath), 0755); err != nil {
 		return nil, nil, fmt.Errorf("failed to create memory directory: %w", err)
 	}
 
@@ -27,12 +27,12 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 		emb = nil
 	}
 
-	store, err := memory.NewStore(cfg.MemoryDBPath, embedder.AsService(emb), zap.NewNop())
+	store, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), zap.NewNop())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
 	// T68: match server-side recall scoring (exponential age decay).
-	store.SetRecallHalfLife(cfg.RecallHalfLifeDays)
+	store.SetRecallHalfLife(cfg.Sediment.RecallHalfLifeDays)
 
 	cleanup := func() { _ = store.Close() }
 	return store, cleanup, nil
@@ -40,8 +40,8 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 
 // initRAGEngine creates a RAG engine for CLI use (no auto-indexing or file watcher).
 func initRAGEngine(cfg config.Config) (*rag.Engine, error) {
-	cfg.AutoIndex = false
-	cfg.FileWatcher = false
+	cfg.RAG.AutoIndex = false
+	cfg.RAG.FileWatcher = false
 
 	engine := rag.NewEngine(cfg, nil)
 	if engine == nil {

@@ -15,10 +15,12 @@ import (
 func TestNewWiresMemoryStore(t *testing.T) {
 	root := t.TempDir()
 	cfg := config.Config{
-		RootPath:      root,
-		MemoryEnabled: true,
-		MemoryDBPath:  filepath.Join(root, "memory.db"),
-		OutputMode:    "line",
+		RootPath:   root,
+		OutputMode: "line",
+		Memory: config.MemoryConfig{
+			Enabled: true,
+			DBPath:  filepath.Join(root, "memory.db"),
+		},
 	}
 	guard, err := paths.NewGuard(cfg)
 	if err != nil {
@@ -43,7 +45,7 @@ func TestNewWiresMemoryStore(t *testing.T) {
 // no steward service, and the embedder adapts to a true nil interface.
 func TestNewMemoryDisabledLeavesStoreNil(t *testing.T) {
 	root := t.TempDir()
-	cfg := config.Config{RootPath: root, MemoryEnabled: false, OutputMode: "line"}
+	cfg := config.Config{RootPath: root, OutputMode: "line", Memory: config.MemoryConfig{Enabled: false}}
 	guard, err := paths.NewGuard(cfg)
 	if err != nil {
 		t.Fatalf("NewGuard: %v", err)

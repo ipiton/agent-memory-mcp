@@ -79,9 +79,7 @@ func TestHTTPNoAuthConfigured(t *testing.T) {
 
 func TestValidateHTTPExposureAllowsLoopbackWithoutAuth(t *testing.T) {
 	cfg := config.Config{
-		HTTPMode: "http",
-		HTTPHost: "127.0.0.1",
-		HTTPPort: 18080,
+		HTTP: config.HTTPConfig{Mode: "http", Host: "127.0.0.1", Port: 18080},
 	}
 
 	if err := validateHTTPExposure(cfg); err != nil {
@@ -91,9 +89,7 @@ func TestValidateHTTPExposureAllowsLoopbackWithoutAuth(t *testing.T) {
 
 func TestValidateHTTPExposureRejectsNonLoopbackWithoutAuth(t *testing.T) {
 	cfg := config.Config{
-		HTTPMode: "http",
-		HTTPHost: "0.0.0.0",
-		HTTPPort: 18080,
+		HTTP: config.HTTPConfig{Mode: "http", Host: "0.0.0.0", Port: 18080},
 	}
 
 	err := validateHTTPExposure(cfg)
@@ -107,10 +103,7 @@ func TestValidateHTTPExposureRejectsNonLoopbackWithoutAuth(t *testing.T) {
 
 func TestValidateHTTPExposureAllowsExplicitInsecureOverride(t *testing.T) {
 	cfg := config.Config{
-		HTTPMode:                         "http",
-		HTTPHost:                         "0.0.0.0",
-		HTTPPort:                         18080,
-		HTTPInsecureAllowUnauthenticated: true,
+		HTTP: config.HTTPConfig{Mode: "http", Host: "0.0.0.0", Port: 18080, InsecureAllowUnauthenticated: true},
 	}
 
 	if err := validateHTTPExposure(cfg); err != nil {

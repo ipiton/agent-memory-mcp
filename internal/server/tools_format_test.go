@@ -33,7 +33,7 @@ func TestPreviewText(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &MCPServer{config: config.Config{MemoryPreviewRunes: tc.override}}
+			s := &MCPServer{config: config.Config{Memory: config.MemoryConfig{PreviewRunes: tc.override}}}
 			got := s.previewText(tc.in, defaultLimit)
 
 			if !utf8.ValidString(got) {

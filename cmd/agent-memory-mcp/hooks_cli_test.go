@@ -99,7 +99,7 @@ func TestCheckpointDedup_DisabledEscapeHatch_AllowsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
 	}
-	if !cfg.CheckpointDedupDisabled {
+	if !cfg.HooksDedup.Disabled {
 		t.Fatalf("expected CheckpointDedupDisabled=true from env, got false")
 	}
 

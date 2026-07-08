@@ -121,8 +121,8 @@ func TestIndexDocumentsRecoversAfterDirtyCommitFailure(t *testing.T) {
 
 	engine := &Engine{
 		config: config.Config{
-			RootPath:      repoRoot,
-			RAGMaxResults: 10,
+			RootPath: repoRoot,
+			RAG:      config.RAGConfig{MaxResults: 10},
 		},
 		repoRoot: repoRoot,
 		logger:   zap.NewNop(),
@@ -218,7 +218,7 @@ func TestIndexDocumentsSerialisesWriters(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	engine := &Engine{
-		config:   config.Config{RootPath: repoRoot, RAGMaxResults: 10},
+		config:   config.Config{RootPath: repoRoot, RAG: config.RAGConfig{MaxResults: 10}},
 		repoRoot: repoRoot,
 		logger:   zap.NewNop(),
 		docService: newDocumentService(docServiceConfig{
@@ -836,7 +836,7 @@ func newRerankTestEngine(t *testing.T, chunks []vectorstore.Chunk) *Engine {
 
 	return &Engine{
 		config: config.Config{
-			RAGMaxResults: 10,
+			RAG: config.RAGConfig{MaxResults: 10},
 		},
 		logger: zap.NewNop(),
 		vecService: &vectorService{
@@ -1140,7 +1140,7 @@ func TestApplyReranker_ClampsTopN_To_100(t *testing.T) {
 	engine := newRerankTestEngine(t, chunks)
 	// Bump MaxResults/RerankTopN well above the clamp so the clamp is the
 	// only thing that can limit the candidate count.
-	engine.config.RAGMaxResults = 150
+	engine.config.RAG.MaxResults = 150
 	engine.vecService.config.MaxResults = 150
 	engine.vecService.config.RerankTopN = 200
 
@@ -1228,7 +1228,7 @@ func TestIndexDocumentsReusesUnchangedChunks(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 
 	engine := &Engine{
-		config:   config.Config{RootPath: repoRoot, RAGMaxResults: 10},
+		config:   config.Config{RootPath: repoRoot, RAG: config.RAGConfig{MaxResults: 10}},
 		repoRoot: repoRoot,
 		logger:   zap.NewNop(),
 		docService: newDocumentService(docServiceConfig{

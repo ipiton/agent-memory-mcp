@@ -359,12 +359,12 @@ func (re *Engine) autoIndexIfNeeded() {
 }
 
 func (re *Engine) startFileWatcher() {
-	interval := re.config.WatchInterval
+	interval := re.config.RAG.WatchInterval
 	if interval <= 0 {
 		interval = 5 * time.Minute
 	}
 
-	debounceDuration := re.config.DebounceDuration
+	debounceDuration := re.config.RAG.DebounceDuration
 	if debounceDuration <= 0 {
 		debounceDuration = 30 * time.Second
 	}

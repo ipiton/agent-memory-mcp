@@ -91,7 +91,7 @@ type sessionNotification struct {
 }
 
 func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logger.FileLogger) *sessionTracker {
-	if store == nil || !cfg.SessionTrackingEnabled {
+	if store == nil || !cfg.Session.TrackingEnabled {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,14 +99,14 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 		store:              store,
 		closeService:       sessionclose.New(store),
 		fileLogger:         fileLogger,
-		idleTimeout:        cfg.SessionIdleTimeout,
-		checkpointInterval: cfg.SessionCheckpointInterval,
-		minEvents:          cfg.SessionMinEvents,
+		idleTimeout:        cfg.Session.IdleTimeout,
+		checkpointInterval: cfg.Session.CheckpointInterval,
+		minEvents:          cfg.Session.MinEvents,
 		dedupCfg: hooks.NewDedupConfig(
-			cfg.CheckpointDedupDisabled,
-			cfg.CheckpointDedupThreshold,
-			cfg.CheckpointDedupMinChars,
-			cfg.CheckpointDedupWindow,
+			cfg.HooksDedup.Disabled,
+			cfg.HooksDedup.Threshold,
+			cfg.HooksDedup.MinChars,
+			cfg.HooksDedup.Window,
 		),
 		now:           time.Now,
 		ctx:           ctx,

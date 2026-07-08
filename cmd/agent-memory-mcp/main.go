@@ -157,8 +157,8 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.HTTPMode == "http" {
-		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTPHost, strconv.Itoa(cfg.HTTPPort)))
+	if cfg.HTTP.Mode == "http" {
+		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTP.Host, strconv.Itoa(cfg.HTTP.Port)))
 		if err := server.RunHTTP(ctx, srv); err != nil {
 			return fmt.Errorf("http server error: %w", err)
 		}

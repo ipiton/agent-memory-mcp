@@ -32,9 +32,9 @@ func initFileLogger(cfg config.Config) *logger.FileLogger {
 	}
 	fileLogger.Info("MCP server initializing",
 		zap.String("root_path", cfg.RootPath),
-		zap.Bool("rag_enabled", cfg.RAGEnabled),
-		zap.Bool("memory_enabled", cfg.MemoryEnabled),
-		zap.String("rag_index_path", cfg.RAGIndexPath),
+		zap.Bool("rag_enabled", cfg.RAG.Enabled),
+		zap.Bool("memory_enabled", cfg.Memory.Enabled),
+		zap.String("rag_index_path", cfg.RAG.IndexPath),
 	)
 	return fileLogger
 }
@@ -42,7 +42,7 @@ func initFileLogger(cfg config.Config) *logger.FileLogger {
 // initRAGEngine builds the RAG engine when enabled, returning nil when disabled
 // or when initialization fails (both degrade gracefully).
 func initRAGEngine(cfg config.Config, fileLogger *logger.FileLogger) *rag.Engine {
-	if !cfg.RAGEnabled {
+	if !cfg.RAG.Enabled {
 		if fileLogger != nil {
 			fileLogger.Info("RAG engine disabled by configuration")
 		}
@@ -53,16 +53,16 @@ func initRAGEngine(cfg config.Config, fileLogger *logger.FileLogger) *rag.Engine
 	if ragEngine == nil {
 		if fileLogger != nil {
 			fileLogger.Warn("RAG engine initialization failed - RAG features will be unavailable",
-				zap.String("rag_index_path", cfg.RAGIndexPath),
-				zap.String("jina_api_key_set", config.BoolToString(cfg.JinaAPIKey != "")),
-				zap.String("ollama_url", cfg.OllamaBaseURL),
+				zap.String("rag_index_path", cfg.RAG.IndexPath),
+				zap.String("jina_api_key_set", config.BoolToString(cfg.Embeddings.JinaAPIKey != "")),
+				zap.String("ollama_url", cfg.Embeddings.OllamaBaseURL),
 			)
 		}
 		return nil
 	}
 	if fileLogger != nil {
 		fileLogger.Info("RAG engine initialized successfully",
-			zap.String("rag_index_path", cfg.RAGIndexPath),
+			zap.String("rag_index_path", cfg.RAG.IndexPath),
 		)
 	}
 	return ragEngine
@@ -73,11 +73,11 @@ func initRAGEngine(cfg config.Config, fileLogger *logger.FileLogger) *rag.Engine
 // embedder may be nil (text-only matching) even when the store is non-nil; it is
 // returned so the caller can close it / adapt it to embedder.Service.
 func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.Store, *embedder.Embedder) {
-	if !cfg.MemoryEnabled {
+	if !cfg.Memory.Enabled {
 		return nil, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(cfg.MemoryDBPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(cfg.Memory.DBPath), 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to create memory store directory: %v\n", err)
 	}
 
@@ -90,11 +90,11 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 		emb = nil
 	}
 
-	memoryStore, err := memory.NewStore(cfg.MemoryDBPath, embedder.AsService(emb), zap.NewNop())
+	memoryStore, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), zap.NewNop())
 	if err != nil {
 		if fileLogger != nil {
 			fileLogger.Warn("Memory store initialization failed - memory features will be unavailable",
-				zap.String("memory_db_path", cfg.MemoryDBPath),
+				zap.String("memory_db_path", cfg.Memory.DBPath),
 				zap.Error(err),
 			)
 		}
@@ -106,21 +106,21 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 
 	if fileLogger != nil {
 		fileLogger.Info("Memory store initialized successfully",
-			zap.String("memory_db_path", cfg.MemoryDBPath),
+			zap.String("memory_db_path", cfg.Memory.DBPath),
 		)
 	}
 	// T48: propagate the sediment feature flag into the store so
 	// Recall knows whether to apply layer-aware scoring.
-	memoryStore.SetSedimentEnabled(cfg.SedimentEnabled)
+	memoryStore.SetSedimentEnabled(cfg.Sediment.Enabled)
 
 	// T68: configure exponential age decay for recall scoring.
-	memoryStore.SetRecallHalfLife(cfg.RecallHalfLifeDays)
+	memoryStore.SetRecallHalfLife(cfg.Sediment.RecallHalfLifeDays)
 
 	// T50 slice 2: optional knowledge-graph triple extractor.
 	// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If
 	// configuration is incomplete we log a warning and proceed
 	// without extraction — ingest must keep working regardless.
-	if cfg.TripleExtractorEnabled {
+	if cfg.TripleExtractor.Enabled {
 		wireTripleExtractor(cfg, memoryStore, fileLogger)
 	}
 
@@ -130,19 +130,19 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 // wireTripleExtractor attaches the optional OpenAI triple extractor to the
 // store, logging and skipping on misconfiguration.
 func wireTripleExtractor(cfg config.Config, memoryStore *memory.Store, fileLogger *logger.FileLogger) {
-	apiKey := cfg.TripleExtractorAPIKey
+	apiKey := cfg.TripleExtractor.APIKey
 	if apiKey == "" {
-		apiKey = cfg.OpenAIAPIKey
+		apiKey = cfg.Embeddings.OpenAIAPIKey
 	}
-	baseURL := cfg.TripleExtractorBaseURL
+	baseURL := cfg.TripleExtractor.BaseURL
 	if baseURL == "" {
-		baseURL = cfg.OpenAIBaseURL
+		baseURL = cfg.Embeddings.OpenAIBaseURL
 	}
 	extractor, exErr := memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
 		BaseURL: baseURL,
 		APIKey:  apiKey,
-		Model:   cfg.TripleExtractorModel,
-		Timeout: cfg.TripleExtractorTimeout,
+		Model:   cfg.TripleExtractor.Model,
+		Timeout: cfg.TripleExtractor.Timeout,
 	}, zap.NewNop())
 	if exErr != nil {
 		if fileLogger != nil {
@@ -160,7 +160,7 @@ func wireTripleExtractor(cfg config.Config, memoryStore *memory.Store, fileLogge
 // memory store exists. Applies env-driven policy overrides and starts the
 // scheduler. Returns (nil, nil) when disabled or on failure.
 func initStewardService(cfg config.Config, memoryStore *memory.Store, fileLogger *logger.FileLogger) (*steward.Service, *steward.Scheduler) {
-	if !cfg.StewardEnabled || memoryStore == nil {
+	if !cfg.Steward.Enabled || memoryStore == nil {
 		return nil, nil
 	}
 
@@ -183,19 +183,19 @@ func initStewardService(cfg config.Config, memoryStore *memory.Store, fileLogger
 	// after `brew upgrade`.
 	p := stewardSvc.Policy()
 	if _, ok := os.LookupEnv("MCP_STEWARD_MODE"); ok {
-		p.Mode = steward.PolicyMode(cfg.StewardMode)
+		p.Mode = steward.PolicyMode(cfg.Steward.Mode)
 	}
 	if _, ok := os.LookupEnv("MCP_STEWARD_SCHEDULE_INTERVAL"); ok {
-		p.ScheduleInterval = cfg.StewardScheduleInterval
+		p.ScheduleInterval = cfg.Steward.ScheduleInterval
 	}
 	if _, ok := os.LookupEnv("MCP_STEWARD_DUPLICATE_THRESHOLD"); ok {
-		p.DuplicateSimilarity = cfg.StewardDuplicateThreshold
+		p.DuplicateSimilarity = cfg.Steward.DuplicateThreshold
 	}
 	if _, ok := os.LookupEnv("MCP_STEWARD_STALE_DAYS"); ok {
-		p.StaleDays = cfg.StewardStaleDays
+		p.StaleDays = cfg.Steward.StaleDays
 	}
 	if _, ok := os.LookupEnv("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE"); ok {
-		p.CanonicalMinConfidence = cfg.StewardCanonicalMinConf
+		p.CanonicalMinConfidence = cfg.Steward.CanonicalMinConf
 	}
 	if err := stewardSvc.SetPolicy(p); err != nil && fileLogger != nil {
 		fileLogger.Warn("Failed to set steward policy from config", zap.Error(err))

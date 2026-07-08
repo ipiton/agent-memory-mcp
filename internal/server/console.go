@@ -38,7 +38,7 @@ type consoleQueryResponse struct {
 
 func buildHTTPMux(server *MCPServer) *http.ServeMux {
 	mux := http.NewServeMux()
-	authToken := server.config.HTTPAuthToken
+	authToken := server.config.HTTP.AuthToken
 
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		// CORS: deny cross-origin by default

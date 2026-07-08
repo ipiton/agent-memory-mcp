@@ -15,8 +15,8 @@ func (s *MCPServer) callSemanticSearch(args map[string]any) (any, *rpcError) {
 	if err := s.requireRAGEngine(); err != nil {
 		if s.fileLogger != nil {
 			s.fileLogger.Warn("semantic_search called but RAG engine is not available",
-				zap.Bool("rag_enabled_in_config", s.config.RAGEnabled),
-				zap.String("rag_index_path", s.config.RAGIndexPath),
+				zap.Bool("rag_enabled_in_config", s.config.RAG.Enabled),
+				zap.String("rag_index_path", s.config.RAG.IndexPath),
 			)
 		}
 		return nil, err

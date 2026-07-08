@@ -173,20 +173,20 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 
 	repoRoot := cfg.RootPath
 
-	indexDirs := cfg.IndexDirs
+	indexDirs := cfg.RAG.IndexDirs
 	if len(indexDirs) == 0 {
 		indexDirs = []string{"docs"}
 	}
 
 	dsCfg := docServiceConfig{
 		IndexDirs:         indexDirs,
-		IndexExcludeDirs:  cfg.IndexExcludeDirs,
-		IndexExcludeGlobs: cfg.IndexExcludeGlobs,
-		RedactSecrets:     cfg.RedactSecrets,
+		IndexExcludeDirs:  cfg.RAG.IndexExcludeDirs,
+		IndexExcludeGlobs: cfg.RAG.IndexExcludeGlobs,
+		RedactSecrets:     cfg.RAG.RedactSecrets,
 		RepoRoot:          repoRoot,
-		ChunkSize:         cfg.ChunkSize,
-		ChunkOverlap:      cfg.ChunkOverlap,
-		KeepNoise:         cfg.RagKeepNoise,
+		ChunkSize:         cfg.RAG.ChunkSize,
+		ChunkOverlap:      cfg.RAG.ChunkOverlap,
+		KeepNoise:         cfg.RAG.KeepNoise,
 	}
 	if dsCfg.ChunkSize == 0 {
 		dsCfg.ChunkSize = 2000
@@ -202,8 +202,8 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		if fileLogger != nil {
 			fileLogger.Error("Failed to initialize embedder",
 				zap.Error(err),
-				zap.String("jina_api_key_set", config.BoolToString(cfg.JinaAPIKey != "")),
-				zap.String("ollama_url", cfg.OllamaBaseURL),
+				zap.String("jina_api_key_set", config.BoolToString(cfg.Embeddings.JinaAPIKey != "")),
+				zap.String("ollama_url", cfg.Embeddings.OllamaBaseURL),
 			)
 		}
 		return nil
@@ -215,48 +215,48 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	// logged at Warn but also degrades gracefully — we do not want to break
 	// the RAG engine over a misconfigured optional feature.
 	var rerankProv reranker.Reranker
-	if cfg.RerankEnabled {
+	if cfg.Rerank.Enabled {
 		rp, rerr := reranker.New(reranker.Config{
-			Provider: cfg.RerankProvider,
-			Model:    cfg.JinaRerankerModel,
-			APIKey:   cfg.JinaAPIKey,
-			Timeout:  cfg.RerankTimeout,
-			TopN:     cfg.RerankTopN,
+			Provider: cfg.Rerank.Provider,
+			Model:    cfg.Rerank.JinaModel,
+			APIKey:   cfg.Embeddings.JinaAPIKey,
+			Timeout:  cfg.Rerank.Timeout,
+			TopN:     cfg.Rerank.TopN,
 		}, zapLogger)
 		switch {
 		case rerr == nil:
 			rerankProv = rp
 			zapLogger.Info("Neural reranker enabled",
-				zap.String("provider", cfg.RerankProvider),
-				zap.String("model", cfg.JinaRerankerModel),
-				zap.Duration("timeout", cfg.RerankTimeout),
-				zap.Int("top_n", cfg.RerankTopN),
+				zap.String("provider", cfg.Rerank.Provider),
+				zap.String("model", cfg.Rerank.JinaModel),
+				zap.Duration("timeout", cfg.Rerank.Timeout),
+				zap.Int("top_n", cfg.Rerank.TopN),
 			)
 		case errors.Is(rerr, reranker.ErrDisabled):
 			zapLogger.Info("Neural reranker disabled by provider config",
-				zap.String("provider", cfg.RerankProvider),
+				zap.String("provider", cfg.Rerank.Provider),
 			)
 		default:
 			zapLogger.Warn("Neural reranker init failed, falling back to hybrid-only",
 				zap.Error(rerr),
-				zap.String("provider", cfg.RerankProvider),
+				zap.String("provider", cfg.Rerank.Provider),
 			)
 		}
 	}
 
 	vecSvc, err := newVectorService(vecServiceConfig{
-		IndexPath:     cfg.RAGIndexPath,
+		IndexPath:     cfg.RAG.IndexPath,
 		Embedder:      emb,
-		MaxResults:    cfg.RAGMaxResults,
+		MaxResults:    cfg.RAG.MaxResults,
 		Reranker:      rerankProv,
-		RerankTopN:    cfg.RerankTopN,
-		RerankTimeout: cfg.RerankTimeout,
+		RerankTopN:    cfg.Rerank.TopN,
+		RerankTimeout: cfg.Rerank.Timeout,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {
 			fileLogger.Error("Failed to initialize vector service",
 				zap.Error(err),
-				zap.String("rag_index_path", cfg.RAGIndexPath),
+				zap.String("rag_index_path", cfg.RAG.IndexPath),
 			)
 		}
 		return nil
@@ -272,7 +272,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		stopWatcher: make(chan struct{}),
 	}
 
-	if cfg.AutoIndex {
+	if cfg.RAG.AutoIndex {
 		if fileLogger != nil {
 			fileLogger.Info("Starting auto-indexing check")
 		}
@@ -282,7 +282,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 			engine.autoIndexIfNeeded()
 		}()
 
-		if cfg.FileWatcher {
+		if cfg.RAG.FileWatcher {
 			if fileLogger != nil {
 				fileLogger.Info("Starting file watcher for auto-reindexing")
 			}
@@ -298,7 +298,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		fileLogger.Info("RAG engine created successfully",
 			zap.String("repo_root", repoRoot),
 			zap.Strings("index_dirs", indexDirs),
-			zap.String("rag_index_path", cfg.RAGIndexPath),
+			zap.String("rag_index_path", cfg.RAG.IndexPath),
 		)
 	}
 
@@ -312,10 +312,10 @@ func (re *Engine) Search(ctx context.Context, query string, limit int, sourceTyp
 	}
 
 	if limit <= 0 {
-		limit = re.config.RAGMaxResults
+		limit = re.config.RAG.MaxResults
 	}
-	if limit > re.config.RAGMaxResults {
-		limit = re.config.RAGMaxResults
+	if limit > re.config.RAG.MaxResults {
+		limit = re.config.RAG.MaxResults
 	}
 
 	result, err := re.vecService.search(ctx, searchQuery{
