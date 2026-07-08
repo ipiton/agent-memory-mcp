@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -76,123 +75,12 @@ type MCPServer struct {
 }
 
 // New creates a new MCPServer with the given configuration and path guard.
+// Subsystem construction is decomposed into init* helpers in bootstrap.go
+// (Round 3 H17); New orchestrates them in order.
 func New(cfg config.Config, guard *paths.Guard) *MCPServer {
-	var ragEngine *rag.Engine
-	var memoryStore *memory.Store
-	var emb *embedder.Embedder
-	var fileLogger *logger.FileLogger
-
-	if cfg.LogPath != "" {
-		var err error
-		fileLogger, err = logger.New(cfg.LogPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to create file logger: %v\n", err)
-		} else {
-			fileLogger.Info("MCP server initializing",
-				zap.String("root_path", cfg.RootPath),
-				zap.Bool("rag_enabled", cfg.RAGEnabled),
-				zap.Bool("memory_enabled", cfg.MemoryEnabled),
-				zap.String("rag_index_path", cfg.RAGIndexPath),
-			)
-		}
-	}
-
-	if cfg.RAGEnabled {
-		ragEngine = rag.NewEngine(cfg, fileLogger)
-		if ragEngine == nil {
-			if fileLogger != nil {
-				fileLogger.Warn("RAG engine initialization failed - RAG features will be unavailable",
-					zap.String("rag_index_path", cfg.RAGIndexPath),
-					zap.String("jina_api_key_set", config.BoolToString(cfg.JinaAPIKey != "")),
-					zap.String("ollama_url", cfg.OllamaBaseURL),
-				)
-			}
-		} else {
-			if fileLogger != nil {
-				fileLogger.Info("RAG engine initialized successfully",
-					zap.String("rag_index_path", cfg.RAGIndexPath),
-				)
-			}
-		}
-	} else {
-		if fileLogger != nil {
-			fileLogger.Info("RAG engine disabled by configuration")
-		}
-	}
-
-	if cfg.MemoryEnabled {
-		if err := os.MkdirAll(filepath.Dir(cfg.MemoryDBPath), 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to create memory store directory: %v\n", err)
-		}
-
-		var err error
-		emb, err = embedder.New(cfg.EmbedderConfig(), zap.NewNop())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: embedder unavailable, memory will use text-only matching: %v\n", err)
-			if fileLogger != nil {
-				fileLogger.Warn("Embedder initialization failed, memory will use text-only matching", zap.Error(err))
-			}
-			emb = nil
-		}
-
-		memoryStore, err = memory.NewStore(cfg.MemoryDBPath, embedder.AsService(emb), zap.NewNop())
-		if err != nil {
-			if fileLogger != nil {
-				fileLogger.Warn("Memory store initialization failed - memory features will be unavailable",
-					zap.String("memory_db_path", cfg.MemoryDBPath),
-					zap.Error(err),
-				)
-			}
-			memoryStore = nil
-			if emb != nil {
-				emb.Close()
-			}
-			emb = nil
-		} else {
-			if fileLogger != nil {
-				fileLogger.Info("Memory store initialized successfully",
-					zap.String("memory_db_path", cfg.MemoryDBPath),
-				)
-			}
-			// T48: propagate the sediment feature flag into the store so
-			// Recall knows whether to apply layer-aware scoring.
-			memoryStore.SetSedimentEnabled(cfg.SedimentEnabled)
-
-			// T68: configure exponential age decay for recall scoring.
-			memoryStore.SetRecallHalfLife(cfg.RecallHalfLifeDays)
-
-			// T50 slice 2: optional knowledge-graph triple extractor.
-			// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If
-			// configuration is incomplete we log a warning and proceed
-			// without extraction — ingest must keep working regardless.
-			if cfg.TripleExtractorEnabled {
-				apiKey := cfg.TripleExtractorAPIKey
-				if apiKey == "" {
-					apiKey = cfg.OpenAIAPIKey
-				}
-				baseURL := cfg.TripleExtractorBaseURL
-				if baseURL == "" {
-					baseURL = cfg.OpenAIBaseURL
-				}
-				extractor, exErr := memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
-					BaseURL: baseURL,
-					APIKey:  apiKey,
-					Model:   cfg.TripleExtractorModel,
-					Timeout: cfg.TripleExtractorTimeout,
-				}, zap.NewNop())
-				if exErr != nil {
-					if fileLogger != nil {
-						fileLogger.Warn("Triple extractor disabled: misconfiguration",
-							zap.Error(exErr))
-					} else {
-						fmt.Fprintf(os.Stderr, "warning: triple extractor disabled: %v\n", exErr)
-					}
-				} else {
-					memoryStore.SetTripleExtractor(extractor)
-				}
-			}
-		}
-	}
+	fileLogger := initFileLogger(cfg)
+	ragEngine := initRAGEngine(cfg, fileLogger)
+	memoryStore, emb := initMemoryStore(cfg, fileLogger)
 
 	if fileLogger != nil {
 		fileLogger.Info("MCP server initialized",
@@ -201,66 +89,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		)
 	}
 
-	var stewardSvc *steward.Service
-	var stewardSched *steward.Scheduler
-	if cfg.StewardEnabled && memoryStore != nil {
-		var sLogger *zap.Logger
-		if fileLogger != nil {
-			sLogger = fileLogger.Logger
-		}
-		var err error
-		stewardSvc, err = steward.NewService(memoryStore, sLogger)
-		if err != nil {
-			if fileLogger != nil {
-				fileLogger.Warn("Steward service initialization failed", zap.Error(err))
-			}
-		} else {
-			// Apply env-driven config overrides ONLY for fields whose env
-			// var is explicitly set. Without this guard (Round 3 / T53),
-			// every restart clobbered a user-set `steward_policy mode=auto`
-			// with the config default "manual", silently halting auto-runs
-			// after `brew upgrade`.
-			p := stewardSvc.Policy()
-			if _, ok := os.LookupEnv("MCP_STEWARD_MODE"); ok {
-				p.Mode = steward.PolicyMode(cfg.StewardMode)
-			}
-			if _, ok := os.LookupEnv("MCP_STEWARD_SCHEDULE_INTERVAL"); ok {
-				p.ScheduleInterval = cfg.StewardScheduleInterval
-			}
-			if _, ok := os.LookupEnv("MCP_STEWARD_DUPLICATE_THRESHOLD"); ok {
-				p.DuplicateSimilarity = cfg.StewardDuplicateThreshold
-			}
-			if _, ok := os.LookupEnv("MCP_STEWARD_STALE_DAYS"); ok {
-				p.StaleDays = cfg.StewardStaleDays
-			}
-			if _, ok := os.LookupEnv("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE"); ok {
-				p.CanonicalMinConfidence = cfg.StewardCanonicalMinConf
-			}
-			if err := stewardSvc.SetPolicy(p); err != nil && fileLogger != nil {
-				fileLogger.Warn("Failed to set steward policy from config", zap.Error(err))
-			}
-
-			stewardSched = steward.NewScheduler(stewardSvc, sLogger)
-			stewardSched.Start()
-
-			// T53 observability: surface a persistent inbox backlog when
-			// running in non-auto mode so operators notice that previously
-			// queued items aren't being processed.
-			if fileLogger != nil {
-				fileLogger.Info("Steward service initialized",
-					zap.String("mode", string(p.Mode)),
-				)
-				if p.Mode == steward.PolicyModeManual {
-					if status, err := stewardSvc.Status(); err == nil && status.PendingReview > 100 {
-						fileLogger.Warn("Steward in manual mode with large pending review queue",
-							zap.Int("pending_review", status.PendingReview),
-							zap.String("hint", "run 'steward_policy mode=scheduled' to resume auto-resolution"),
-						)
-					}
-				}
-			}
-		}
-	}
+	stewardSvc, stewardSched := initStewardService(cfg, memoryStore, fileLogger)
 
 	srv := &MCPServer{
 		config:            cfg,
