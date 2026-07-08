@@ -70,6 +70,34 @@ func TestLifecycleStatusOfPreservesCanonicalAndCompatibilityMappings(t *testing.
 	})
 }
 
+// TestLifecycleStatusOfPriorityMatrix pins the exact priority ordering of the
+// table-driven lifecycle sources (Round 3 M5): canonical > lifecycle_status >
+// archived > status > type-default. Each case sets a higher and a lower source
+// that would disagree, asserting the higher one wins.
+func TestLifecycleStatusOfPriorityMatrix(t *testing.T) {
+	cases := []struct {
+		name string
+		mem  *Memory
+		want LifecycleStatus
+	}{
+		{"nil memory → draft", nil, LifecycleDraft},
+		{"canonical flag beats lifecycle_status", &Memory{Type: TypeSemantic, Metadata: map[string]string{"canonical": "true", MetadataLifecycleStatus: "outdated"}}, LifecycleCanonical},
+		{"lifecycle_status beats archived", &Memory{Type: TypeSemantic, Metadata: map[string]string{MetadataLifecycleStatus: "active", "archived": "true"}}, LifecycleActive},
+		{"archived beats status", &Memory{Type: TypeSemantic, Metadata: map[string]string{"archived": "true", MetadataStatus: "active"}}, LifecycleSuperseded},
+		{"status used when no higher source", &Memory{Type: TypeSemantic, Metadata: map[string]string{MetadataStatus: "deprecated"}}, LifecycleOutdated},
+		{"working type default when no metadata", &Memory{Type: TypeWorking}, LifecycleDraft},
+		{"non-working type default when no metadata", &Memory{Type: TypeSemantic}, LifecycleActive},
+		{"unrecognized status falls through to type default", &Memory{Type: TypeSemantic, Metadata: map[string]string{MetadataStatus: "totally-unknown"}}, LifecycleActive},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LifecycleStatusOf(tc.mem); got != tc.want {
+				t.Fatalf("LifecycleStatusOf = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildEngineeringMetadataKeepsDetailedStatusAndDerivedLifecycle(t *testing.T) {
 	metadata := BuildEngineeringMetadata(EngineeringTypeDecision, "payments-api", "", "accepted", false, map[string]string{
 		MetadataOwner: "platform",

@@ -368,7 +368,7 @@ func TestLlamaCPPDisabledWhenBaseURLEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	for _, c := range e.singleCandidates("retrieval.passage") {
+	for _, c := range e.candidates("retrieval.passage") {
 		if c.provider.name() == "llamacpp" {
 			t.Fatal("llama.cpp must be opt-in via LLAMACPP_BASE_URL, but it joined the provider chain")
 		}
@@ -393,7 +393,7 @@ func TestOllamaNotDefaultedWhenLlamaCPPConfigured(t *testing.T) {
 	if e.config.OllamaBaseURL != "" {
 		t.Fatalf("OllamaBaseURL was force-defaulted to %q despite llama.cpp being configured", e.config.OllamaBaseURL)
 	}
-	for _, c := range e.batchCandidates("retrieval.passage") {
+	for _, c := range e.candidates("retrieval.passage") {
 		if strings.HasPrefix(c.provider.name(), "ollama/") {
 			t.Fatalf("Ollama (%s) joined the batch chain despite empty OLLAMA_BASE_URL + configured llama.cpp", c.provider.name())
 		}

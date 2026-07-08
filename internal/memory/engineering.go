@@ -157,22 +157,55 @@ func EngineeringTypeOf(m *Memory) EngineeringType {
 	return ""
 }
 
+// lifecycleRule resolves a memory's lifecycle status from a single metadata
+// source of truth. The first rule (in priority order) that matches wins.
+type lifecycleRule func(m *Memory) (LifecycleStatus, bool)
+
+// lifecycleSources lists the metadata-derived lifecycle sources in priority
+// order (Round 3 M5, table-driven). Adding a 7th source means appending a rule
+// here instead of threading another branch through LifecycleStatusOf. The
+// type-based fallback (working→draft, else active) lives in LifecycleStatusOf
+// because it is not metadata-derived.
+var lifecycleSources = []lifecycleRule{
+	// 1. Explicit canonical flag or knowledge_layer=canonical.
+	func(m *Memory) (LifecycleStatus, bool) {
+		if metadataBool(m.Metadata, "canonical") || strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]), "canonical") {
+			return LifecycleCanonical, true
+		}
+		return "", false
+	},
+	// 2. Explicit lifecycle_status metadata.
+	func(m *Memory) (LifecycleStatus, bool) {
+		if lifecycle := normalizeLifecycleStatus(m.Metadata[MetadataLifecycleStatus]); lifecycle != "" {
+			return lifecycle, true
+		}
+		return "", false
+	},
+	// 3. archived flag → superseded.
+	func(m *Memory) (LifecycleStatus, bool) {
+		if metadataBool(m.Metadata, "archived") {
+			return LifecycleSuperseded, true
+		}
+		return "", false
+	},
+	// 4. status metadata mapped to a lifecycle.
+	func(m *Memory) (LifecycleStatus, bool) {
+		if lifecycle := normalizeLifecycleStatus(m.Metadata[MetadataStatus]); lifecycle != "" {
+			return lifecycle, true
+		}
+		return "", false
+	},
+}
+
 func LifecycleStatusOf(m *Memory) LifecycleStatus {
 	if m == nil {
 		return LifecycleDraft
 	}
 	if len(m.Metadata) > 0 {
-		if metadataBool(m.Metadata, "canonical") || strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]), "canonical") {
-			return LifecycleCanonical
-		}
-		if lifecycle := normalizeLifecycleStatus(m.Metadata[MetadataLifecycleStatus]); lifecycle != "" {
-			return lifecycle
-		}
-		if metadataBool(m.Metadata, "archived") {
-			return LifecycleSuperseded
-		}
-		if lifecycle := normalizeLifecycleStatus(m.Metadata[MetadataStatus]); lifecycle != "" {
-			return lifecycle
+		for _, rule := range lifecycleSources {
+			if status, ok := rule(m); ok {
+				return status
+			}
 		}
 	}
 	if m.Type == TypeWorking {

@@ -96,16 +96,14 @@ func AsService(e *Embedder) Service {
 
 // Embedder generates vector embeddings using Jina AI as primary with OpenAI and Ollama fallback.
 type Embedder struct {
-	config            Config
-	logger            *zap.Logger
-	client            *http.Client
-	Dimension         int        // Embedding dimension
-	jinaDisabled      bool       // Flag to disable Jina after auth errors
-	jinaDisabledUntil time.Time  // Time when Jina can be retried again (for auth errors)
-	jinaErrorCount    int        // Count of consecutive Jina errors
-	jinaDisabledMu    sync.Mutex // Mutex for jinaDisabled flag
-	lastModelMu       sync.RWMutex
-	lastModelID       string
+	config      Config
+	logger      *zap.Logger
+	client      *http.Client
+	Dimension   int // Embedding dimension
+	health      map[string]*providerHealth
+	healthMu    sync.Mutex // guards the health map (values self-synchronize)
+	lastModelMu sync.RWMutex
+	lastModelID string
 }
 
 // New creates a new Embedder with the given configuration and logger.
@@ -140,12 +138,9 @@ func New(config Config, logger *zap.Logger) (*Embedder, error) {
 		client: &http.Client{
 			Timeout: config.Timeout,
 		},
-		Dimension:         config.Dimension,
-		jinaDisabled:      false,
-		jinaDisabledUntil: time.Time{},
-		jinaErrorCount:    0,
-		jinaDisabledMu:    sync.Mutex{},
-		lastModelMu:       sync.RWMutex{},
+		Dimension:   config.Dimension,
+		health:      map[string]*providerHealth{},
+		lastModelMu: sync.RWMutex{},
 	}, nil
 }
 
@@ -200,7 +195,7 @@ func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task 
 		return nil, err
 	}
 
-	for _, candidate := range e.singleCandidates(task) {
+	for _, candidate := range e.candidates(task) {
 		embedding, err := candidate.provider.embed(ctx, text, task)
 		if err != nil {
 			e.logger.Warn("Embedding provider failed", zap.String("provider", candidate.provider.name()), zap.Error(err))
@@ -260,7 +255,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 		return nil, err
 	}
 
-	for _, candidate := range e.batchCandidates(task) {
+	for _, candidate := range e.candidates(task) {
 		embeddings, err := candidate.provider.batchEmbed(ctx, texts, task)
 		if err != nil {
 			e.logger.Warn("Batch embedding provider failed", zap.String("provider", candidate.provider.name()), zap.Error(err))
@@ -300,48 +295,59 @@ func (e *Embedder) ensureReady() error {
 	return nil
 }
 
-func (e *Embedder) singleCandidates(task string) []providerCandidate {
-	candidates := make([]providerCandidate, 0, 4)
-	if !e.localOnlyMode() && e.config.JinaToken != "" && e.jinaAvailable(task) {
-		candidates = append(candidates, providerCandidate{
-			provider:  jinaAdapter{embedder: e},
-			onSuccess: e.markJinaSuccess,
-			onFailure: func(error) { e.markJinaFailure(task) },
+// candidates builds the ordered provider fallback chain, skipping any provider
+// whose circuit breaker is currently open. The single- and batch-embedding
+// paths share this list (Round 3 M6) — previously only the single path wired a
+// breaker, and only for Jina, so a hard-failing OpenAI/Ollama backend was
+// retried on every call.
+func (e *Embedder) candidates(task string) []providerCandidate {
+	out := make([]providerCandidate, 0, 5)
+	add := func(p providerAdapter) {
+		name := p.name()
+		h := e.healthFor(name)
+		ok, retried := h.available()
+		if !ok {
+			return
+		}
+		if retried {
+			fields := []zap.Field{zap.String("provider", name)}
+			if strings.TrimSpace(task) != "" {
+				fields = append(fields, zap.String("task", task))
+			}
+			e.logger.Info("Retrying embedding provider after cooldown", fields...)
+		}
+		out = append(out, providerCandidate{
+			provider:  p,
+			onSuccess: h.markSuccess,
+			onFailure: func(error) {
+				if h.markFailure() {
+					fields := []zap.Field{
+						zap.String("provider", name),
+						zap.String("hint", "check the provider credentials/endpoint or remove it from the config to skip"),
+					}
+					if strings.TrimSpace(task) != "" {
+						fields = append(fields, zap.String("task", task))
+					}
+					e.logger.Error("Embedding provider disabled after repeated failures, using fallback providers", fields...)
+				}
+			},
 		})
 	}
-	if !e.localOnlyMode() && e.config.OpenAIToken != "" {
-		candidates = append(candidates, providerCandidate{provider: openAIAdapter{embedder: e}})
-	}
-	if e.config.LlamaCPPBaseURL != "" {
-		candidates = append(candidates, providerCandidate{provider: llamaCPPAdapter{embedder: e}})
-	}
-	if e.config.OllamaBaseURL != "" {
-		candidates = append(candidates,
-			providerCandidate{provider: ollamaAdapter{embedder: e, model: defaultOllamaPrimaryModel}},
-			providerCandidate{provider: ollamaAdapter{embedder: e, model: defaultOllamaBackupModel}},
-		)
-	}
-	return candidates
-}
 
-func (e *Embedder) batchCandidates(task string) []providerCandidate {
-	candidates := make([]providerCandidate, 0, 4)
-	if !e.localOnlyMode() && e.config.JinaToken != "" && e.jinaAvailable(task) {
-		candidates = append(candidates, providerCandidate{provider: jinaAdapter{embedder: e}})
+	if !e.localOnlyMode() && e.config.JinaToken != "" {
+		add(jinaAdapter{embedder: e})
 	}
 	if !e.localOnlyMode() && e.config.OpenAIToken != "" {
-		candidates = append(candidates, providerCandidate{provider: openAIAdapter{embedder: e}})
+		add(openAIAdapter{embedder: e})
 	}
 	if e.config.LlamaCPPBaseURL != "" {
-		candidates = append(candidates, providerCandidate{provider: llamaCPPAdapter{embedder: e}})
+		add(llamaCPPAdapter{embedder: e})
 	}
 	if e.config.OllamaBaseURL != "" {
-		candidates = append(candidates,
-			providerCandidate{provider: ollamaAdapter{embedder: e, model: defaultOllamaPrimaryModel}},
-			providerCandidate{provider: ollamaAdapter{embedder: e, model: defaultOllamaBackupModel}},
-		)
+		add(ollamaAdapter{embedder: e, model: defaultOllamaPrimaryModel})
+		add(ollamaAdapter{embedder: e, model: defaultOllamaBackupModel})
 	}
-	return candidates
+	return out
 }
 
 func (e *Embedder) validateEmbedding(providerName string, embedding []float32) bool {
@@ -372,53 +378,70 @@ func (e *Embedder) validateBatchEmbeddings(providerName string, embeddings [][]f
 	return nil
 }
 
-func (e *Embedder) jinaAvailable(task string) bool {
-	e.jinaDisabledMu.Lock()
-	wasDisabled := e.jinaDisabled
-	canRetry := wasDisabled && !e.jinaDisabledUntil.IsZero() && time.Now().After(e.jinaDisabledUntil)
-	if canRetry {
-		e.jinaDisabled = false
-		e.jinaDisabledUntil = time.Time{}
-		e.jinaErrorCount = 0
-	}
-	stillDisabled := e.jinaDisabled
-	e.jinaDisabledMu.Unlock()
+const (
+	// providerFailureThreshold is the number of consecutive failures that trips
+	// a provider's circuit breaker; providerDisableCooldown is how long it stays
+	// open before one retry is allowed.
+	providerFailureThreshold = 3
+	providerDisableCooldown  = time.Hour
+)
 
-	if canRetry {
-		fields := []zap.Field{}
-		if strings.TrimSpace(task) != "" {
-			fields = append(fields, zap.String("task", task))
-		}
-		e.logger.Info("Retrying Jina AI after timeout period", fields...)
-	}
-
-	return !stillDisabled
+// providerHealth is a per-provider circuit breaker shared by every embedding
+// backend (Round 3 M6). Values are stored in Embedder.health keyed by
+// provider.name(); each value synchronizes its own state.
+type providerHealth struct {
+	mu            sync.Mutex
+	errorCount    int
+	disabledUntil time.Time
 }
 
-func (e *Embedder) markJinaSuccess() {
-	e.jinaDisabledMu.Lock()
-	e.jinaErrorCount = 0
-	e.jinaDisabledMu.Unlock()
+// available reports whether the provider may be tried now. When the cooldown has
+// elapsed it re-enables the provider (allowing one retry) and returns
+// retried=true so the caller can log the recovery attempt once.
+func (h *providerHealth) available() (ok bool, retried bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.disabledUntil.IsZero() {
+		return true, false
+	}
+	if time.Now().After(h.disabledUntil) {
+		h.disabledUntil = time.Time{}
+		h.errorCount = 0
+		return true, true
+	}
+	return false, false
 }
 
-func (e *Embedder) markJinaFailure(task string) {
-	e.jinaDisabledMu.Lock()
-	e.jinaErrorCount++
-	errorCount := e.jinaErrorCount
-	shouldDisable := errorCount >= 3 && !e.jinaDisabled
-	if shouldDisable {
-		e.jinaDisabled = true
-		e.jinaDisabledUntil = time.Now().Add(1 * time.Hour)
-	}
-	e.jinaDisabledMu.Unlock()
+func (h *providerHealth) markSuccess() {
+	h.mu.Lock()
+	h.errorCount = 0
+	h.disabledUntil = time.Time{}
+	h.mu.Unlock()
+}
 
-	if shouldDisable {
-		fields := []zap.Field{zap.String("hint", "Check JINA_API_KEY or remove it to skip Jina")}
-		if strings.TrimSpace(task) != "" {
-			fields = append(fields, zap.String("task", task))
-		}
-		e.logger.Error("Jina AI disabled after repeated failures, using fallback providers", fields...)
+// markFailure records a failure and returns true when it trips the breaker
+// (crosses the threshold for the first time), so the caller logs exactly once.
+func (h *providerHealth) markFailure() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.errorCount++
+	if h.errorCount >= providerFailureThreshold && h.disabledUntil.IsZero() {
+		h.disabledUntil = time.Now().Add(providerDisableCooldown)
+		return true
 	}
+	return false
+}
+
+// healthFor returns the circuit breaker for a provider, creating it on first use.
+func (e *Embedder) healthFor(name string) *providerHealth {
+	e.healthMu.Lock()
+	defer e.healthMu.Unlock()
+	h := e.health[name]
+	if h == nil {
+		h = &providerHealth{}
+		e.health[name] = h
+	}
+	return h
 }
 
 // Dimensions returns the embedding vector dimension this Embedder produces.
