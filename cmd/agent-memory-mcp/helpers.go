@@ -27,7 +27,7 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 		emb = nil
 	}
 
-	store, err := memory.NewStore(cfg.MemoryDBPath, emb, zap.NewNop())
+	store, err := memory.NewStore(cfg.MemoryDBPath, embedder.AsService(emb), zap.NewNop())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}

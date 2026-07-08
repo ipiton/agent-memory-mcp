@@ -5,7 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -14,8 +13,8 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
-func runProjectBank(args []string) {
-	fs := flag.NewFlagSet("project-bank", flag.ExitOnError)
+func runProjectBank(args []string) error {
+	fs := flag.NewFlagSet("project-bank", flag.ContinueOnError)
 	view := fs.String("view", "canonical_overview", "View: canonical_overview, decisions, runbooks, incidents, caveats, migrations, review_queue")
 	ctx := fs.String("context", "", "Filter by context")
 	service := fs.String("service", "", "Filter by service")
@@ -24,25 +23,24 @@ func runProjectBank(args []string) {
 	tags := fs.String("tags", "", "Filter by tags (comma-separated, match all)")
 	limit := fs.Int("limit", 10, "Max items per section")
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
 	parsedView, err := memory.ValidateProjectBankView(*view)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	result, err := store.ProjectBankView(context.Background(), parsedView, memory.ProjectBankOptions{
@@ -56,16 +54,15 @@ func runProjectBank(args []string) {
 		Limit:   *limit,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
-		return
+		return printJSON(result)
 	}
 
 	fmt.Print(formatProjectBankCLIView(result))
+	return nil
 }
 
 func formatProjectBankCLIView(result *memory.ProjectBankViewResult) string {

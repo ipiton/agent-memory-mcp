@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 
@@ -13,8 +13,8 @@ import (
 )
 
 // runSweepArchive handles the "sweep-archive" subcommand.
-func runSweepArchive(args []string) {
-	fs := flag.NewFlagSet("sweep-archive", flag.ExitOnError)
+func runSweepArchive(args []string) error {
+	fs := flag.NewFlagSet("sweep-archive", flag.ContinueOnError)
 	rootsCSV := fs.String("roots", "", "Colon-separated archive roots (overrides MCP_TASK_ARCHIVE_ROOTS)")
 	pattern := fs.String("slug-pattern", "", "Regex that slug basenames must match (overrides MCP_TASK_SLUG_PATTERN)")
 	dryRun := fs.Bool("dry-run", false, "Show actions without applying")
@@ -22,24 +22,23 @@ func runSweepArchive(args []string) {
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	threshold := fs.Float64("promotion-threshold", lifecycle.DefaultPromotionThreshold, "Importance threshold for promotion candidates")
 	keepTag := fs.String("keep-tag", lifecycle.KeepAfterArchiveTag, "Tag that opts a memory out of sweep")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, *pattern, *threshold, *keepTag, *dryRun)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
@@ -53,73 +52,73 @@ func runSweepArchive(args []string) {
 		result, err = sweeper.SweepArchive(ctx, sweepCfg)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
+		if err := printJSON(result); err != nil {
+			return err
+		}
 	} else {
 		fmt.Print(lifecycle.FormatSweepResult(result))
 	}
 	if len(result.Errors) > 0 {
-		fmt.Fprintf(os.Stderr, "sweep completed with %d partial failures; see 'errors' in result\n", len(result.Errors))
-		os.Exit(1)
+		return fmt.Errorf("sweep completed with %d partial failures; see 'errors' in result", len(result.Errors))
 	}
+	return nil
 }
 
 // runEndTask handles the "end-task" subcommand — explicit single-slug sweep.
-func runEndTask(args []string) {
-	fs := flag.NewFlagSet("end-task", flag.ExitOnError)
+func runEndTask(args []string) error {
+	fs := flag.NewFlagSet("end-task", flag.ContinueOnError)
 	slug := fs.String("slug", "", "Task slug to end (required)")
 	rootsCSV := fs.String("roots", "", "Colon-separated archive roots (overrides MCP_TASK_ARCHIVE_ROOTS)")
 	dryRun := fs.Bool("dry-run", false, "Show actions without applying")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	threshold := fs.Float64("promotion-threshold", lifecycle.DefaultPromotionThreshold, "Importance threshold for promotion candidates")
 	keepTag := fs.String("keep-tag", lifecycle.KeepAfterArchiveTag, "Tag that opts a memory out of sweep")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if strings.TrimSpace(*slug) == "" {
-		fmt.Fprintln(os.Stderr, "error: -slug is required")
 		fs.Usage()
-		os.Exit(2)
+		return errors.New("-slug is required")
 	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, "", *threshold, *keepTag, *dryRun)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
 	sweeper := lifecycle.NewSweeper(store)
 	result, err := sweeper.EndTask(context.Background(), *slug, sweepCfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
+		if err := printJSON(result); err != nil {
+			return err
+		}
 	} else {
 		fmt.Print(lifecycle.FormatSweepResult(result))
 	}
 	if len(result.Errors) > 0 {
-		fmt.Fprintf(os.Stderr, "end-task completed with %d partial failures; see 'errors' in result\n", len(result.Errors))
-		os.Exit(1)
+		return fmt.Errorf("end-task completed with %d partial failures; see 'errors' in result", len(result.Errors))
 	}
+	return nil
 }
 
 // buildSweepConfig merges CLI flags with the env-loaded config. The roots

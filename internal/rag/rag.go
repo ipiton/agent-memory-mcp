@@ -125,7 +125,7 @@ type docServiceConfig struct {
 
 type vecServiceConfig struct {
 	IndexPath  string
-	Embedder   *embedder.Embedder
+	Embedder   embedder.Service
 	MaxResults int
 	// Reranker is optional. When nil the search path skips the rerank step
 	// entirely. When non-nil, the top-RerankTopN hybrid candidates are passed
@@ -927,7 +927,7 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 	dbPath := filepath.Join(cfg.IndexPath, "vectors.db")
 	logger.Info("Using SQLite vector store", zap.String("db_path", dbPath))
 
-	store, err := vectorstore.NewSQLiteStore(dbPath, cfg.Embedder.Dimension, logger)
+	store, err := vectorstore.NewSQLiteStore(dbPath, cfg.Embedder.Dimensions(), logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}

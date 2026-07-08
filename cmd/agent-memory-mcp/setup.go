@@ -10,20 +10,24 @@ import (
 )
 
 // runSetup automatically configures Claude Code hooks in ~/.claude/settings.json.
-func runSetup(args []string) {
-	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+func runSetup(args []string) error {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	command := fs.String("command", defaultConfigCommand(), "Path to agent-memory-mcp binary")
 	dryRun := fs.Bool("dry-run", false, "Show what would be written without modifying files")
 	force := fs.Bool("force", false, "Overwrite existing hooks (useful after brew upgrade)")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
-	settingsPath := claudeSettingsPath()
+	settingsPath, err := claudeSettingsPath()
+	if err != nil {
+		return err
+	}
 	hooks := buildHooksConfig(*command)
 
 	existing, err := readJSONFile(settingsPath)
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "error reading %s: %v\n", settingsPath, err)
-		os.Exit(1)
+		return fmt.Errorf("reading %s: %w", settingsPath, err)
 	}
 	if existing == nil {
 		existing = make(map[string]any)
@@ -31,42 +35,39 @@ func runSetup(args []string) {
 
 	if !*force && hooksAlreadyConfigured(existing, *command) {
 		fmt.Fprintf(os.Stderr, "Hooks already configured in %s — skipping. Use --force to overwrite.\n", settingsPath)
-		return
+		return nil
 	}
 
 	mergeHooks(existing, hooks)
 
 	data, err := json.MarshalIndent(existing, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *dryRun {
 		fmt.Fprintf(os.Stderr, "Would write to %s:\n", settingsPath)
 		fmt.Println(string(data))
-		return
+		return nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("creating directory: %w", err)
 	}
 	if err := os.WriteFile(settingsPath, append(data, '\n'), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing %s: %v\n", settingsPath, err)
-		os.Exit(1)
+		return fmt.Errorf("writing %s: %w", settingsPath, err)
 	}
 
 	fmt.Fprintf(os.Stderr, "Claude Code hooks configured in %s\n", settingsPath)
+	return nil
 }
 
-func claudeSettingsPath() string {
+func claudeSettingsPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, ".claude", "settings.json")
+	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
 func readJSONFile(path string) (map[string]any, error) {

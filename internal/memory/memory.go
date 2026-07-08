@@ -150,7 +150,7 @@ type cachedMemory struct {
 type Store struct {
 	db       *sql.DB
 	logger   *zap.Logger
-	embedder *embedder.Embedder
+	embedder embedder.Service
 	writeMu  sync.Mutex   // serializes write operations (Store, Update, Delete, Merge, Promote)
 	mu       sync.RWMutex // protects in-memory cache (memories, contextIndex)
 	accessCh chan []string // batched access stats updates
@@ -231,7 +231,7 @@ func (ms *Store) SedimentEnabled() bool {
 }
 
 // NewStore creates a new Store backed by a SQLite database at dbPath.
-func NewStore(dbPath string, embedder *embedder.Embedder, logger *zap.Logger) (*Store, error) {
+func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*Store, error) {
 	// Create nop logger if not provided
 	if logger == nil {
 		config := zap.NewProductionConfig()

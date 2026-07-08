@@ -52,8 +52,11 @@ func TestRequiredString(t *testing.T) {
 		{name: "missing", args: map[string]any{}, key: "id", wantError: true},
 		{name: "blank", args: map[string]any{"id": ""}, key: "id", wantError: true},
 		{name: "whitespace only", args: map[string]any{"id": "   "}, key: "id", wantError: true},
-		// Note: non-string values get coerced via fmt.Sprintf in getString
-		// (Round 3 M33 — strict mode is a separate task). Not asserting here.
+		// Round 3 M33: getString is strict — a non-string value (JSON number,
+		// bool, object) is treated as absent, so requiredString rejects it
+		// instead of coercing it to "5"/"true".
+		{name: "non-string number rejected", args: map[string]any{"id": float64(5)}, key: "id", wantError: true},
+		{name: "non-string bool rejected", args: map[string]any{"id": true}, key: "id", wantError: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,5 +151,47 @@ func TestBuildSessionSchema_ProducesValidSchema(t *testing.T) {
 	// Empty summaryDesc gets the default.
 	if summary, _ := props["summary"].(map[string]any); summary["description"] != "Raw session summary text" {
 		t.Errorf("default summary description = %v", summary["description"])
+	}
+}
+
+// TestGetStringStrict pins the Round 3 M33 contract: only an actual JSON string
+// is accepted; any other type reads as absent (ok=false) rather than being
+// coerced via fmt.Sprintf.
+func TestGetStringStrict(t *testing.T) {
+	if got, ok := getString(map[string]any{"k": "hello"}, "k"); !ok || got != "hello" {
+		t.Errorf("string value: got (%q, %v), want (hello, true)", got, ok)
+	}
+	if _, ok := getString(map[string]any{}, "k"); ok {
+		t.Error("missing key: ok=true, want false")
+	}
+	for name, val := range map[string]any{
+		"number": float64(5),
+		"bool":   true,
+		"slice":  []any{"a"},
+		"object": map[string]any{"a": 1},
+	} {
+		if got, ok := getString(map[string]any{"k": val}, "k"); ok || got != "" {
+			t.Errorf("%s value: got (%q, %v), want (\"\", false)", name, got, ok)
+		}
+	}
+}
+
+// TestGetImportanceHonestContract pins Round 3 L29: a valid in-range float
+// returns (v, true); missing/wrong-type/out-of-range returns (0, false) so the
+// caller applies its own default instead of the value being silently swallowed.
+func TestGetImportanceHonestContract(t *testing.T) {
+	if v, ok := getImportance(map[string]any{"importance": 0.7}); !ok || v != 0.7 {
+		t.Errorf("valid: got (%v, %v), want (0.7, true)", v, ok)
+	}
+	cases := map[string]map[string]any{
+		"missing":      {},
+		"out of range": {"importance": 1.5},
+		"negative":     {"importance": -0.1},
+		"wrong type":   {"importance": "0.7"},
+	}
+	for name, args := range cases {
+		if v, ok := getImportance(args); ok || v != 0 {
+			t.Errorf("%s: got (%v, %v), want (0, false)", name, v, ok)
+		}
 	}
 }

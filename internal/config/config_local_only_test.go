@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,8 +87,9 @@ func TestLoadFromEnvEmbeddingTuningOverrides(t *testing.T) {
 func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
 	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
+	// Durations are read as strings (EnvOrDefault) and parsed later, so garbage
+	// still falls back — M13 fail-fast covers only numeric/bool env vars.
 	t.Setenv("MCP_EMBEDDING_TIMEOUT", "garbage")
-	t.Setenv("MCP_EMBEDDING_MAX_RETRIES", "not-a-number")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -96,8 +98,38 @@ func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
 	if cfg.EmbeddingTimeout != 5*time.Second {
 		t.Fatalf("EmbeddingTimeout = %s, want fallback 5s", cfg.EmbeddingTimeout)
 	}
-	if cfg.EmbeddingMaxRetries != 1 {
-		t.Fatalf("EmbeddingMaxRetries = %d, want fallback 1", cfg.EmbeddingMaxRetries)
+}
+
+// TestLoadFromEnvRejectsUnparseableInt is the M13 payoff: a numeric env var set
+// to garbage (typo) fails config load instead of silently defaulting, which
+// used to mask e.g. a mistyped MCP_HTTP_PORT and bind the wrong port.
+func TestLoadFromEnvRejectsUnparseableInt(t *testing.T) {
+	hermeticDotEnv(t)
+	t.Setenv("MCP_ROOT", ".")
+	t.Setenv("MCP_EMBEDDING_MAX_RETRIES", "not-a-number")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv: expected error for unparseable MCP_EMBEDDING_MAX_RETRIES, got nil")
+	}
+	if !strings.Contains(err.Error(), "MCP_EMBEDDING_MAX_RETRIES") {
+		t.Fatalf("error should name the offending key, got: %v", err)
+	}
+}
+
+// TestLoadFromEnvRejectsUnparseableBool covers the bool branch of the same
+// fail-fast contract (M13).
+func TestLoadFromEnvRejectsUnparseableBool(t *testing.T) {
+	hermeticDotEnv(t)
+	t.Setenv("MCP_ROOT", ".")
+	t.Setenv("MCP_STEWARD_ENABLED", "treu") // typo for "true"
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv: expected error for unparseable MCP_STEWARD_ENABLED, got nil")
+	}
+	if !strings.Contains(err.Error(), "MCP_STEWARD_ENABLED") {
+		t.Fatalf("error should name the offending key, got: %v", err)
 	}
 }
 

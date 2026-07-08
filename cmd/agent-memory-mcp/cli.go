@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -17,20 +18,6 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
-func mustParse(fs *flag.FlagSet, args []string) {
-	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
-	}
-}
-
-func mustPrintJSON(v any) {
-	if err := printJSON(v); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
 type commandCtx struct {
 	cfg     config.Config
 	store   *memory.Store
@@ -39,47 +26,44 @@ type commandCtx struct {
 }
 
 func newCommandCtx(name string, args []string) *commandCtx {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	ctx := &commandCtx{fs: fs}
 	// We don't parse yet because handlers might add more flags
 	return ctx
 }
 
-func (c *commandCtx) initStore() {
+func (c *commandCtx) initStore() error {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("loading config: %w", err)
 	}
 	c.cfg = cfg
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	c.store = store
 	c.cleanup = cleanup
+	return nil
 }
 
-func (c *commandCtx) initRAG() *rag.Engine {
+func (c *commandCtx) initRAG() (*rag.Engine, error) {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	c.cfg = cfg
 
 	engine, err := initRAGEngine(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return nil, err
 	}
-	return engine
+	return engine, nil
 }
 
-func (c *commandCtx) parse(args []string) {
-	mustParse(c.fs, args)
+func (c *commandCtx) parse(args []string) error {
+	return c.fs.Parse(args)
 }
 
 func (c *commandCtx) close() {
@@ -89,7 +73,7 @@ func (c *commandCtx) close() {
 }
 
 // runStore handles the "store" subcommand.
-func runStore(args []string) {
+func runStore(args []string) error {
 	ctx := newCommandCtx("store", args)
 	content := ctx.fs.String("content", "", "Memory content (required unless -stdin)")
 	title := ctx.fs.String("title", "", "Memory title")
@@ -99,32 +83,30 @@ func runStore(args []string) {
 	var importance optionalFloat64
 	ctx.fs.Var(&importance, "importance", "Importance weight (0.0-1.0)")
 	stdin := ctx.fs.Bool("stdin", false, "Read content from stdin")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
 	text := *content
 	if *stdin {
 		data, err := readStdin()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading stdin: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("reading stdin: %w", err)
 		}
 		text = strings.TrimSpace(string(data))
 	}
 	if text == "" {
-		fmt.Fprintln(os.Stderr, "error: -content or -stdin is required")
 		ctx.fs.Usage()
-		os.Exit(1)
+		return errors.New("-content or -stdin is required")
 	}
 	text = strings.TrimSpace(text)
 	if err := userio.ValidateMemoryContent(text); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	parsedType, err := userio.ParseMemoryType(*memType, memory.TypeSemantic, false)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	importanceRaw := math.NaN()
 	if importance.set {
@@ -132,11 +114,12 @@ func runStore(args []string) {
 	}
 	importanceValue, err := userio.NormalizeImportance(importanceRaw, memory.DefaultImportance)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	m := &memory.Memory{
@@ -149,80 +132,83 @@ func runStore(args []string) {
 	m.Tags = userio.ParseCSVTags(*tags)
 
 	if err := ctx.store.Store(context.Background(), m); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Printf("Stored memory %s\n", m.ID)
+	return nil
 }
 
 // runRecall handles the "recall" subcommand.
-func runRecall(args []string) {
+func runRecall(args []string) error {
 	ctx := newCommandCtx("recall", args)
 	memType := ctx.fs.String("type", "", "Filter by memory type")
 	limit := ctx.fs.Int("limit", 10, "Max results")
 	tags := ctx.fs.String("tags", "", "Filter by tags (comma-separated, match any)")
 	jsonOut := ctx.fs.Bool("json", false, "Output as JSON")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
 	query := strings.TrimSpace(strings.Join(ctx.fs.Args(), " "))
 	if query == "" {
-		fmt.Fprintln(os.Stderr, "error: query is required (positional argument)")
 		ctx.fs.Usage()
-		os.Exit(1)
+		return errors.New("query is required (positional argument)")
 	}
 	if err := userio.ValidateQuery(query); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	parsedType, err := userio.ParseMemoryType(*memType, "", true)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	filters := memory.Filters{Type: parsedType}
 	filters.Tags = userio.ParseCSVTags(*tags)
 
 	results, err := ctx.store.Recall(context.Background(), query, filters, *limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(results)
-		return
+		return printJSON(results)
 	}
 
 	if len(results) == 0 {
 		fmt.Println("No results found.")
-		return
+		return nil
 	}
 	for i, r := range results {
 		printMemoryLine(i+1, r.Memory, r.Score, r.Trust)
 	}
+	return nil
 }
 
 // runList handles the "list" subcommand.
-func runList(args []string) {
+func runList(args []string) error {
 	ctx := newCommandCtx("list", args)
 	memType := ctx.fs.String("type", "", "Filter by memory type")
 	memCtx := ctx.fs.String("context", "", "Filter by context")
 	limit := ctx.fs.Int("limit", 50, "Max results")
 	jsonOut := ctx.fs.Bool("json", false, "Output as JSON")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	parsedType, err := userio.ParseMemoryType(*memType, "", true)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	filters := memory.Filters{
@@ -232,77 +218,80 @@ func runList(args []string) {
 
 	results, err := ctx.store.List(context.Background(), filters, *limit)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(results)
-		return
+		return printJSON(results)
 	}
 
 	if len(results) == 0 {
 		fmt.Println("No memories found.")
-		return
+		return nil
 	}
 	for i, m := range results {
 		printMemoryLine(i+1, m, 0, nil)
 	}
+	return nil
 }
 
 // runDelete handles the "delete" subcommand.
-func runDelete(args []string) {
+func runDelete(args []string) error {
 	ctx := newCommandCtx("delete", args)
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
 	if ctx.fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "error: memory ID is required (positional argument)")
-		os.Exit(1)
+		return errors.New("memory ID is required (positional argument)")
 	}
 	id := ctx.fs.Arg(0)
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	if err := ctx.store.Delete(context.Background(), id); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Printf("Deleted memory %s\n", id)
+	return nil
 }
 
 // runSearch handles the "search" subcommand (hybrid RAG retrieval).
-func runSearch(args []string) {
+func runSearch(args []string) error {
 	ctx := newCommandCtx("search", args)
 	limit := ctx.fs.Int("limit", 10, "Max results")
 	sourceType := ctx.fs.String("source-type", "", "Filter by source type: docs, adr, rfc, changelog, runbook, postmortem, ci_config, helm, terraform, k8s")
 	debug := ctx.fs.Bool("debug", false, "Show score breakdown, applied filters, and ranking boosts")
 	jsonOut := ctx.fs.Bool("json", false, "Output as JSON")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
 	query := strings.TrimSpace(strings.Join(ctx.fs.Args(), " "))
 	if query == "" {
-		fmt.Fprintln(os.Stderr, "error: query is required (positional argument)")
 		ctx.fs.Usage()
-		os.Exit(1)
+		return errors.New("query is required (positional argument)")
 	}
 	if err := userio.ValidateQuery(query); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	engine := ctx.initRAG()
+	engine, err := ctx.initRAG()
+	if err != nil {
+		return err
+	}
 	defer engine.Stop()
 
 	resp, err := engine.Search(context.Background(), query, *limit, *sourceType, *debug)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(resp)
-		return
+		return printJSON(resp)
 	}
 
 	fmt.Printf("Query: %s (%d results, %dms)\n\n", resp.Query, resp.TotalFound, resp.SearchTime)
@@ -349,32 +338,42 @@ func runSearch(args []string) {
 		}
 		fmt.Println()
 	}
+	return nil
 }
 
 // runIndex handles the "index" subcommand (RAG reindex).
-func runIndex(args []string) {
+func runIndex(args []string) error {
 	ctx := newCommandCtx("index", args)
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
-	engine := ctx.initRAG()
+	engine, err := ctx.initRAG()
+	if err != nil {
+		return err
+	}
 	defer engine.Stop()
 
 	fmt.Println("Indexing documents...")
 	start := time.Now()
 	if err := engine.IndexDocuments(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	fmt.Printf("Indexing completed in %v\n", time.Since(start).Round(time.Millisecond))
+	return nil
 }
 
 // runStats handles the "stats" subcommand.
-func runStats(args []string) {
+func runStats(args []string) error {
 	ctx := newCommandCtx("stats", args)
 	jsonOut := ctx.fs.Bool("json", false, "Output as JSON")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	total := ctx.store.Count()
@@ -388,8 +387,7 @@ func runStats(args []string) {
 	}
 
 	if *jsonOut {
-		mustPrintJSON(stats)
-		return
+		return printJSON(stats)
 	}
 
 	fmt.Printf("Total memories: %d\n", total)
@@ -405,26 +403,29 @@ func runStats(args []string) {
 			fmt.Printf("  %-40s %d\n", modelID, c)
 		}
 	}
+	return nil
 }
 
 // runReembed handles the "reembed" subcommand.
-func runReembed(args []string) {
+func runReembed(args []string) error {
 	ctx := newCommandCtx("reembed", args)
 	jsonOut := ctx.fs.Bool("json", false, "Output as JSON")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	result, err := ctx.store.ReembedAll(context.Background())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
-		return
+		return printJSON(result)
 	}
 
 	fmt.Printf("Re-embed completed for %d memories\n", result.Total)
@@ -440,29 +441,32 @@ func runReembed(args []string) {
 			fmt.Printf("  %-40s %d\n", modelID, count)
 		}
 	}
+	return nil
 }
 
 // runExport handles the "export" subcommand.
-func runExport(args []string) {
+func runExport(args []string) error {
 	ctx := newCommandCtx("export", args)
 	outFile := ctx.fs.String("o", "", "Output file (default: stdout)")
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	memories, err := ctx.store.ExportAll(context.Background())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	var w *os.File
 	if *outFile != "" {
 		w, err = os.Create(*outFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		defer func() { _ = w.Close() }()
 	} else {
@@ -472,19 +476,21 @@ func runExport(args []string) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(memories); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *outFile != "" {
 		fmt.Fprintf(os.Stderr, "Exported %d memories to %s\n", len(memories), *outFile)
 	}
+	return nil
 }
 
 // runImport handles the "import" subcommand.
-func runImport(args []string) {
+func runImport(args []string) error {
 	ctx := newCommandCtx("import", args)
-	ctx.parse(args)
+	if err := ctx.parse(args); err != nil {
+		return err
+	}
 
 	var data []byte
 	var err error
@@ -492,24 +498,23 @@ func runImport(args []string) {
 	if ctx.fs.NArg() > 0 {
 		data, err = os.ReadFile(ctx.fs.Arg(0))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("reading file: %w", err)
 		}
 	} else {
 		data, err = readStdin()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading stdin: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("reading stdin: %w", err)
 		}
 	}
 
 	var memories []*memory.Memory
 	if err := json.Unmarshal(data, &memories); err != nil {
-		fmt.Fprintf(os.Stderr, "error parsing JSON: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("parsing JSON: %w", err)
 	}
 
-	ctx.initStore()
+	if err := ctx.initStore(); err != nil {
+		return err
+	}
 	defer ctx.close()
 
 	imported := 0
@@ -525,6 +530,7 @@ func runImport(args []string) {
 	}
 
 	fmt.Printf("Imported %d/%d memories\n", imported, len(memories))
+	return nil
 }
 
 // printMemoryLine prints a single memory entry in human-readable format.

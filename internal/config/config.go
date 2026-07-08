@@ -2,6 +2,7 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -158,12 +159,21 @@ type Config struct {
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
+// Guarded by configPathMu (dotenv.go) — see M14.
 var explicitConfigPath string
 
 // SetExplicitConfigPath sets an explicit config file path (e.g., from --config flag).
 // When set, only this file is loaded instead of the default config search chain.
 func SetExplicitConfigPath(path string) {
+	configPathMu.Lock()
 	explicitConfigPath = path
+	configPathMu.Unlock()
+}
+
+func getExplicitConfigPath() string {
+	configPathMu.RLock()
+	defer configPathMu.RUnlock()
+	return explicitConfigPath
 }
 
 // envValues holds raw values read from environment variables before path resolution.
@@ -245,28 +255,31 @@ type envValues struct {
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
 func loadEnv() (envValues, error) {
-	if err := loadDotEnvFiles(explicitConfigPath); err != nil {
+	if err := loadDotEnvFiles(getExplicitConfigPath()); err != nil {
 		return envValues{}, err
 	}
 	return readEnvValues()
 }
 
 // readEnvValues reads all configuration from current environment variables.
+// A variable that is set but unparseable (typo) makes the whole load fail via
+// the envScan error aggregation (Round 3 M13) rather than silently defaulting.
 func readEnvValues() (envValues, error) {
-	return envValues{
+	s := &envScan{}
+	ev := envValues{
 		root:                             EnvOrDefault("MCP_ROOT", ""),
 		allow:                            EnvOrDefault("MCP_ALLOW_DIRS", ""),
 		outputMode:                       normalizeOutputMode(EnvOrDefault("MCP_STDIO_MODE", "")),
-		statsEnabled:                     EnvBool("MCP_STATS_ENABLED", false),
+		statsEnabled:                     s.Bool("MCP_STATS_ENABLED", false),
 		statsPath:                        EnvOrDefault("MCP_STATS_PATH", ""),
-		statsSample:                      EnvFloat("MCP_STATS_SAMPLE_RATE", 1),
-		maxFileBytes:                     EnvInt64("MCP_MAX_FILE_BYTES", DefaultMaxFileBytes),
-		maxSearch:                        EnvInt("MCP_MAX_SEARCH_RESULTS", DefaultMaxSearchResult),
-		maxDepth:                         EnvInt("MCP_MAX_DEPTH", DefaultMaxDepth),
-		ragEnabled:                       EnvBool("MCP_RAG_ENABLED", true),
-		ragMaxResults:                    EnvInt("MCP_RAG_MAX_RESULTS", 10),
-		memoryEnabled:                    EnvBool("MCP_MEMORY_ENABLED", true),
-		memoryPreviewRunes:               EnvInt("MCP_MEMORY_PREVIEW_RUNES", 0),
+		statsSample:                      s.Float("MCP_STATS_SAMPLE_RATE", 1),
+		maxFileBytes:                     s.Int64("MCP_MAX_FILE_BYTES", DefaultMaxFileBytes),
+		maxSearch:                        s.Int("MCP_MAX_SEARCH_RESULTS", DefaultMaxSearchResult),
+		maxDepth:                         s.Int("MCP_MAX_DEPTH", DefaultMaxDepth),
+		ragEnabled:                       s.Bool("MCP_RAG_ENABLED", true),
+		ragMaxResults:                    s.Int("MCP_RAG_MAX_RESULTS", 10),
+		memoryEnabled:                    s.Bool("MCP_MEMORY_ENABLED", true),
+		memoryPreviewRunes:               s.Int("MCP_MEMORY_PREVIEW_RUNES", 0),
 		dataPath:                         EnvOrDefault("MCP_DATA_PATH", ""),
 		ragIndexPath:                     EnvOrDefault("MCP_RAG_INDEX_PATH", ""),
 		memoryDBPath:                     EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
@@ -274,11 +287,11 @@ func readEnvValues() (envValues, error) {
 		indexDirs:                        EnvOrDefault("MCP_INDEX_DIRS", "docs"),
 		indexExcludeDirs:                 EnvOrDefault("MCP_INDEX_EXCLUDE_DIRS", ""),
 		indexExcludeGlobs:                EnvOrDefault("MCP_INDEX_EXCLUDE_GLOBS", ""),
-		redactSecrets:                    EnvBool("MCP_REDACT_SECRETS", true),
-		chunkSize:                        EnvInt("MCP_CHUNK_SIZE", 2000),
-		chunkOverlap:                     EnvInt("MCP_CHUNK_OVERLAP", 200),
-		ragKeepNoise:                     EnvBool("MCP_RAG_KEEP_NOISE", false),
-		tripleExtractorEnabled:           EnvBool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
+		redactSecrets:                    s.Bool("MCP_REDACT_SECRETS", true),
+		chunkSize:                        s.Int("MCP_CHUNK_SIZE", 2000),
+		chunkOverlap:                     s.Int("MCP_CHUNK_OVERLAP", 200),
+		ragKeepNoise:                     s.Bool("MCP_RAG_KEEP_NOISE", false),
+		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
 		tripleExtractorBaseURL:           EnvOrDefault("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
 		tripleExtractorAPIKey:            EnvOrDefault("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
 		tripleExtractorModel:             EnvOrDefault("MCP_TRIPLE_EXTRACTOR_MODEL", ""),
@@ -290,44 +303,48 @@ func readEnvValues() (envValues, error) {
 		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
 		llamaCPPBaseURL:                  EnvOrDefault("LLAMACPP_BASE_URL", ""),
 		llamaCPPModel:                    EnvOrDefault("LLAMACPP_EMBEDDING_MODEL", "bge-m3"),
-		embeddingDimension:               EnvInt("MCP_EMBEDDING_DIMENSION", 1024),
+		embeddingDimension:               s.Int("MCP_EMBEDDING_DIMENSION", 1024),
 		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
 		embeddingTimeout:                 EnvOrDefault("MCP_EMBEDDING_TIMEOUT", "5s"),
-		embeddingMaxRetries:              EnvInt("MCP_EMBEDDING_MAX_RETRIES", 1),
-		autoIndex:                        EnvBool("MCP_RAG_AUTO_INDEX", true),
-		fileWatcher:                      EnvBool("MCP_RAG_FILE_WATCHER", true),
+		embeddingMaxRetries:              s.Int("MCP_EMBEDDING_MAX_RETRIES", 1),
+		autoIndex:                        s.Bool("MCP_RAG_AUTO_INDEX", true),
+		fileWatcher:                      s.Bool("MCP_RAG_FILE_WATCHER", true),
 		watchInterval:                    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
 		debounceDuration:                 EnvOrDefault("MCP_RAG_DEBOUNCE", "30s"),
 		httpMode:                         EnvOrDefault("MCP_HTTP_MODE", "stdio"),
 		httpHost:                         EnvOrDefault("MCP_HTTP_HOST", "127.0.0.1"),
-		httpPort:                         EnvInt("MCP_HTTP_PORT", 18080),
+		httpPort:                         s.Int("MCP_HTTP_PORT", 18080),
 		httpAuthToken:                    EnvOrDefault("MCP_HTTP_AUTH_TOKEN", ""),
-		httpInsecureAllowUnauthenticated: EnvBool("MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED", false),
-		sessionTrackingEnabled:           EnvBool("MCP_SESSION_TRACKING_ENABLED", true),
+		httpInsecureAllowUnauthenticated: s.Bool("MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED", false),
+		sessionTrackingEnabled:           s.Bool("MCP_SESSION_TRACKING_ENABLED", true),
 		sessionIdleTimeout:               EnvOrDefault("MCP_SESSION_IDLE_TIMEOUT", "10m"),
 		sessionCheckpointInterval:        EnvOrDefault("MCP_SESSION_CHECKPOINT_INTERVAL", "30m"),
-		sessionMinEvents:                 EnvInt("MCP_SESSION_MIN_EVENTS", 2),
-		stewardEnabled:                   EnvBool("MCP_STEWARD_ENABLED", false),
+		sessionMinEvents:                 s.Int("MCP_SESSION_MIN_EVENTS", 2),
+		stewardEnabled:                   s.Bool("MCP_STEWARD_ENABLED", false),
 		stewardMode:                      EnvOrDefault("MCP_STEWARD_MODE", "manual"),
 		stewardScheduleInterval:          EnvOrDefault("MCP_STEWARD_SCHEDULE_INTERVAL", "24h"),
-		stewardDuplicateThreshold:        EnvFloat("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
-		stewardStaleDays:                 EnvInt("MCP_STEWARD_STALE_DAYS", 30),
-		stewardCanonicalMinConf:          EnvFloat("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
-		checkpointDedupDisabled:          EnvBool("MCP_CHECKPOINT_DEDUP_DISABLED", false),
-		checkpointDedupThreshold:         EnvFloat("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
+		stewardDuplicateThreshold:        s.Float("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
+		stewardStaleDays:                 s.Int("MCP_STEWARD_STALE_DAYS", 30),
+		stewardCanonicalMinConf:          s.Float("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
+		checkpointDedupDisabled:          s.Bool("MCP_CHECKPOINT_DEDUP_DISABLED", false),
+		checkpointDedupThreshold:         s.Float("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
 		checkpointDedupWindow:            EnvOrDefault("MCP_CHECKPOINT_DEDUP_WINDOW", "10m"),
-		checkpointDedupMinChars:          EnvInt("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
+		checkpointDedupMinChars:          s.Int("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
 		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
 		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
-		rerankEnabled:                    EnvBool("MCP_RERANK_ENABLED", false),
+		rerankEnabled:                    s.Bool("MCP_RERANK_ENABLED", false),
 		rerankProvider:                   EnvOrDefault("MCP_RERANK_PROVIDER", "disabled"),
 		jinaRerankerModel:                EnvOrDefault("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
 		rerankTimeout:                    EnvOrDefault("MCP_RERANK_TIMEOUT", "5s"),
-		rerankTopN:                       EnvInt("MCP_RERANK_TOP_N", 40),
-		sedimentEnabled:                  EnvBool("MCP_SEDIMENT_ENABLED", false),
+		rerankTopN:                       s.Int("MCP_RERANK_TOP_N", 40),
+		sedimentEnabled:                  s.Bool("MCP_SEDIMENT_ENABLED", false),
 		sedimentScheduleInterval:         EnvOrDefault("MCP_SEDIMENT_SCHEDULE_INTERVAL", "0"),
-		recallHalfLifeDays:               EnvFloat("MCP_RECALL_HALFLIFE_DAYS", 30),
-	}, nil
+		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
+	}
+	if err := s.err(); err != nil {
+		return envValues{}, err
+	}
+	return ev, nil
 }
 
 // resolvePaths resolves all data paths relative to root and returns a Config.
@@ -587,30 +604,87 @@ func EnvOrDefault(key, fallback string) string {
 	return val
 }
 
-// EnvInt returns an environment variable parsed as int, or fallback on error.
-func EnvInt(key string, fallback int) int {
+// envScan reads typed environment variables and records a parse error for
+// every variable that is SET but unparseable, so a typo like MCP_HTTP_PORT=8O80
+// fails config load (fail-fast) instead of silently falling back to the default
+// and, e.g., binding the wrong port (Round 3 M13). Empty/unset variables use the
+// fallback without recording an error.
+type envScan struct {
+	errs []error
+}
+
+func (s *envScan) Int(key string, fallback int) int {
 	val := strings.TrimSpace(os.Getenv(key))
 	if val == "" {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(val)
 	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("%s=%q: invalid integer", key, val))
 		return fallback
 	}
 	return parsed
 }
 
-// EnvInt64 returns an environment variable parsed as int64, or fallback on error.
-func EnvInt64(key string, fallback int64) int64 {
+func (s *envScan) Int64(key string, fallback int64) int64 {
 	val := strings.TrimSpace(os.Getenv(key))
 	if val == "" {
 		return fallback
 	}
 	parsed, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("%s=%q: invalid integer", key, val))
 		return fallback
 	}
 	return parsed
+}
+
+func (s *envScan) Float(key string, fallback float64) float64 {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("%s=%q: invalid number", key, val))
+		return fallback
+	}
+	return parsed
+}
+
+func (s *envScan) Bool(key string, fallback bool) bool {
+	val := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if val == "" {
+		return fallback
+	}
+	switch val {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		s.errs = append(s.errs, fmt.Errorf("%s=%q: invalid boolean (use true/false)", key, val))
+		return fallback
+	}
+}
+
+// err aggregates every parse error collected during the scan, or nil when all
+// SET variables parsed cleanly.
+func (s *envScan) err() error {
+	if len(s.errs) == 0 {
+		return nil
+	}
+	return fmt.Errorf("invalid environment configuration: %w", errors.Join(s.errs...))
+}
+
+// EnvInt returns an environment variable parsed as int, or fallback on error.
+func EnvInt(key string, fallback int) int {
+	return (&envScan{}).Int(key, fallback)
+}
+
+// EnvInt64 returns an environment variable parsed as int64, or fallback on error.
+func EnvInt64(key string, fallback int64) int64 {
+	return (&envScan{}).Int64(key, fallback)
 }
 
 func normalizeOutputMode(value string) string {
@@ -639,31 +713,12 @@ func normalizeEmbeddingMode(value string) string {
 
 // EnvBool returns an environment variable parsed as bool, or fallback on error.
 func EnvBool(key string, fallback bool) bool {
-	val := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
-	if val == "" {
-		return fallback
-	}
-	switch val {
-	case "1", "true", "yes", "y", "on":
-		return true
-	case "0", "false", "no", "n", "off":
-		return false
-	default:
-		return fallback
-	}
+	return (&envScan{}).Bool(key, fallback)
 }
 
 // EnvFloat returns an environment variable parsed as float64, or fallback on error.
 func EnvFloat(key string, fallback float64) float64 {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseFloat(val, 64)
-	if err != nil {
-		return fallback
-	}
-	return parsed
+	return (&envScan{}).Float(key, fallback)
 }
 
 func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {

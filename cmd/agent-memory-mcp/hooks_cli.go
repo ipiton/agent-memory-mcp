@@ -62,24 +62,24 @@ func (r contextInjectRow) parseTags() []string {
 // instructions for session start injection.
 //
 // Lightweight path: opens SQLite directly, skips embedder/cache/background workers.
-func runContextInject(args []string) {
-	fs := flag.NewFlagSet("context-inject", flag.ExitOnError)
+func runContextInject(args []string) error {
+	fs := flag.NewFlagSet("context-inject", flag.ContinueOnError)
 	limit := fs.Int("limit", 10, "Max recent knowledge items to include")
 	pendingLimit := fs.Int("pending-limit", 5, "Max pending raw summaries to include for compilation")
 	memContext := fs.String("context", "", "Filter by context")
 	service := fs.String("service", "", "Filter by service")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	db, err := sql.Open("sqlite", cfg.MemoryDBPath+"?_journal_mode=WAL&mode=ro")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer func() { _ = db.Close() }()
 
@@ -90,8 +90,7 @@ func runContextInject(args []string) {
 	if *limit > 0 {
 		knowledge, err := queryKnowledge(ctx, db, *limit, *memContext, *service)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error querying knowledge: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("querying knowledge: %w", err)
 		}
 		if len(knowledge) > 0 {
 			fmt.Println("# Session Context (from agent-memory-mcp)")
@@ -119,8 +118,7 @@ func runContextInject(args []string) {
 	if *pendingLimit > 0 {
 		pending, err := queryPending(ctx, db, *pendingLimit, *memContext)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error querying pending: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("querying pending: %w", err)
 		}
 		if len(pending) > 0 {
 			if hasOutput {
@@ -146,6 +144,7 @@ func runContextInject(args []string) {
 			}
 		}
 	}
+	return nil
 }
 
 // queryKnowledge returns recent knowledge items (excluding session/checkpoint/review records).
@@ -227,8 +226,8 @@ func hasTag(tags []string, target string) bool {
 }
 
 // runAutoCapture reads session transcript from stdin and runs the full extract/plan/apply pipeline.
-func runAutoCapture(args []string) {
-	fs := flag.NewFlagSet("auto-capture", flag.ExitOnError)
+func runAutoCapture(args []string) error {
+	fs := flag.NewFlagSet("auto-capture", flag.ContinueOnError)
 	stdin := fs.Bool("stdin", false, "Read transcript from stdin")
 	summary := fs.String("summary", "", "Session summary text")
 	mode := fs.String("mode", "", "Session mode: coding, incident, migration, research, cleanup")
@@ -237,30 +236,28 @@ func runAutoCapture(args []string) {
 	tags := fs.String("tags", "", "Comma-separated tags")
 	dryRun := fs.Bool("dry-run", false, "Show what would be captured without saving")
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	summaryText, err := readSessionSummary(*summary, *stdin, fs.Args())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	modeValue, err := parseSessionModeValue(*mode)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
@@ -293,7 +290,7 @@ func runAutoCapture(args []string) {
 		default:
 			fmt.Println("Auto-capture skipped")
 		}
-		return
+		return nil
 	}
 
 	result, err := svc.Analyze(context.Background(), sessionclose.AnalyzeRequest{
@@ -303,44 +300,42 @@ func runAutoCapture(args []string) {
 		AutoApplyLowRisk: !*dryRun,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
-		return
+		return printJSON(result)
 	}
 	fmt.Println(sessionclose.FormatAnalysis(result))
+	return nil
 }
 
 // runCheckpoint saves a raw session checkpoint (used by PreCompact hook).
-func runCheckpoint(args []string) {
-	fs := flag.NewFlagSet("checkpoint", flag.ExitOnError)
+func runCheckpoint(args []string) error {
+	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
 	stdin := fs.Bool("stdin", false, "Read content from stdin")
 	summary := fs.String("summary", "", "Checkpoint summary text")
 	boundary := fs.String("boundary", "checkpoint", "Boundary type: checkpoint or pre_compact")
 	memContext := fs.String("context", "", "Project or task context")
 	service := fs.String("service", "", "Service or component name")
 	tags := fs.String("tags", "", "Comma-separated tags")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	summaryText, err := readSessionSummary(*summary, *stdin, fs.Args())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
@@ -375,7 +370,7 @@ func runCheckpoint(args []string) {
 		default:
 			fmt.Println("Checkpoint skipped")
 		}
-		return
+		return nil
 	}
 
 	rawID, err := svc.SaveRawSummaryWithOptions(context.Background(), sessionSummary, sessionclose.RawSaveOptions{
@@ -387,9 +382,9 @@ func runCheckpoint(args []string) {
 		},
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Printf("Checkpoint saved as memory %s (boundary: %s)\n", rawID, boundaryValue)
+	return nil
 }

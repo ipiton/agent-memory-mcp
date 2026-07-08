@@ -251,12 +251,16 @@ func (s *MCPServer) storeEngineeringMemory(args map[string]any, entityType memor
 	service := mustString(args, "service")
 	severity := mustString(args, "severity")
 	status := mustString(args, "status")
+	importance := defaultImportance
+	if v, ok := getImportance(args); ok {
+		importance = v
+	}
 	mem := &memory.Memory{
 		Title:      defaultTitle(title, titleFallback),
 		Content:    content,
 		Type:       memory.DefaultStorageTypeForEngineeringType(entityType),
 		Context:    mustString(args, "context"),
-		Importance: getImportance(args, defaultImportance),
+		Importance: importance,
 		Tags:       memory.BuildEngineeringTags(entityType, service, severity, status, false, append(extraTags, getStringSlice(args, "tags")...)),
 		Metadata:   memory.BuildEngineeringMetadata(entityType, service, severity, status, false, extraMeta),
 	}
@@ -774,11 +778,15 @@ func joinContentLines(lines ...string) string {
 	return strings.Join(filtered, "\n")
 }
 
-func getImportance(args map[string]any, defaultValue float64) float64 {
+// getImportance returns the caller-supplied importance and whether a valid
+// explicit value was present. A missing key, non-float value, or an out-of-range
+// value ([0,1]) yields ok=false so the caller applies its own default rather
+// than having invalid input silently swallowed (Round 3 L29 — honest contract).
+func getImportance(args map[string]any) (float64, bool) {
 	if importance, ok := args["importance"].(float64); ok && importance >= 0 && importance <= 1 {
-		return importance
+		return importance, true
 	}
-	return defaultValue
+	return 0, false
 }
 
 func boundedLimit(args map[string]any, defaultValue int, maxValue int) int {

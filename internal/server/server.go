@@ -58,15 +58,16 @@ type rpcError struct {
 
 // MCPServer implements the MCP protocol server with RAG and memory capabilities.
 type MCPServer struct {
-	config           config.Config
-	pathGuard        *paths.Guard
-	outputMode       string
-	stats            *stats.Logger
-	ragEngine        *rag.Engine
-	ragMu            sync.RWMutex // protects ragEngine during hot-reload
-	memoryStore      *memory.Store
-	embedder         *embedder.Embedder
-	fileLogger       *logger.FileLogger
+	config            config.Config
+	pathGuard         *paths.Guard
+	outputMode        string
+	stats             *stats.Logger
+	ragEngine         *rag.Engine
+	ragMu             sync.RWMutex // protects ragEngine during hot-reload
+	reloadMu          sync.Mutex   // serializes full config reloads (watcher vs SIGHUP), M15
+	memoryStore       *memory.Store
+	embedder          embedder.Service
+	fileLogger        *logger.FileLogger
 	sessionTracker    *sessionTracker
 	stewardService    *steward.Service
 	stewardScheduler  *steward.Scheduler
@@ -134,7 +135,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 			emb = nil
 		}
 
-		memoryStore, err = memory.NewStore(cfg.MemoryDBPath, emb, zap.NewNop())
+		memoryStore, err = memory.NewStore(cfg.MemoryDBPath, embedder.AsService(emb), zap.NewNop())
 		if err != nil {
 			if fileLogger != nil {
 				fileLogger.Warn("Memory store initialization failed - memory features will be unavailable",
@@ -268,7 +269,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		stats:             stats.NewLogger(cfg),
 		ragEngine:         ragEngine,
 		memoryStore:       memoryStore,
-		embedder:          emb,
+		embedder:          embedder.AsService(emb),
 		fileLogger:        fileLogger,
 		sessionTracker:    newSessionTracker(cfg, memoryStore, fileLogger),
 		stewardService:    stewardSvc,
@@ -457,6 +458,30 @@ func (s *MCPServer) getRagEngine() *rag.Engine {
 // introduced later.
 func (s *MCPServer) getMemoryStore() *memory.Store {
 	return s.memoryStore
+}
+
+// ReloadFromFile re-reads the config file and applies it as one atomic unit,
+// serialized against every other reload trigger via reloadMu. Without this the
+// config watcher and the SIGHUP handler could interleave their load+apply
+// sequences and let a slower reload clobber a newer config (Round 3 M15).
+func (s *MCPServer) ReloadFromFile(path string) error {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	newCfg, err := config.LoadFromFile(path)
+	if err != nil {
+		return err
+	}
+	s.ReloadConfig(newCfg)
+	return nil
+}
+
+// ApplyReload applies an already-loaded config under the same reload barrier as
+// ReloadFromFile, so the watcher (which loads for change-detection) and the
+// SIGHUP handler never run a reload concurrently (Round 3 M15).
+func (s *MCPServer) ApplyReload(newCfg config.Config) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	s.ReloadConfig(newCfg)
 }
 
 // ReloadConfig swaps the server's effective config and restarts the RAG engine.

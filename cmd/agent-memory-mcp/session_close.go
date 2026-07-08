@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -21,28 +20,28 @@ type sessionCommandBehavior struct {
 	autoApplyLowRisk bool
 }
 
-func runCloseSession(args []string) {
-	runSessionCommand("close-session", args, sessionCommandBehavior{
+func runCloseSession(args []string) error {
+	return runSessionCommand("close-session", args, sessionCommandBehavior{
 		dryRun: true,
 	})
 }
 
-func runReviewSession(args []string) {
-	runSessionCommand("review-session", args, sessionCommandBehavior{
+func runReviewSession(args []string) error {
+	return runSessionCommand("review-session", args, sessionCommandBehavior{
 		dryRun: true,
 	})
 }
 
-func runAcceptSession(args []string) {
-	runSessionCommand("accept-session", args, sessionCommandBehavior{
+func runAcceptSession(args []string) error {
+	return runSessionCommand("accept-session", args, sessionCommandBehavior{
 		dryRun:           false,
 		saveRaw:          true,
 		autoApplyLowRisk: true,
 	})
 }
 
-func runSessionCommand(name string, args []string, behavior sessionCommandBehavior) {
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
+func runSessionCommand(name string, args []string, behavior sessionCommandBehavior) error {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	summary := fs.String("summary", "", "Session summary text")
 	stdin := fs.Bool("stdin", false, "Read session summary from stdin")
 	mode := fs.String("mode", "", "Optional session mode: coding, incident, migration, research, cleanup")
@@ -54,39 +53,41 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 	endedAt := fs.String("ended-at", "", "Optional RFC3339 session end time")
 	rawOnly := fs.Bool("raw-only", false, "Only save the raw session summary")
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 	defer cleanup()
 
 	summaryText, err := readSessionSummary(*summary, *stdin, fs.Args())
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 
 	modeValue, err := parseSessionModeValue(*mode)
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 	metadataMap, err := parseSessionMetadataFlag(*metadata)
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 	started, err := parseSessionTimeFlag(*startedAt, "started-at")
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 	ended, err := parseSessionTimeFlag(*endedAt, "ended-at")
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 
 	serviceLayer := sessionclose.New(store)
@@ -104,18 +105,17 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 	if *rawOnly {
 		rawID, err := serviceLayer.SaveRawSummary(context.Background(), sessionSummary)
 		if err != nil {
-			failSessionCommand(err)
+			return err
 		}
 		if *jsonOut {
-			mustPrintJSON(map[string]any{
+			return printJSON(map[string]any{
 				"raw_only":          true,
 				"raw_summary_saved": rawID,
 				"mode":              modeValue,
 			})
-			return
 		}
 		fmt.Printf("Raw session summary saved as memory %s\n", rawID)
-		return
+		return nil
 	}
 
 	result, err := serviceLayer.Analyze(context.Background(), sessionclose.AnalyzeRequest{
@@ -125,19 +125,14 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 		AutoApplyLowRisk: behavior.autoApplyLowRisk,
 	})
 	if err != nil {
-		failSessionCommand(err)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(result)
-		return
+		return printJSON(result)
 	}
 	fmt.Println(sessionclose.FormatAnalysis(result))
-}
-
-func failSessionCommand(err error) {
-	fmt.Fprintf(os.Stderr, "error: %v\n", err)
-	os.Exit(1)
+	return nil
 }
 
 func readSessionSummary(summary string, useStdin bool, positional []string) (string, error) {

@@ -22,8 +22,8 @@ import (
 // The CLI uses the same extractor configuration as the live ingest path
 // (MCP_TRIPLE_EXTRACTOR_*), so any pricing knobs already in place — model
 // choice, base URL, timeout — apply identically here.
-func runIndexTriples(args []string) {
-	fs := flag.NewFlagSet("index-triples", flag.ExitOnError)
+func runIndexTriples(args []string) error {
+	fs := flag.NewFlagSet("index-triples", flag.ContinueOnError)
 	resume := fs.Bool("resume", true, "Skip memories that already have triples (default true)")
 	force := fs.Bool("force", false, "Re-extract even when triples already exist (replace-all)")
 	limit := fs.Int("limit", 0, "Process at most N memories (0 = unlimited)")
@@ -31,26 +31,25 @@ func runIndexTriples(args []string) {
 	dryRun := fs.Bool("dry-run", false, "Print what would be processed without calling the extractor")
 	progressEvery := fs.Int("progress-every", 25, "Print progress every N memories processed")
 	jsonOut := fs.Bool("json", false, "Emit a JSON summary at the end instead of human text")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
 	extractor, err := buildIndexTriplesExtractor(cfg)
 	if err != nil && !*dryRun {
-		fmt.Fprintf(os.Stderr, "error: triple extractor not available: %v\n", err)
 		fmt.Fprintln(os.Stderr, "hint: set MCP_TRIPLE_EXTRACTOR_ENABLED=true and the matching BASE_URL/API_KEY/MODEL envs, or run with --dry-run.")
-		os.Exit(1)
+		return fmt.Errorf("triple extractor not available: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,8 +57,7 @@ func runIndexTriples(args []string) {
 
 	memories, err := store.List(ctx, memory.Filters{Context: strings.TrimSpace(*memContext)}, 0)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: list memories: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("list memories: %w", err)
 	}
 
 	opts := indexTriplesLoopOptions{
@@ -73,11 +71,11 @@ func runIndexTriples(args []string) {
 	stats := indexTriplesLoop(ctx, store, extractor, memories, opts)
 
 	if *jsonOut {
-		mustPrintJSON(stats)
-		return
+		return printJSON(stats)
 	}
 	fmt.Printf("index-triples done in %s: total=%d processed=%d skipped=%d empty=%d errors=%d planned(dry-run)=%d triples=%d\n",
 		stats.Elapsed, stats.Total, stats.Processed, stats.Skipped, stats.Empty, stats.Errors, stats.Planned, stats.TripleCount)
+	return nil
 }
 
 // indexTriplesLoopOptions captures the runtime knobs the CLI loop honours.

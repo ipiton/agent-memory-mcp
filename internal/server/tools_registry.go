@@ -1421,12 +1421,16 @@ func getString(args map[string]any, key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	switch typed := val.(type) {
-	case string:
-		return typed, true
-	default:
-		return fmt.Sprintf("%v", typed), true
+	// Strict (Round 3 M33): accept only an actual JSON string. Previously a
+	// non-string (number/bool/object) was coerced via fmt.Sprintf and returned
+	// with ok=true, silently masking a client that sent the wrong type for a
+	// string field. Now a type mismatch reads as "absent" so required-field
+	// validation (requiredString) rejects it instead of storing e.g. "5".
+	typed, isString := val.(string)
+	if !isString {
+		return "", false
 	}
+	return typed, true
 }
 
 func getInt(args map[string]any, key string) (int, bool) {

@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -13,48 +13,44 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/review"
 )
 
-func runResolveReviewItem(args []string) {
-	fs := flag.NewFlagSet("resolve-review-item", flag.ExitOnError)
+func runResolveReviewItem(args []string) error {
+	fs := flag.NewFlagSet("resolve-review-item", flag.ContinueOnError)
 	resolution := fs.String("resolution", "resolved", "Resolution: resolved, dismissed, deferred")
 	note := fs.String("note", "", "Optional resolution note")
 	owner := fs.String("owner", "", "Optional owner or reviewer")
 	jsonOut := fs.Bool("json", false, "Output as JSON")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "error: review item id is required")
 		fs.Usage()
-		os.Exit(1)
+		return errors.New("review item id is required")
 	}
 
 	resolutionValue, err := review.NormalizeResolution(*resolution)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
 	itemID := strings.TrimSpace(fs.Arg(0))
 	mem, err := store.Get(itemID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if !memory.IsReviewQueueMemory(mem) {
-		fmt.Fprintf(os.Stderr, "error: memory %s is not a review queue item\n", itemID)
-		os.Exit(1)
+		return fmt.Errorf("memory %s is not a review queue item", itemID)
 	}
 
 	metadata := map[string]string{
@@ -73,19 +69,17 @@ func runResolveReviewItem(args []string) {
 		Tags:     review.ResolvedTags(mem.Tags, resolutionValue),
 		Metadata: metadata,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(map[string]any{
+		return printJSON(map[string]any{
 			"id":         itemID,
 			"resolution": resolutionValue,
 			"resolved":   true,
 		})
-		return
 	}
 
 	fmt.Printf("Resolved review item %s as %s\n", itemID, resolutionValue)
+	return nil
 }
-

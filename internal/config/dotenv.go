@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const dotenvFileName = ".env"
@@ -15,39 +16,55 @@ const dotenvFileName = ".env"
 // configAppName is the directory name used in XDG and Homebrew config paths.
 const configAppName = "agent-memory-mcp"
 
+// configPathMu guards the package-level config-path globals (resolvedConfigPath
+// and explicitConfigPath in config.go). They are written at startup but read at
+// runtime from the SIGHUP handler and config-watcher goroutines via
+// ConfigFilePath(); the lock makes that access race-free instead of relying on
+// startup happens-before (Round 3 M14).
+var configPathMu sync.RWMutex
+
 // resolvedConfigPath stores the first config file path that was actually loaded.
 var resolvedConfigPath string
 
 // ConfigFilePath returns the path to the config file that was loaded during startup.
 // Returns empty string if no config file was found.
 func ConfigFilePath() string {
+	configPathMu.RLock()
+	defer configPathMu.RUnlock()
 	return resolvedConfigPath
+}
+
+func setResolvedConfigPath(p string) {
+	configPathMu.Lock()
+	resolvedConfigPath = p
+	configPathMu.Unlock()
 }
 
 // loadDotEnvFiles loads .env files from a chain of known paths.
 // If explicitPath is non-empty, only that file is loaded (no chain).
 // Each file only fills in values not already set in the environment.
 func loadDotEnvFiles(explicitPath string) error {
-	resolvedConfigPath = ""
-
 	if explicitPath != "" {
-		resolvedConfigPath = explicitPath
+		setResolvedConfigPath(explicitPath)
 		return loadDotEnv(explicitPath)
 	}
 
 	// Chain: CWD .env → XDG config → Homebrew prefix
+	resolved := ""
 	paths := collectConfigPaths()
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		if resolvedConfigPath == "" {
-			resolvedConfigPath = p
+		if resolved == "" {
+			resolved = p
 		}
 		if err := loadDotEnv(p); err != nil {
+			setResolvedConfigPath(resolved)
 			return err
 		}
 	}
+	setResolvedConfigPath(resolved)
 	return nil
 }
 

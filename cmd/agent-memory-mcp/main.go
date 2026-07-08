@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -17,81 +19,95 @@ import (
 )
 
 func main() {
-	// Backward compat: no subcommand or flags starting with "-" → serve
-	if len(os.Args) < 2 || strings.HasPrefix(os.Args[1], "-") {
-		runServe(os.Args[1:])
-		return
-	}
-
-	cmd := os.Args[1]
-	args := os.Args[2:]
-
-	switch cmd {
-	case "serve":
-		runServe(args)
-	case "store":
-		runStore(args)
-	case "recall":
-		runRecall(args)
-	case "list":
-		runList(args)
-	case "delete":
-		runDelete(args)
-	case "search":
-		runSearch(args)
-	case "index":
-		runIndex(args)
-	case "close-session":
-		runCloseSession(args)
-	case "review-session":
-		runReviewSession(args)
-	case "accept-session":
-		runAcceptSession(args)
-	case "stats":
-		runStats(args)
-	case "config":
-		runConfig(args)
-	case "project-bank":
-		runProjectBank(args)
-	case "resolve-review-item":
-		runResolveReviewItem(args)
-	case "reembed":
-		runReembed(args)
-	case "export":
-		runExport(args)
-	case "import":
-		runImport(args)
-	case "setup":
-		runSetup(args)
-	case "hooks-config":
-		runHooksConfig(args)
-	case "context-inject":
-		runContextInject(args)
-	case "auto-capture":
-		runAutoCapture(args)
-	case "checkpoint":
-		runCheckpoint(args)
-	case "sweep-archive":
-		runSweepArchive(args)
-	case "end-task":
-		runEndTask(args)
-	case "mark-dead-end":
-		runMarkDeadEnd(args)
-	case "sediment-cycle":
-		runSedimentCycle(args)
-	case "recount-refs":
-		runRecountRefs(args)
-	case "index-triples":
-		runIndexTriples(args)
-	case "dead-ends-stale":
-		runDeadEndsStale(args)
-	default:
-		printUsage()
+	if err := run(os.Args[1:]); err != nil {
+		// flag.ErrHelp means -h/--help was requested; usage was already
+		// printed by the FlagSet, so exit cleanly.
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runServe(args []string) {
+// run is the single dispatch point. Every subcommand handler returns an error
+// instead of calling os.Exit, so deferred cleanup (SQLite WAL sync, engine
+// stop) runs before the process exits and handlers stay unit-testable.
+func run(argv []string) error {
+	// Backward compat: no subcommand or flags starting with "-" → serve
+	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+		return runServe(argv)
+	}
+
+	cmd := argv[0]
+	args := argv[1:]
+
+	switch cmd {
+	case "serve":
+		return runServe(args)
+	case "store":
+		return runStore(args)
+	case "recall":
+		return runRecall(args)
+	case "list":
+		return runList(args)
+	case "delete":
+		return runDelete(args)
+	case "search":
+		return runSearch(args)
+	case "index":
+		return runIndex(args)
+	case "close-session":
+		return runCloseSession(args)
+	case "review-session":
+		return runReviewSession(args)
+	case "accept-session":
+		return runAcceptSession(args)
+	case "stats":
+		return runStats(args)
+	case "config":
+		return runConfig(args)
+	case "project-bank":
+		return runProjectBank(args)
+	case "resolve-review-item":
+		return runResolveReviewItem(args)
+	case "reembed":
+		return runReembed(args)
+	case "export":
+		return runExport(args)
+	case "import":
+		return runImport(args)
+	case "setup":
+		return runSetup(args)
+	case "hooks-config":
+		return runHooksConfig(args)
+	case "context-inject":
+		return runContextInject(args)
+	case "auto-capture":
+		return runAutoCapture(args)
+	case "checkpoint":
+		return runCheckpoint(args)
+	case "sweep-archive":
+		return runSweepArchive(args)
+	case "end-task":
+		return runEndTask(args)
+	case "mark-dead-end":
+		return runMarkDeadEnd(args)
+	case "sediment-cycle":
+		return runSedimentCycle(args)
+	case "recount-refs":
+		return runRecountRefs(args)
+	case "index-triples":
+		return runIndexTriples(args)
+	case "dead-ends-stale":
+		return runDeadEndsStale(args)
+	default:
+		printUsage()
+		return fmt.Errorf("unknown command: %s", cmd)
+	}
+}
+
+func runServe(args []string) error {
 	// Extract --config before flag.Parse() so dotenv chain uses it.
 	args = extractConfigFlag(args)
 
@@ -100,14 +116,12 @@ func runServe(args []string) {
 
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	guard, err := paths.NewGuard(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to build path guard: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to build path guard: %w", err)
 	}
 
 	srv := server.New(cfg, guard)
@@ -117,7 +131,7 @@ func runServe(args []string) {
 	if cfgPath := config.ConfigFilePath(); cfgPath != "" {
 		watcher := config.NewWatcher(cfgPath, 30*time.Second, func(oldCfg, newCfg config.Config) {
 			fmt.Fprintf(os.Stderr, "Config changed, reloading config...\n")
-			srv.ReloadConfig(newCfg)
+			srv.ApplyReload(newCfg)
 		})
 		watcher.Start()
 		defer watcher.Stop()
@@ -133,13 +147,10 @@ func runServe(args []string) {
 				fmt.Fprintf(os.Stderr, "SIGHUP received but no config file path known, skipping reload\n")
 				continue
 			}
-			newCfg, err := config.LoadFromFile(cfgPath)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "SIGHUP reload failed: %v\n", err)
-				continue
-			}
 			fmt.Fprintf(os.Stderr, "SIGHUP received, reloading config...\n")
-			srv.ReloadConfig(newCfg)
+			if err := srv.ReloadFromFile(cfgPath); err != nil {
+				fmt.Fprintf(os.Stderr, "SIGHUP reload failed: %v\n", err)
+			}
 		}
 	}()
 
@@ -149,16 +160,15 @@ func runServe(args []string) {
 	if cfg.HTTPMode == "http" {
 		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTPHost, strconv.Itoa(cfg.HTTPPort)))
 		if err := server.RunHTTP(ctx, srv); err != nil {
-			fmt.Fprintf(os.Stderr, "http server error: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("http server error: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Server stopped gracefully\n")
 	} else {
 		if err := server.RunStdio(srv); err != nil {
-			fmt.Fprintf(os.Stderr, "mcp server stopped: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("mcp server stopped: %w", err)
 		}
 	}
+	return nil
 }
 
 // extractConfigFlag scans args for --config or --config=value, sets the

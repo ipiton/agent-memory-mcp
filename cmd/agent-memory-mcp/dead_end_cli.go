@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
@@ -15,8 +15,8 @@ import (
 // runMarkDeadEnd handles the "mark-dead-end" subcommand. It persists a
 // first-class dead_end engineering memory so future retrieval can surface
 // it when an agent is about to repeat a known pitfall.
-func runMarkDeadEnd(args []string) {
-	fs := flag.NewFlagSet("mark-dead-end", flag.ExitOnError)
+func runMarkDeadEnd(args []string) error {
+	fs := flag.NewFlagSet("mark-dead-end", flag.ContinueOnError)
 	attempted := fs.String("attempted", "", "Short description of the failed attempt (required)")
 	whyFailed := fs.String("why-failed", "", "Root cause of the failure (required)")
 	alternative := fs.String("alternative", "", "Alternative approach that actually worked")
@@ -26,28 +26,26 @@ func runMarkDeadEnd(args []string) {
 	title := fs.String("title", "", "Short title for the dead end (defaults to truncated attempted)")
 	tagsCSV := fs.String("tags", "", "Comma-separated extra tags")
 	jsonOut := fs.Bool("json", false, "Output JSON")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if strings.TrimSpace(*attempted) == "" {
-		fmt.Fprintln(os.Stderr, "error: -attempted is required")
 		fs.Usage()
-		os.Exit(2)
+		return errors.New("-attempted is required")
 	}
 	if strings.TrimSpace(*whyFailed) == "" {
-		fmt.Fprintln(os.Stderr, "error: -why-failed is required")
 		fs.Usage()
-		os.Exit(2)
+		return errors.New("-why-failed is required")
 	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
@@ -59,8 +57,7 @@ func runMarkDeadEnd(args []string) {
 		labeledLine("Service", *service),
 	)
 	if err := userio.ValidateMemoryContent(content); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	extraMeta := map[string]string{}
@@ -92,21 +89,20 @@ func runMarkDeadEnd(args []string) {
 	}
 
 	if err := store.Store(context.Background(), mem); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
-		mustPrintJSON(map[string]any{
+		return printJSON(map[string]any{
 			"id":    mem.ID,
 			"title": mem.Title,
 			"type":  string(mem.Type),
 			"tags":  mem.Tags,
 		})
-		return
 	}
 	fmt.Printf("Dead end stored:\n- ID: %s\n- Title: %s\n- Type: %s\n- Tags: %v\n",
 		mem.ID, mem.Title, mem.Type, mem.Tags)
+	return nil
 }
 
 func labeledLine(label, value string) string {

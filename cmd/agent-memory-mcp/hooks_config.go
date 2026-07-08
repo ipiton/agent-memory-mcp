@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 )
 
-func runHooksConfig(args []string) {
-	fs := flag.NewFlagSet("hooks-config", flag.ExitOnError)
+func runHooksConfig(args []string) error {
+	fs := flag.NewFlagSet("hooks-config", flag.ContinueOnError)
 	command := fs.String("command", defaultConfigCommand(), "Path to agent-memory-mcp binary")
 	jsonOut := fs.Bool("json", false, "Output raw JSON only (no instructions)")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	binaryPath := *command
 	if binaryPath == "" {
@@ -23,13 +25,12 @@ func runHooksConfig(args []string) {
 
 	data, err := json.MarshalIndent(hooks, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *jsonOut {
 		fmt.Println(string(data))
-		return
+		return nil
 	}
 
 	fmt.Fprintf(os.Stderr, "Add the following to your .claude/settings.json under \"hooks\":\n\n")
@@ -38,6 +39,7 @@ func runHooksConfig(args []string) {
 	fmt.Fprintf(os.Stderr, "  SessionStart  — injects recent memories and project context into the session\n")
 	fmt.Fprintf(os.Stderr, "  SessionEnd    — auto-captures session knowledge (extract, plan, apply)\n")
 	fmt.Fprintf(os.Stderr, "  PreCompact    — saves a checkpoint before context window compression\n")
+	return nil
 }
 
 type hookEntry struct {

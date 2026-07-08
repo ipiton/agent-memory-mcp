@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -18,25 +19,25 @@ type clientConfigOptions struct {
 	Command     string
 }
 
-func runConfig(args []string) {
-	fs := flag.NewFlagSet("config", flag.ExitOnError)
+func runConfig(args []string) error {
+	fs := flag.NewFlagSet("config", flag.ContinueOnError)
 	name := fs.String("name", "memory", "Server name in the client config")
 	root := fs.String("root", "", "Project root to run from (default: current directory)")
 	command := fs.String("command", defaultConfigCommand(), "Executable to launch")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "error: target client is required: claude-desktop, cursor, or codex")
 		fs.Usage()
-		os.Exit(1)
+		return errors.New("target client is required: claude-desktop, cursor, or codex")
 	}
 
 	projectRoot := *root
 	if projectRoot == "" {
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		projectRoot = cwd
 	}
@@ -47,8 +48,7 @@ func runConfig(args []string) {
 		Command:     *command,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if configPath != "" {
@@ -56,6 +56,7 @@ func runConfig(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "Suggested workflow:\n%s\n\n", workflowHintSnippet())
 	fmt.Println(snippet)
+	return nil
 }
 
 func generateClientConfig(target string, opts clientConfigOptions) (snippet string, configPath string, err error) {

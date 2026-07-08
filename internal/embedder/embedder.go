@@ -68,6 +68,32 @@ type providerCandidate struct {
 	onFailure func(error)
 }
 
+// Service is the embedding surface consumed by the memory store, the RAG
+// vector service, and the MCP server. *Embedder is the production
+// implementation; accepting the interface (Round 3 M23) lets tests inject a
+// lightweight fake instead of standing up an httptest server per provider.
+type Service interface {
+	EmbedDetailed(ctx context.Context, text string) (*EmbeddingResult, error)
+	EmbedQueryDetailed(ctx context.Context, text string) (*EmbeddingResult, error)
+	BatchEmbedDetailed(ctx context.Context, texts []string) (*BatchEmbeddingResult, error)
+	Dimensions() int
+	Close()
+}
+
+var _ Service = (*Embedder)(nil)
+
+// AsService adapts a concrete *Embedder to the Service interface, returning a
+// true nil interface when e is nil. Passing a nil *Embedder directly to a
+// Service parameter would yield a non-nil interface (Go typed-nil trap), so
+// downstream `svc != nil` guards would wrongly succeed and dereference nil.
+// Use this at call sites where the embedder may be absent (memory-only mode).
+func AsService(e *Embedder) Service {
+	if e == nil {
+		return nil
+	}
+	return e
+}
+
 // Embedder generates vector embeddings using Jina AI as primary with OpenAI and Ollama fallback.
 type Embedder struct {
 	config            Config
@@ -393,6 +419,11 @@ func (e *Embedder) markJinaFailure(task string) {
 		}
 		e.logger.Error("Jina AI disabled after repeated failures, using fallback providers", fields...)
 	}
+}
+
+// Dimensions returns the embedding vector dimension this Embedder produces.
+func (e *Embedder) Dimensions() int {
+	return e.Dimension
 }
 
 func (e *Embedder) LastModelID() string {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
@@ -15,37 +14,35 @@ import (
 // threshold so the operator can decide which abandoned approaches deserve a
 // second look (the original constraint may no longer apply after a library
 // upgrade, infra change, or supersession). T46 hygiene slice.
-func runDeadEndsStale(args []string) {
-	fs := flag.NewFlagSet("dead-ends-stale", flag.ExitOnError)
+func runDeadEndsStale(args []string) error {
+	fs := flag.NewFlagSet("dead-ends-stale", flag.ContinueOnError)
 	age := fs.Duration("age", 12*30*24*time.Hour, "Minimum age (default 12 months ≈ 8640h). Set to 0 to list all dead_ends with ages.")
 	limit := fs.Int("limit", 50, "Maximum number of stale dead_ends to print (0 = unlimited)")
 	jsonOut := fs.Bool("json", false, "Emit a JSON array instead of human-readable text")
-	mustParse(fs, args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer cleanup()
 
 	stale, err := store.StaleDeadEnds(context.Background(), *age)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if *limit > 0 && len(stale) > *limit {
 		stale = stale[:*limit]
 	}
 
 	if *jsonOut {
-		mustPrintJSON(formatStaleDeadEndsJSON(stale))
-		return
+		return printJSON(formatStaleDeadEndsJSON(stale))
 	}
 	if len(stale) == 0 {
 		if *age > 0 {
@@ -53,7 +50,7 @@ func runDeadEndsStale(args []string) {
 		} else {
 			fmt.Println("No dead_end memories found.")
 		}
-		return
+		return nil
 	}
 	threshold := "any age"
 	if *age > 0 {
@@ -73,6 +70,7 @@ func runDeadEndsStale(args []string) {
 		}
 		fmt.Println()
 	}
+	return nil
 }
 
 // formatStaleDeadEndsJSON flattens the result into a JSON-friendly shape
