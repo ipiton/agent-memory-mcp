@@ -885,6 +885,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_INDEX_EXCLUDE_DIRS` | built-in defaults | Extra directory names or repo-relative paths to exclude from RAG indexing |
 | `MCP_INDEX_EXCLUDE_GLOBS` | - | Extra glob patterns matched against repo-relative paths, for example `docs/internal/*.md` |
 | `MCP_REDACT_SECRETS` | `true` | Redact common secret-like content before documents are indexed |
+| `MCP_ARCHIVE_SWEEP_ENABLED` | `true` | Zero-ops consolidation: a background loop marks archived-task working memories outdated (or promotes durable ones) with no manual runs. Auto-discovers `<MCP_ROOT>/tasks/archive`; no-op if absent. See [Zero-ops consolidation](#zero-ops-task-memory-consolidation) |
+| `MCP_ARCHIVE_SWEEP_INTERVAL` | `1h` | Background archive-sweep cadence. `0` disables the loop |
 | `MCP_SESSION_TRACKING_ENABLED` | `true` | Enable background session tracking, auto raw summaries, and low-risk close-session orchestration |
 | `MCP_SESSION_IDLE_TIMEOUT` | `10m` | Idle timeout before the active background session auto-closes |
 | `MCP_SESSION_CHECKPOINT_INTERVAL` | `30m` | Interval for periodic raw checkpoint snapshots during active sessions |
@@ -1129,6 +1131,30 @@ Current behavior:
 - canonical memories get a trust boost and higher minimum importance
 - outdated or superseded memories are automatically archived and downranked
 - conflict reporting is manual and safe: nothing is deleted unless you explicitly choose to delete it
+
+### Zero-ops task-memory consolidation
+
+Every closed task leaves behind working memories (`Task started`, per-phase
+notes, `Session close`, auto-extracted review items). Left alone they accumulate
+linearly and keep surfacing in recall for tasks that are already done. The
+service consolidates them automatically — no cron, no manual cleanup, no config:
+
+- A background loop (on by default, `MCP_ARCHIVE_SWEEP_INTERVAL`, default 1h)
+  sweeps archived tasks: durable entries (procedural, or importance ≥ 0.70) are
+  promoted, the rest are marked `outdated`. It runs a first pass shortly after
+  startup, which also backfills any archive that accumulated before the loop
+  existed.
+- **Zero configuration.** With `MCP_TASK_ARCHIVE_ROOTS` unset it watches the
+  `<MCP_ROOT>/tasks/archive` convention; a missing directory is a silent no-op.
+- **Safe by construction.** Promotion goes through the provenance gate: a
+  conversational-origin memory is routed to the review queue, never
+  auto-canonicalized (see [Memory poisoning defense](docs/THREAT_MODEL.md)).
+- The `end_task` and `sweep_archive` tools default to the same consolidating
+  behavior, so an explicit `/end-task` consolidates immediately.
+
+Policy details (state derivation, promotion threshold, idempotency,
+symlink/traversal guards): [`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md).
+Turn the loop off with `MCP_ARCHIVE_SWEEP_ENABLED=false`.
 
 ### Canonical knowledge layer
 

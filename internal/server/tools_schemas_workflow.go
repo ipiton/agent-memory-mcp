@@ -70,8 +70,8 @@ func workflowToolDefs() []tool {
 					},
 					"auto_promote": map[string]any{
 						"type":        "boolean",
-						"default":     false,
-						"description": "T62: promote candidates directly to canonical instead of creating review-queue items (autonomous mode)",
+						"default":     true,
+						"description": "Promote candidates directly to canonical instead of creating review-queue items (T63 zero-ops default; the T77 provenance gate routes conversational-origin memories to review regardless). Set false to force review-queue items.",
 					},
 					"format": map[string]any{
 						"type":        "string",
@@ -117,8 +117,8 @@ func workflowToolDefs() []tool {
 					},
 					"auto_promote": map[string]any{
 						"type":        "boolean",
-						"default":     false,
-						"description": "T62: promote candidates directly to canonical instead of creating review-queue items (autonomous mode)",
+						"default":     true,
+						"description": "Promote candidates directly to canonical instead of creating review-queue items (T63 zero-ops default; the T77 provenance gate routes conversational-origin memories to review regardless). Set false to force review-queue items.",
 					},
 					"format": map[string]any{
 						"type":        "string",

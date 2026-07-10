@@ -89,16 +89,24 @@ note from silently entering canonical knowledge.
 
 ## Invocation
 
-Both entry points accept `auto_promote` (default `false`) and support `dry_run`:
+Consolidation runs three ways; all share the `decide` policy above.
 
-- **`sweep_archive`** — enumerates every slug under the configured archive roots
-  (`MCP_TASK_ARCHIVE_ROOTS`). Bulk / periodic path.
-- **`end_task`** — one slug, validated to exist as a subdirectory under a root
-  (defense-in-depth against path traversal). Explicit per-task path.
+- **Background sweep (zero-ops, T63)** — on by default, a scheduler runs
+  `SweepArchive` shortly after startup and then every
+  `MCP_ARCHIVE_SWEEP_INTERVAL` (default 1h). No configuration required: when
+  `MCP_TASK_ARCHIVE_ROOTS` is unset it falls back to the `<MCP_ROOT>/tasks/archive`
+  convention, and a missing directory is a silent no-op. The first pass doubles
+  as an automatic backfill of any archive that accumulated before the loop
+  existed. Disable with `MCP_ARCHIVE_SWEEP_ENABLED=false`.
+- **`sweep_archive` tool** — enumerates every slug under the resolved archive
+  roots. Manual bulk path.
+- **`end_task` tool** — one slug, validated to exist as a subdirectory under a
+  root (defense-in-depth against path traversal). Explicit per-task path.
 
-`dry_run=true` reports the exact actions and counters (outdated / promotion
-candidates / promoted / skipped) without any writes — always the safe first step,
-especially for a legacy backfill.
+Both tools default `auto_promote=true` (T63 zero-ops; the T77 gate keeps it safe)
+and support `dry_run`. `dry_run=true` reports the exact actions and counters
+(outdated / promotion candidates / promoted / skipped) without any writes — the
+safe first step for a manual bulk run.
 
 ## Idempotency & safety
 
@@ -113,20 +121,25 @@ especially for a legacy backfill.
   `Errors` and surfaced (CLI exits non-zero, MCP response lists them); counters
   reflect only successful writes.
 
-## Legacy backfill (one-time)
+## Legacy backfill
 
-For a corpus that accumulated working memories *before* the sweep existed:
+For a corpus that accumulated working memories *before* the sweep existed, no
+manual action is needed: the background sweep's first pass (T63) consolidates the
+existing archive automatically on service startup. To preview or force a bulk run
+by hand instead:
 
-1. Run `sweep_archive(dry_run=true, auto_promote=true)` and read the counters —
-   confirm the promoted/outdated split matches expectations.
+1. Run `sweep_archive(dry_run=true)` and read the counters — confirm the
+   promoted/outdated split matches expectations.
 2. Re-run with `dry_run=false` to apply. The type/importance policy above governs
    which entries become canonical and which become outdated.
 3. Stale `review_queue_item` entries from earlier (pre-AutoPromote) sweeps are
    *skipped* by the sweep and are cleaned up separately — see the cross-run inbox
-   reconcile (T81) and the follow-up work in **T63**.
+   reconcile (T81).
 
-## Not covered here (T63)
+## Trigger cadence, not policy
 
-Autonomous triggering (an `fsnotify` watch on `tasks/<slug>/ → tasks/archive/<slug>/`
-moves) and the operational legacy backfill against a live consumer corpus are
-tracked as **T63**. This document covers the policy those mechanisms apply.
+The background scheduler intentionally uses a periodic ticker rather than an
+`fsnotify` watch on archive-directory moves: periodic sweeps need no extra
+dependency, survive restarts, cannot miss an event that happened while the
+service was down, and give the automatic first-run backfill for free. The
+`decide` policy above is identical regardless of which trigger fires it.

@@ -78,6 +78,8 @@ func h13GoldenEnv(t *testing.T) {
 		"MCP_CHECKPOINT_DEDUP_MIN_CHARS":          "50",
 		"MCP_TASK_ARCHIVE_ROOTS":                  "/tmp/arch1:/tmp/arch2",
 		"MCP_TASK_SLUG_PATTERN":                   "^task-.*$",
+		"MCP_ARCHIVE_SWEEP_ENABLED":               "false",
+		"MCP_ARCHIVE_SWEEP_INTERVAL":              "2h",
 		"MCP_RERANK_ENABLED":                      "true",
 		"MCP_RERANK_PROVIDER":                     "jina",
 		"JINA_RERANKER_MODEL":                     "rr-model",
@@ -169,6 +171,8 @@ func serializeConfigForGolden(c Config) string {
 	p("HooksDedup.MinChars", c.HooksDedup.MinChars)
 	p("Lifecycle.TaskArchiveRoots", c.Lifecycle.TaskArchiveRoots)
 	p("Lifecycle.TaskSlugPattern", slug)
+	p("Lifecycle.ArchiveSweepEnabled", c.Lifecycle.ArchiveSweepEnabled)
+	p("Lifecycle.ArchiveSweepInterval", c.Lifecycle.ArchiveSweepInterval)
 	p("Rerank.Enabled", c.Rerank.Enabled)
 	p("Rerank.Provider", c.Rerank.Provider)
 	p("Rerank.JinaModel", c.Rerank.JinaModel)

@@ -71,6 +71,7 @@ type MCPServer struct {
 	stewardService    *steward.Service
 	stewardScheduler  *steward.Scheduler
 	sedimentScheduler *sedimentScheduler
+	archiveScheduler  *archiveSweepScheduler
 	toolHandlers      map[string]toolHandler
 }
 
@@ -110,6 +111,10 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	// the feature flag is off or the interval is zero, so Start() is a
 	// no-op in that case.
 	srv.sedimentScheduler.Start()
+	// Start the zero-ops archive-sweep loop (T63). newArchiveSweepScheduler
+	// returns nil when disabled or no memory store, so Start() no-ops then.
+	srv.archiveScheduler = newArchiveSweepScheduler(srv, cfg.Lifecycle.ArchiveSweepEnabled, cfg.Lifecycle.ArchiveSweepInterval)
+	srv.archiveScheduler.Start()
 	// Wire session close event to steward scheduler.
 	if srv.sessionTracker != nil && stewardSched != nil {
 		srv.sessionTracker.onSessionClose = func() {
@@ -367,6 +372,9 @@ func (s *MCPServer) Shutdown() {
 	}
 	if s.sedimentScheduler != nil {
 		s.sedimentScheduler.Close()
+	}
+	if s.archiveScheduler != nil {
+		s.archiveScheduler.Close()
 	}
 	if s.sessionTracker != nil {
 		s.sessionTracker.Close()

@@ -1005,10 +1005,17 @@ func mapSweepError(op string, err error) *rpcError {
 
 // buildSweepConfigFromArgs resolves the ArchiveSweepConfig from MCP args,
 // falling back to the server's loaded config for roots and slug pattern.
+//
+// T63: auto_promote defaults to true (zero-ops consolidation — the T77
+// provenance gate keeps it safe), and roots fall back to the
+// <root>/tasks/archive convention when unset. Callers may still override both.
 func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool) (lifecycle.ArchiveSweepConfig, *rpcError) {
-	autoPromote, _ := getBool(args, "auto_promote")
+	autoPromote := true
+	if v, ok := getBool(args, "auto_promote"); ok {
+		autoPromote = v
+	}
 	sweepCfg := lifecycle.ArchiveSweepConfig{
-		Roots:              append([]string(nil), srv.config.Lifecycle.TaskArchiveRoots...),
+		Roots:              srv.resolveArchiveSweepRoots(),
 		SlugPattern:        srv.config.Lifecycle.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: lifecycle.DefaultPromotionThreshold,

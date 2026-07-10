@@ -157,10 +157,18 @@ type HooksDedupConfig struct {
 	MinChars  int           // Skip summaries shorter than this as "empty" (default: 100)
 }
 
-// LifecycleConfig holds task-archive sweep settings (T47).
+// LifecycleConfig holds task-archive sweep settings (T47, T63).
 type LifecycleConfig struct {
-	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = sweep disabled.
+	TaskArchiveRoots []string       // Colon-separated list of absolute paths. Empty = fall back to the <root>/tasks/archive convention (T63).
 	TaskSlugPattern  *regexp.Regexp // Optional regex filter for slug basenames; nil = accept all.
+
+	// ArchiveSweepEnabled runs the background archive-sweep consolidation loop
+	// (T63 zero-ops). On by default: a fresh install consolidates archived-task
+	// working memories with no configuration. Env: MCP_ARCHIVE_SWEEP_ENABLED.
+	ArchiveSweepEnabled bool
+	// ArchiveSweepInterval is the background sweep cadence. Env:
+	// MCP_ARCHIVE_SWEEP_INTERVAL (default 1h). Zero disables the loop.
+	ArchiveSweepInterval time.Duration
 }
 
 // RerankConfig holds the optional neural reranker (T44). Disabled by default;
@@ -270,6 +278,8 @@ type envValues struct {
 	checkpointDedupMinChars          int
 	taskArchiveRoots                 string
 	taskSlugPattern                  string
+	archiveSweepEnabled              bool
+	archiveSweepInterval             string
 	rerankEnabled                    bool
 	rerankProvider                   string
 	jinaRerankerModel                string
@@ -360,6 +370,8 @@ func readEnvValues() (envValues, error) {
 		checkpointDedupMinChars:          s.Int("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
 		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
 		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
+		archiveSweepEnabled:              s.Bool("MCP_ARCHIVE_SWEEP_ENABLED", true),
+		archiveSweepInterval:             EnvOrDefault("MCP_ARCHIVE_SWEEP_INTERVAL", "1h"),
 		rerankEnabled:                    s.Bool("MCP_RERANK_ENABLED", false),
 		rerankProvider:                   EnvOrDefault("MCP_RERANK_PROVIDER", "disabled"),
 		jinaRerankerModel:                EnvOrDefault("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
@@ -530,7 +542,9 @@ func resolvePaths(ev envValues) (Config, error) {
 		},
 
 		Lifecycle: LifecycleConfig{
-			TaskArchiveRoots: parseArchiveRoots(ev.taskArchiveRoots, root),
+			TaskArchiveRoots:     parseArchiveRoots(ev.taskArchiveRoots, root),
+			ArchiveSweepEnabled:  ev.archiveSweepEnabled,
+			ArchiveSweepInterval: parseDurationOrDefault(ev.archiveSweepInterval, time.Hour),
 		},
 
 		Rerank: RerankConfig{
