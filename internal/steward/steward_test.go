@@ -818,8 +818,10 @@ func TestInboxCRUD(t *testing.T) {
 		t.Errorf("expected duplicate_candidate, got %s", items[0].Kind)
 	}
 
-	// Resolve.
-	if err := svc.ResolveInbox(item.ID, "merge", "Merged by test", "test"); err != nil {
+	// Resolve. Use "suppress" — a no-op resolution that exercises the state
+	// transition without needing real target memories (the actionable paths
+	// are covered by TestResolveInboxMergeExecutes / …LeavesItemPending).
+	if err := svc.ResolveInbox(item.ID, "suppress", "Dismissed by test", "test"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -833,6 +835,112 @@ func TestInboxCRUD(t *testing.T) {
 	items3, _ := svc.ListInbox(InboxQuery{Status: "resolved"})
 	if len(items3) != 1 {
 		t.Errorf("expected 1 resolved item, got %d", len(items3))
+	}
+}
+
+// TestResolveInboxMergeExecutes is the T73 payoff: resolving a
+// duplicate_candidate with "merge" must actually merge the target memories
+// (not just flip the inbox row to resolved). Before the fix the queue drained
+// on paper while the duplicate survived and the next scan re-surfaced it.
+func TestResolveInboxMergeExecutes(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	primary := &memory.Memory{Content: "rollback runbook v1", Type: memory.TypeProcedural, Title: "rollback"}
+	dup := &memory.Memory{Content: "rollback runbook copy", Type: memory.TypeProcedural, Title: "rollback"}
+	if err := store.Store(ctx, primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Store(ctx, dup); err != nil {
+		t.Fatal(err)
+	}
+
+	item := &InboxItem{
+		Kind:      InboxDuplicateCandidate,
+		Title:     "dup rollback",
+		TargetIDs: []string{primary.ID, dup.ID},
+	}
+	if err := CreateInboxItem(svc.DB(), item); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.ResolveInbox(item.ID, "merge", "merged by test", "test"); err != nil {
+		t.Fatalf("ResolveInbox merge: %v", err)
+	}
+
+	// The duplicate must be merged into the primary (archived), not still active.
+	mergedDup, err := store.Get(dup.ID)
+	if err != nil {
+		t.Fatalf("get dup: %v", err)
+	}
+	if mergedDup.Metadata["merged_into"] != primary.ID {
+		t.Fatalf("duplicate not merged: merged_into=%q, want %q", mergedDup.Metadata["merged_into"], primary.ID)
+	}
+	if memory.LifecycleStatusOf(mergedDup) != memory.LifecycleSuperseded {
+		t.Fatalf("duplicate lifecycle = %q, want superseded", memory.LifecycleStatusOf(mergedDup))
+	}
+
+	// And the item is resolved (gone from pending).
+	pending, _ := svc.ListInbox(InboxQuery{Status: "pending"})
+	if len(pending) != 0 {
+		t.Fatalf("expected 0 pending after merge, got %d", len(pending))
+	}
+}
+
+// TestResolveInboxFailedActionLeavesItemPending pins the anti-phantom-closure
+// guarantee (T73): if the action cannot be applied (e.g. targets no longer
+// exist) the item stays pending rather than being falsely marked resolved.
+func TestResolveInboxFailedActionLeavesItemPending(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+
+	item := &InboxItem{
+		Kind:      InboxDuplicateCandidate,
+		Title:     "dup with missing targets",
+		TargetIDs: []string{"does-not-exist-1", "does-not-exist-2"},
+	}
+	if err := CreateInboxItem(svc.DB(), item); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.ResolveInbox(item.ID, "merge", "", "test"); err == nil {
+		t.Fatal("expected merge on missing targets to fail, got nil")
+	}
+
+	pending, _ := svc.ListInbox(InboxQuery{Status: "pending"})
+	if len(pending) != 1 {
+		t.Fatalf("failed resolve must leave item pending, got %d pending", len(pending))
+	}
+}
+
+// TestResolveInboxPromoteExecutes covers a second actionable path: promote must
+// canonicalize the target memory (T73).
+func TestResolveInboxPromoteExecutes(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+	ctx := context.Background()
+
+	m := &memory.Memory{Content: "the canonical deploy procedure", Type: memory.TypeProcedural, Title: "deploy"}
+	if err := store.Store(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+
+	item := &InboxItem{Kind: InboxPromotionCandidate, Title: "promote deploy", TargetIDs: []string{m.ID}}
+	if err := CreateInboxItem(svc.DB(), item); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.ResolveInbox(item.ID, "promote", "", "test"); err != nil {
+		t.Fatalf("ResolveInbox promote: %v", err)
+	}
+
+	promoted, err := store.Get(m.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memory.LifecycleStatusOf(promoted) != memory.LifecycleCanonical {
+		t.Fatalf("target lifecycle = %q, want canonical", memory.LifecycleStatusOf(promoted))
 	}
 }
 

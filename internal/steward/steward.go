@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -176,13 +177,13 @@ func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
 	}
 
 	report := &Report{
-		ID:          uuid.New().String(),
-		StartedAt:   startedAt,
-		CompletedAt: completedAt,
-		Scope:       scope,
-		DryRun:      params.DryRun,
-		Context:     params.Context,
-		Service:     params.Service,
+		ID:              uuid.New().String(),
+		StartedAt:       startedAt,
+		CompletedAt:     completedAt,
+		Scope:           scope,
+		DryRun:          params.DryRun,
+		Context:         params.Context,
+		Service:         params.Service,
 		Stats:           stats,
 		Actions:         scanResult.Actions,
 		Errors:          scanResult.Errors,
@@ -318,12 +319,103 @@ func (s *Service) ListInbox(q InboxQuery) ([]InboxItem, error) {
 	return ListInboxItems(s.db, q)
 }
 
-// ResolveInbox resolves an inbox item with the given action.
+// ResolveInbox resolves an inbox item with the given action, executing the
+// action against the target memories BEFORE marking the item resolved (T73).
+// Previously it only wrote the resolution row, so the queue drained on paper
+// while the target records survived and the next scan re-surfaced them
+// (phantom closure). Execution failures leave the item pending, so a failed
+// resolve is visibly unresolved rather than silently lost.
+//
+// Action semantics:
+//   - merge           → MergeDuplicates(targets[0], targets[1:])   (immediate)
+//   - mark_outdated    → MarkOutdated(targets[0])                  (immediate)
+//   - mark_superseded  → MarkOutdated(targets[0], supersededBy=targets[1]) (immediate)
+//   - promote          → PromoteToCanonical(targets[0])            (immediate)
+//   - verify           → stamp last_verified_at/verified_by        (immediate)
+//   - suppress         → no target mutation (dismiss a false positive)
+//   - defer            → move item to deferred, no target mutation
 func (s *Service) ResolveInbox(id, action, note, resolvedBy string) error {
 	if action == "defer" {
 		return DeferInboxItem(s.db, id, note)
 	}
+
+	item, err := GetInboxItem(s.db, id)
+	if err != nil {
+		return err
+	}
+	if item.State != InboxPending {
+		return fmt.Errorf("steward: inbox item %s not found or already resolved", id)
+	}
+
+	if err := s.executeResolution(context.Background(), action, item, note, resolvedBy); err != nil {
+		return fmt.Errorf("steward: apply %q to inbox item %s: %w", action, id, err)
+	}
+
 	return ResolveInboxItem(s.db, id, action, note, resolvedBy)
+}
+
+// executeResolution applies an inbox resolution action to the item's target
+// memories. suppress is an intentional no-op (dismissing a false positive);
+// every other action mutates the store so the queue actually drains (T73).
+func (s *Service) executeResolution(ctx context.Context, action string, item *InboxItem, note, resolvedBy string) error {
+	reason := strings.TrimSpace(note)
+	if reason == "" {
+		reason = fmt.Sprintf("steward inbox resolve: %s", action)
+	}
+
+	switch action {
+	case "merge":
+		if len(item.TargetIDs) < 2 {
+			return fmt.Errorf("merge requires at least 2 target IDs, item has %d", len(item.TargetIDs))
+		}
+		_, err := s.store.MergeDuplicates(ctx, item.TargetIDs[0], item.TargetIDs[1:])
+		return err
+
+	case "mark_outdated":
+		if len(item.TargetIDs) == 0 {
+			return fmt.Errorf("mark_outdated requires a target ID")
+		}
+		_, err := s.store.MarkOutdated(ctx, item.TargetIDs[0], reason, "")
+		return err
+
+	case "mark_superseded":
+		if len(item.TargetIDs) == 0 {
+			return fmt.Errorf("mark_superseded requires a target ID")
+		}
+		supersededBy := ""
+		if len(item.TargetIDs) >= 2 {
+			supersededBy = item.TargetIDs[1]
+		}
+		_, err := s.store.MarkOutdated(ctx, item.TargetIDs[0], reason, supersededBy)
+		return err
+
+	case "promote":
+		if len(item.TargetIDs) == 0 {
+			return fmt.Errorf("promote requires a target ID")
+		}
+		_, err := s.store.PromoteToCanonical(ctx, item.TargetIDs[0], resolvedBy)
+		return err
+
+	case "verify":
+		if len(item.TargetIDs) == 0 {
+			return fmt.Errorf("verify requires a target ID")
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		return s.store.Update(ctx, item.TargetIDs[0], memory.Update{
+			Metadata: map[string]string{
+				memory.MetadataLastVerifiedAt: now,
+				memory.MetadataVerifiedBy:     resolvedBy,
+			},
+		})
+
+	case "suppress":
+		// Dismiss a false positive (spurious contradiction/duplicate). Marking
+		// the item resolved IS the whole action — no target mutation.
+		return nil
+
+	default:
+		return fmt.Errorf("unsupported resolution action: %q", action)
+	}
 }
 
 // DB exposes the database for use by tools that need direct inbox operations.

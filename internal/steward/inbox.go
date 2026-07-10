@@ -14,16 +14,16 @@ import (
 type InboxItemKind string
 
 const (
-	InboxDuplicateCandidate    InboxItemKind = "duplicate_candidate"
+	InboxDuplicateCandidate     InboxItemKind = "duplicate_candidate"
 	InboxContradictionCandidate InboxItemKind = "contradiction_candidate"
-	InboxStaleEntry            InboxItemKind = "stale_entry"
-	InboxOutdatedProcedural    InboxItemKind = "outdated_procedural"
-	InboxUnverifiedRunbook     InboxItemKind = "unverified_runbook"
-	InboxSourceMismatch        InboxItemKind = "source_mismatch"
-	InboxMissingSourceLink     InboxItemKind = "missing_source_link"
-	InboxSupersededCandidate   InboxItemKind = "superseded_candidate"
-	InboxPromotionCandidate    InboxItemKind = "promotion_candidate"
-	InboxDriftDetected         InboxItemKind = "drift_detected"
+	InboxStaleEntry             InboxItemKind = "stale_entry"
+	InboxOutdatedProcedural     InboxItemKind = "outdated_procedural"
+	InboxUnverifiedRunbook      InboxItemKind = "unverified_runbook"
+	InboxSourceMismatch         InboxItemKind = "source_mismatch"
+	InboxMissingSourceLink      InboxItemKind = "missing_source_link"
+	InboxSupersededCandidate    InboxItemKind = "superseded_candidate"
+	InboxPromotionCandidate     InboxItemKind = "promotion_candidate"
+	InboxDriftDetected          InboxItemKind = "drift_detected"
 )
 
 // InboxItemState tracks the lifecycle of an inbox item.
@@ -167,6 +167,22 @@ func ListInboxItems(db *sql.DB, q InboxQuery) ([]InboxItem, error) {
 		items = append(items, *item)
 	}
 	return items, rows.Err()
+}
+
+// GetInboxItem loads a single inbox item by ID.
+func GetInboxItem(db *sql.DB, id string) (*InboxItem, error) {
+	row := db.QueryRow(`
+		SELECT id, source_run_id, kind, state, title, evidence, confidence, urgency, recommended_action, target_ids, created_at, resolved_at, resolved_by, resolution, resolution_note
+		FROM steward_inbox WHERE id = ?
+	`, id)
+	item, err := scanInboxRow(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("steward: inbox item %s not found", id)
+		}
+		return nil, err
+	}
+	return item, nil
 }
 
 // ResolveInboxItem marks an inbox item as resolved.

@@ -235,7 +235,7 @@ func stewardToolDefs() []tool {
 		},
 		tool{
 			Name:        "steward_inbox_resolve",
-			Description: "Resolve a steward inbox item by applying an action: merge, mark_outdated, promote, verify, suppress, or defer",
+			Description: "Resolve a steward inbox item, executing the action against its target memories before marking it resolved. Actions: merge (merge duplicate target_ids into the first), mark_outdated / mark_superseded (mark first target outdated; superseded links to the second target), promote (promote first target to canonical), verify (stamp last_verified_at on first target), suppress (dismiss a false positive, no target change), defer (postpone, no target change). A failed action leaves the item pending.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
