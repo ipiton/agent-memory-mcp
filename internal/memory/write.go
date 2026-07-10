@@ -42,6 +42,14 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 		return err
 	}
 
+	// T75: read-after-write veto — confirm the row is durably queryable in the
+	// store before reporting success (and before populating the cache), so a
+	// silent write loss surfaces as an error instead of a false success. The
+	// cache is only trusted once the durable write is verified.
+	if err := verifyMemoryPersisted(ms.db, m.ID); err != nil {
+		return err
+	}
+
 	ms.mu.Lock()
 	ms.cacheSetLocked(toCachedMemory(m))
 	ms.mu.Unlock()

@@ -68,7 +68,7 @@ func insertMemoryRow(exec sqlExecutor, m *Memory) error {
 		return err
 	}
 
-	if _, err := exec.Exec(`
+	res, err := exec.Exec(`
 		INSERT INTO memories (id, content, type, title, tags, context, importance, metadata,
 		                      embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
 		                      valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer)
@@ -79,10 +79,35 @@ func insertMemoryRow(exec sqlExecutor, m *Memory) error {
 		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
 		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
 		sedimentLayerValue(m.SedimentLayer),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("failed to store memory: %w", err)
 	}
 
+	// T75: a plain INSERT writes exactly one row on success. A zero-row result
+	// (e.g. a future switch to INSERT OR IGNORE hitting a PK collision) means
+	// the write silently did not happen — surface it instead of a false success.
+	if n, affErr := res.RowsAffected(); affErr == nil && n != 1 {
+		return fmt.Errorf("store memory %s: expected 1 row written, got %d", m.ID, n)
+	}
+
+	return nil
+}
+
+// verifyMemoryPersisted confirms a just-written memory row is durably readable
+// by id (T75 read-after-write veto). Callers must treat a returned error as a
+// failed write, not a silent success — this is the inverse-verification guard
+// against the "write reported success but did not happen" class (path/connection
+// desync, driver anomaly, silent no-op).
+func verifyMemoryPersisted(db *sql.DB, id string) error {
+	var got string
+	err := db.QueryRow(`SELECT id FROM memories WHERE id = ?`, id).Scan(&got)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("write verification failed: memory %s not found after write", id)
+	}
+	if err != nil {
+		return fmt.Errorf("write verification failed for %s: %w", id, err)
+	}
 	return nil
 }
 
