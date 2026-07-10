@@ -590,6 +590,15 @@ func hasContradictionSignals(a, b *memory.Memory) bool {
 		return false
 	}
 
+	// T82: suppress three non-terminal false-positive classes that are kinship,
+	// time-series, or lifecycle relationships of the same subject — not
+	// contradictions. These dominated the residual contradiction FPs after T72.
+	if terminalVsProceduralKin(a, b) || // (a) terminal record vs its Pattern:/Lesson: extraction
+		periodicSameType(a, b) || // (b) successive Strategy review* snapshots
+		taskLifecyclePair(a, b) { // (c) Task started: ↔ Task complete: of one slug
+		return false
+	}
+
 	la := memory.LifecycleStatusOf(a)
 	lb := memory.LifecycleStatusOf(b)
 
@@ -628,6 +637,62 @@ func hasContradictionSignals(a, b *memory.Memory) bool {
 	}
 
 	return false
+}
+
+func titleHasPrefix(m *memory.Memory, prefix string) bool {
+	return m != nil && strings.HasPrefix(strings.TrimSpace(m.Title), prefix)
+}
+
+// sameContext reports whether two memories share the same non-empty context.
+func sameContext(a, b *memory.Memory) bool {
+	ca := strings.TrimSpace(a.Context)
+	return ca != "" && strings.EqualFold(ca, strings.TrimSpace(b.Context))
+}
+
+// terminalVsProceduralKin (T82 class a): a terminal record (Task complete /
+// Session close) paired with a Pattern:/Lesson: procedural extracted from the
+// same context is kinship — the pattern is derived from the task — not a
+// contradiction.
+func terminalVsProceduralKin(a, b *memory.Memory) bool {
+	if !sameContext(a, b) {
+		return false
+	}
+	procedural := func(m *memory.Memory) bool {
+		return titleHasPrefix(m, "Pattern:") || titleHasPrefix(m, "Lesson:")
+	}
+	return (memory.IsTerminalRecord(a) && procedural(b)) ||
+		(memory.IsTerminalRecord(b) && procedural(a))
+}
+
+// periodicSameType (T82 class b): two periodic snapshots of the same series
+// (e.g. successive "Strategy review" entries with different dates) are a time
+// series, not a contradiction.
+func periodicSameType(a, b *memory.Memory) bool {
+	const periodicPrefix = "Strategy review"
+	return titleHasPrefix(a, periodicPrefix) && titleHasPrefix(b, periodicPrefix)
+}
+
+// taskLifecyclePair (T82 class c): a "Task started: X" ↔ "Task complete: X" pair
+// for the same slug is a lifecycle progression, not a contradiction.
+func taskLifecyclePair(a, b *memory.Memory) bool {
+	startedA, completeA := titleHasPrefix(a, "Task started:"), titleHasPrefix(a, "Task complete:")
+	startedB, completeB := titleHasPrefix(b, "Task started:"), titleHasPrefix(b, "Task complete:")
+	if !((startedA && completeB) || (completeA && startedB)) {
+		return false
+	}
+	// Same slug: identical task subject after the prefix, or same context.
+	return sameContext(a, b) || (taskSubject(a) != "" && taskSubject(a) == taskSubject(b))
+}
+
+// taskSubject returns the text after a "Task started:" / "Task complete:" prefix.
+func taskSubject(m *memory.Memory) string {
+	t := strings.TrimSpace(m.Title)
+	for _, p := range []string{"Task started:", "Task complete:"} {
+		if strings.HasPrefix(t, p) {
+			return strings.TrimSpace(strings.TrimPrefix(t, p))
+		}
+	}
+	return ""
 }
 
 // lifecycleInvalidationConflict reports whether two lifecycle statuses on the
