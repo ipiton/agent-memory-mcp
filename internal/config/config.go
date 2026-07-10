@@ -35,6 +35,13 @@ type Config struct {
 	DataPath         string // Base path for all data (default: {RootPath}/data)
 	LogPath          string // Path to diagnostic log file (default: {RootPath}/logs/mcp-diagnostics.log)
 
+	// ToolGrouping opts into the grouped MCP tool surface (T67). When true,
+	// tools/list collapses the core agent toolset into a few "meta-tools" that
+	// dispatch by a required `action` discriminator, cutting the schema payload
+	// a client loads at initialize time. tools/call always accepts both legacy
+	// names and the grouped form regardless of this flag. Env: MCP_TOOL_GROUPING.
+	ToolGrouping bool
+
 	Stats           StatsConfig
 	Memory          MemoryConfig
 	RAG             RAGConfig
@@ -271,6 +278,7 @@ type envValues struct {
 	sedimentEnabled                  bool
 	sedimentScheduleInterval         string
 	recallHalfLifeDays               float64
+	toolGrouping                     bool
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -360,6 +368,7 @@ func readEnvValues() (envValues, error) {
 		sedimentEnabled:                  s.Bool("MCP_SEDIMENT_ENABLED", false),
 		sedimentScheduleInterval:         EnvOrDefault("MCP_SEDIMENT_SCHEDULE_INTERVAL", "0"),
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
+		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
 	}
 	if err := s.err(); err != nil {
 		return envValues{}, err
@@ -436,6 +445,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		OutputMode:       normalizeOutputMode(ev.outputMode),
 		DataPath:         dataPath,
 		LogPath:          logPath,
+		ToolGrouping:     ev.toolGrouping,
 
 		Stats: StatsConfig{
 			Enabled:    ev.statsEnabled,

@@ -130,17 +130,29 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 		return nil, rErr
 	}
 
-	handler, ok := s.toolHandlers[req.Name]
+	// T67: a grouped meta-tool call (e.g. memory + action=store) resolves to its
+	// legacy tool name; legacy names pass through unchanged. This is independent
+	// of config.ToolGrouping so both call forms always work.
+	name := req.Name
+	if legacy, gErr, matched := resolveGroupedToolCall(req.Name, req.Arguments); matched {
+		if gErr != nil {
+			s.logToolEvent(req.Name, req.Arguments, start, gErr)
+			return nil, gErr
+		}
+		name = legacy
+	}
+
+	handler, ok := s.toolHandlers[name]
 	if !ok {
-		rErr := &rpcError{Code: rpcErrMethodNotFound, Message: fmt.Sprintf("unknown tool: %s", req.Name)}
-		s.logToolEvent(req.Name, req.Arguments, start, rErr)
+		rErr := &rpcError{Code: rpcErrMethodNotFound, Message: fmt.Sprintf("unknown tool: %s", name)}
+		s.logToolEvent(name, req.Arguments, start, rErr)
 		return nil, rErr
 	}
 
 	result, rErr := handler(req.Arguments)
-	s.logToolEvent(req.Name, req.Arguments, start, rErr)
+	s.logToolEvent(name, req.Arguments, start, rErr)
 	if s.sessionTracker != nil {
-		s.sessionTracker.HandleToolCall(req.Name, req.Arguments, rErr)
+		s.sessionTracker.HandleToolCall(name, req.Arguments, rErr)
 	}
 	return result, rErr
 }

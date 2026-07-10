@@ -86,6 +86,7 @@ func h13GoldenEnv(t *testing.T) {
 		"MCP_SEDIMENT_ENABLED":                    "true",
 		"MCP_SEDIMENT_SCHEDULE_INTERVAL":          "20m",
 		"MCP_RECALL_HALFLIFE_DAYS":                "15",
+		"MCP_TOOL_GROUPING":                       "true",
 	}
 	for k, v := range set {
 		t.Setenv(k, v)
@@ -110,6 +111,7 @@ func serializeConfigForGolden(c Config) string {
 	p("OutputMode", c.OutputMode)
 	p("DataPath", c.DataPath)
 	p("LogPath", c.LogPath)
+	p("ToolGrouping", c.ToolGrouping)
 	p("Stats.Enabled", c.Stats.Enabled)
 	p("Stats.Path", c.Stats.Path)
 	p("Stats.SampleRate", c.Stats.SampleRate)

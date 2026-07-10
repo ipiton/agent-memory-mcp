@@ -789,6 +789,43 @@ For shared HTTP mode:
 | `recall_as_of` | Retrieve knowledge that was valid at a specific point in time, filtering by temporal validity |
 | `knowledge_timeline` | Show the chronological evolution of knowledge on a topic — how entries were created, superseded, and replaced over time |
 
+### Tool grouping mode (token efficiency)
+
+Every MCP client loads the full JSON schema of every tool at `initialize` time —
+before your first message. With ~40 tools that schema payload alone can occupy
+tens of KB of the model's context window on every session. Two secondary costs
+compound it: LLMs get measurably worse at picking the right tool as the count
+climbs past ~20–40, and frequent session reloads re-pay the whole cost.
+
+Set `MCP_TOOL_GROUPING=true` to collapse the core toolset into a handful of
+**grouped meta-tools**, each dispatching by a required `action` discriminator:
+
+```jsonc
+// Grouped form                          // Equivalent legacy form
+{ "name": "memory",                      { "name": "store_memory",
+  "arguments": {                           "arguments": { "content": "…" } }
+    "action": "store", "content": "…" } }
+```
+
+Groups: `repo` · `memory` · `memory_admin` · `engineering` · `search` ·
+`session`, plus the `index_documents` and `project_bank_view` singletons — the
+default surface drops from **41 tools to 8** (~42% smaller schema payload).
+
+- **Opt-in, zero regression.** Default is `false`; the flag only changes what
+  `tools/list` returns.
+- **Both call forms always work.** `tools/call` accepts the grouped form
+  (`memory` + `action=store`) *and* the legacy name (`store_memory`) regardless
+  of the flag, so existing scripts never break.
+- **Administrative & steward tools stay individual.** Rarely listed in
+  high-volume agent runs, and `steward_inbox_resolve` already uses its own
+  `action` argument — grouping deliberately leaves them ungrouped.
+
+Trade-off: each grouped call carries a slightly larger per-call schema (the union
+of its actions' arguments). Prefer grouping for **high-volume agent runs** where
+discovery cost dominates; leave it off for **interactive debugging** where seeing
+each tool by name is clearer. Policy reference: [`docs/concepts/lifecycle.md`](docs/concepts/lifecycle.md)
+covers the related archive-sweep surface.
+
 ## Configuration
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full list.
@@ -822,6 +859,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_MAX_SEARCH_RESULTS` | `200` | Hard cap for `repo_search` result count |
 | `MCP_MAX_DEPTH` | `3` | Max directory recursion depth for `repo_list` |
 | `MCP_STDIO_MODE` | `line` | Stdio framing: `line` (newline-delimited) or `lsp` (Content-Length headers) |
+| `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (~42% smaller, 41→8 tools). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. See [Tool grouping mode](#tool-grouping-mode-token-efficiency) |
 | `MCP_MEMORY_ENABLED` | `true` | Enable memory tools |
 | `MCP_MEMORY_PREVIEW_RUNES` | `0` | Override the per-surface truncation cap (rune-based) for memory content/summary fields in MCP tool responses (`recall_memory`, `list_memories`, `search_runbooks`, …). `0` keeps the built-in caps (150/220/300); a positive value forces that single cap on all surfaces; a negative value disables truncation (full text). |
 | `MCP_RAG_ENABLED` | `true` | Enable RAG/search tools (Homebrew service preset overrides this to `false` until you set `MCP_ROOT`) |

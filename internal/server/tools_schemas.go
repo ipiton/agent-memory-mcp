@@ -112,8 +112,21 @@ func mainToolDefs() []tool {
 
 // handleToolsList returns the MCP tool list, filtered to the subsystems that
 // are actually available (RAG engine / memory store / steward service). Tool
-// definitions live in per-category *ToolDefs builders (Round 3 H16).
+// definitions live in per-category *ToolDefs builders (Round 3 H16). When
+// config.ToolGrouping is set, the core toolset is collapsed into grouped
+// meta-tools (T67) after availability filtering.
 func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
+	tools := s.availableToolDefs()
+	if s.config.ToolGrouping {
+		tools = buildGroupedList(tools)
+	}
+	return map[string]any{"tools": tools}, nil
+}
+
+// availableToolDefs returns the flat tool list filtered to the subsystems that
+// are actually available. Shared by the flat and grouped tools/list paths so
+// grouping never advertises an action whose backing tool is absent.
+func (s *MCPServer) availableToolDefs() []tool {
 	tools := mainToolDefs()
 	if s.stewardService != nil {
 		tools = append(tools, stewardToolDefs()...)
@@ -133,7 +146,7 @@ func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
 		}
 		filtered = append(filtered, t)
 	}
-	return map[string]any{"tools": filtered}, nil
+	return filtered
 }
 
 func repoToolDefs() []tool {
