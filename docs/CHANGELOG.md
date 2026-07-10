@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-07-10
+
+Security, zero-ops, and architecture release. Canonical promotion is now guarded
+against memory poisoning, every write is verified to have landed, and archived
+tasks consolidate themselves with no configuration or manual runs. The MCP tool
+surface can optionally collapse into grouped meta-tools to cut discovery token
+cost, and the Round 3 review split the largest god-files/god-structs into
+focused units with no behavior change.
+
+**Upgrade note:** task-memory consolidation now runs automatically by default
+(see the Changed section). To keep the previous behavior set
+`MCP_ARCHIVE_SWEEP_ENABLED=false`.
+
+### Added
+
+- **Zero-ops task-memory consolidation (T63)** — closing a task used to leave its working memories (`Task started`, per-phase notes, `Session close`, auto-extracted review items) lingering forever, growing linearly and surfacing in recall for done tasks. A background loop (on by default, `MCP_ARCHIVE_SWEEP_INTERVAL`, default 1h) now sweeps archived tasks: durable entries (procedural, or importance ≥ 0.70) are promoted to canonical, the rest are marked outdated. It runs a first pass shortly after startup that also backfills any pre-existing archive. Zero configuration: with `MCP_TASK_ARCHIVE_ROOTS` unset it watches the `<MCP_ROOT>/tasks/archive` convention, and a missing directory is a silent no-op. A periodic ticker is used rather than an `fsnotify` watch so it needs no extra dependency, survives restarts, and cannot miss an archive move that happened while the service was down. Disable with `MCP_ARCHIVE_SWEEP_ENABLED=false`.
+- **Opt-in MCP tool grouping (T67)** — every MCP client loads the full JSON schema of every tool at `initialize`, so ~40 tools occupy tens of KB of context before the first message. Set `MCP_TOOL_GROUPING=true` to collapse the core toolset into grouped meta-tools (`repo`/`memory`/`memory_admin`/`engineering`/`search`/`session`) that dispatch by a required `action` discriminator, dropping the default surface from 41 tools to 8 (~42% smaller schema payload). It is purely a discovery-surface transform: `tools/call` always accepts both the grouped form (`memory` + `action=store`) and the legacy name (`store_memory`) regardless of the flag, so existing clients never break. Administrative and steward tools stay individual.
+- **Read-after-write verification on the store path (T75)** — a silent write failure (a driver that reports success but persists nothing) would lose a memory without any signal, mirroring the scheduled-cross-agent-injection blind spot. Every writer funnels through `Store.Store`, which now checks `RowsAffected()==1` on insert and reads the row back by id before trusting its cache; a missing row is a hard error, not a silent success. Cost is one indexed primary-key select per write.
+- **Memory-poisoning defense: provenance + promotion gate (T77)** — `PromoteToCanonical` used to canonicalize any record unconditionally, making the auto-promote pipelines (steward auto-run, archive sweep) an attack vector: a planted conversational record could become fully-trusted canonical knowledge. Promotion now carries provenance (`conversational` / `verified` / `external`, defaulting to conversational) and enforces a gate — an automated caller cannot canonicalize a conversational-origin record (`ErrPromotionRequiresVerification`); only a human/verified path or an already-trusted provenance passes. The archive sweep routes gated records to the review queue instead of hard-failing, so trusted-provenance promotions still proceed.
+- **Bulk-cleanup API gaps closed (T81)** — `resolve_review_queue` gains `created_before` and `kind` filters (a large legacy backlog previously required a raw SQL workaround), a cross-run reconcile auto-resolves inbox items whose targets have all been deleted, and `merge_duplicates` is now idempotent and skips already-missing duplicate ids instead of erroring.
+
+### Changed
+
+- **Consolidation now runs by default (T63)** — the `end_task` and `sweep_archive` tools default `auto_promote=true` (previously `false`), and the background sweep is on by default. The T77 provenance gate keeps this safe: conversational-origin memories are routed to review, never auto-canonicalized. This is a behavior change on upgrade — opt out with `MCP_ARCHIVE_SWEEP_ENABLED=false` and/or an explicit `auto_promote=false`.
+- **`steward_inbox_resolve` applies the resolution (T73)** — resolving an inbox item used to only mark it resolved without performing the chosen action (merge/mark_outdated/promote/…). It now executes the action and then records the resolution.
+- **Content-free session-hook payloads dropped (T80)** — the SessionEnd / checkpoint hook paths could persist empty "stub" records that carried metadata but no usable content, cluttering the store. Such payloads are now discarded at the shared `hooks.Check` layer (both CLI and server callers).
+- **Contradiction detector suppresses more false-positive classes (T82)** — beyond the T72 terminal-pair guard, `hasContradictionSignals` now also suppresses non-terminal kinship (`Pattern:`/`Lesson:` vs a terminal record in the same context), sequential periodic reviews (`Strategy review …`), and task-lifecycle pairs (`Task started:` ↔ `Task complete:` for the same subject).
+- **Round 3 architecture split (T57, T58)** — internal refactor with no behavior change: the config god-struct was split into 12 focused sub-structs, `MCPServer.New` decomposed into `bootstrap.go` init helpers, `tools_registry.go` split into per-category schema/dispatch/args files, and the vectorstore/rag/sessionclose god-files broken up. Testability hardening added time injection and narrow store interfaces. A resolved-config golden and a tool-list count guard pin the equivalence.
+
+### Documentation
+
+- **Lifecycle consolidation policy (T62)** — new `docs/concepts/lifecycle.md` documents lifecycle-state derivation, the archive-sweep `decide` policy (working/procedural, 0.70 promotion threshold, type/importance split), the provenance gate on the auto path, idempotency/symlink/traversal guards, and the zero-ops trigger cadence.
+
 ## [0.8.9] - 2026-07-01
 
 Steward hygiene release. On an un-maintained store the maintenance steward now
