@@ -287,6 +287,8 @@ func runAutoCapture(args []string) error {
 			fmt.Printf("Auto-capture skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
 		case hooks.ReasonEmpty:
 			fmt.Println("Auto-capture skipped: content too short")
+		case hooks.ReasonHookNoise:
+			fmt.Println("Auto-capture skipped: no session content (hook metadata only)")
 		default:
 			fmt.Println("Auto-capture skipped")
 		}

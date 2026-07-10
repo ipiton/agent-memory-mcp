@@ -12,6 +12,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 	"unicode"
@@ -31,7 +32,51 @@ const (
 	// cfg.MinContentChars after whitespace trimming, or was entirely
 	// whitespace (which is always skipped regardless of MinContentChars).
 	ReasonEmpty = "empty"
+	// ReasonHookNoise indicates the candidate summary was a raw session-hook
+	// JSON payload with no actual content — only metadata fields like
+	// session_id / hook_event_name / reason (T80). SessionEnd firing on /clear
+	// or a background session with an empty transcript produces these; they were
+	// the single largest source of no-content episodic stubs.
+	ReasonHookNoise = "hook_noise"
 )
+
+// hookMetadataKeys are the fields present in a raw Claude Code session-hook
+// JSON payload. A summary whose keys are entirely within this set carries no
+// session content (T80).
+var hookMetadataKeys = map[string]struct{}{
+	"session_id":      {},
+	"transcript_path": {},
+	"cwd":             {},
+	"prompt_id":       {},
+	"hook_event_name": {},
+	"reason":          {},
+	"source":          {},
+	"trigger":         {},
+}
+
+// isHookMetadataOnly reports whether summary is a raw session-hook JSON payload
+// with no actual session content — a JSON object whose keys are all known
+// hook-metadata fields (T80). A real prose summary, or any JSON carrying a
+// content field, does not match.
+func isHookMetadataOnly(summary string) bool {
+	s := strings.TrimSpace(summary)
+	if len(s) < 2 || s[0] != '{' {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &obj); err != nil {
+		return false
+	}
+	if len(obj) == 0 {
+		return false
+	}
+	for k := range obj {
+		if _, ok := hookMetadataKeys[strings.ToLower(k)]; !ok {
+			return false
+		}
+	}
+	return true
+}
 
 // DedupResult describes the decision made by Check.
 type DedupResult struct {
@@ -98,6 +143,13 @@ func Check(ctx context.Context, store *memory.Store, summary memory.SessionSumma
 	}
 	if cfg.MinContentChars > 0 && len(trimmed) < cfg.MinContentChars {
 		return DedupResult{Skip: true, Reason: ReasonEmpty}, nil
+	}
+	// T80: a raw session-hook JSON payload (session_id/hook_event_name/reason,
+	// no real content) passes the length check but must not be persisted — it
+	// would create a no-content episodic stub. Applies regardless of the
+	// similarity gate below.
+	if isHookMetadataOnly(trimmed) {
+		return DedupResult{Skip: true, Reason: ReasonHookNoise}, nil
 	}
 
 	if cfg.Threshold <= 0 {
