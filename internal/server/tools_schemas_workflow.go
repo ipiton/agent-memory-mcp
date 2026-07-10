@@ -154,6 +154,14 @@ func workflowToolDefs() []tool {
 						"type":        "string",
 						"description": "Optional owner or reviewer that handled these items",
 					},
+					"created_before": map[string]any{
+						"type":        "string",
+						"description": "Only select items created before this RFC3339 timestamp (bulk cleanup of an aged backlog). Ignored when explicit ids are given.",
+					},
+					"kind": map[string]any{
+						"type":        "string",
+						"description": "Only select items with this record kind. Ignored when explicit ids are given.",
+					},
 					"context": map[string]any{
 						"type":        "string",
 						"description": "Filter by project or task context",

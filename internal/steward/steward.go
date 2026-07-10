@@ -18,6 +18,7 @@ import (
 // SQLite store. *memory.Store satisfies this interface natively.
 type storeAPI interface {
 	DB() *sql.DB
+	Get(id string) (*memory.Memory, error)
 	ListLightweight(filters memory.Filters) []*memory.Memory
 	Update(ctx context.Context, id string, update memory.Update) error
 	Delete(ctx context.Context, id string) error
@@ -117,6 +118,17 @@ func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
 		zap.String("context", params.Context),
 		zap.String("service", params.Service),
 	)
+
+	// Phase 0 (T81): reconcile the inbox before scanning — pending items whose
+	// targets are all gone (deleted, merged, or superseded) are obsolete and
+	// would otherwise linger forever. Skipped in dry-run (it mutates state).
+	if !params.DryRun {
+		if n, err := s.reconcileInbox(); err != nil {
+			s.logger.Warn("steward reconcile pass failed", zap.Error(err))
+		} else if n > 0 {
+			s.logger.Info("steward reconcile: resolved obsolete inbox items", zap.Int("count", n))
+		}
+	}
 
 	// Phase 1: Scan
 	scanResult := RunScanners(ctx, s.store, s.policy, scope, params.Context, params.Service)
@@ -274,6 +286,58 @@ func (s *Service) applyAction(ctx context.Context, a *Action, runID string) erro
 
 	default:
 		return fmt.Errorf("unsupported action kind: %s", a.Kind)
+	}
+}
+
+// reconcileInbox auto-resolves pending inbox items whose targets are all gone
+// (T81). A duplicate/contradiction/promotion item becomes obsolete once its
+// target memories have been deleted, merged, or superseded — without this pass
+// such items linger pending forever (183 orphans observed in one cleanup). Items
+// with no target_ids are left untouched (nothing to reconcile against). Returns
+// the number of items resolved.
+func (s *Service) reconcileInbox() (int, error) {
+	items, err := ListInboxItems(s.db, InboxQuery{Status: string(InboxPending), Limit: 100000})
+	if err != nil {
+		return 0, err
+	}
+
+	reconciled := 0
+	for i := range items {
+		item := &items[i]
+		if len(item.TargetIDs) == 0 {
+			continue
+		}
+		allGone := true
+		for _, tid := range item.TargetIDs {
+			if !s.targetGone(tid) {
+				allGone = false
+				break
+			}
+		}
+		if !allGone {
+			continue
+		}
+		if err := ResolveInboxItem(s.db, item.ID, "obsolete", "steward reconcile: all targets deleted/merged/superseded", "steward-reconcile"); err != nil {
+			s.logger.Warn("steward reconcile: resolve obsolete failed", zap.String("id", item.ID), zap.Error(err))
+			continue
+		}
+		reconciled++
+	}
+	return reconciled, nil
+}
+
+// targetGone reports whether a memory target no longer warrants review: it was
+// deleted (not found) or its lifecycle is superseded/outdated (merged/archived).
+func (s *Service) targetGone(id string) bool {
+	mem, err := s.store.Get(strings.TrimSpace(id))
+	if err != nil || mem == nil {
+		return true
+	}
+	switch memory.LifecycleStatusOf(mem) {
+	case memory.LifecycleSuperseded, memory.LifecycleOutdated:
+		return true
+	default:
+		return false
 	}
 }
 

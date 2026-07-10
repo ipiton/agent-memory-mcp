@@ -104,6 +104,12 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 	dryRun, _ := getBool(args, "dry_run")
 	limit := boundedLimit(args, 20, 100)
 
+	createdBefore, tErr := parseOptionalRFC3339(args, "created_before")
+	if tErr != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: tErr.Error()}
+	}
+	kind := strings.TrimSpace(mustString(args, "kind"))
+
 	ids, err := resolveReviewQueueTargetIDs(s.memoryStore, getStringSlice(args, "ids"), memory.ProjectBankOptions{
 		Filters: memory.Filters{
 			Context: strings.TrimSpace(mustString(args, "context")),
@@ -111,7 +117,7 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 		Service: strings.TrimSpace(mustString(args, "service")),
 		Tags:    userio.NormalizeTags(getStringSlice(args, "tags")),
 		Limit:   limit,
-	})
+	}, createdBefore, kind)
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to select review queue items", Data: err.Error()}
 	}
@@ -625,7 +631,11 @@ func getStringMap(args map[string]any, key string) map[string]string {
 	}
 }
 
-func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memory.ProjectBankOptions) ([]string, error) {
+// resolveReviewQueueTargetIDs resolves the review-queue items to act on. Explicit
+// ids win. Otherwise it selects from the review-queue view, optionally narrowing
+// by record kind and by creation date (T81: `created_before` lets bulk cleanup
+// of a monthly backlog run through the tool instead of hand-writing SQL).
+func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memory.ProjectBankOptions, createdBefore time.Time, kind string) ([]string, error) {
 	normalizedIDs := normalizeIDs(ids)
 	if len(normalizedIDs) > 0 {
 		return normalizedIDs, nil
@@ -636,11 +646,23 @@ func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memo
 		return nil, err
 	}
 
+	kind = strings.TrimSpace(kind)
 	targets := make([]string, 0)
 	for _, section := range view.Sections {
 		for _, item := range section.Items {
 			if item == nil || strings.TrimSpace(item.ID) == "" {
 				continue
+			}
+			if kind != "" && !strings.EqualFold(strings.TrimSpace(item.RecordKind), kind) {
+				continue
+			}
+			if !createdBefore.IsZero() {
+				// The view item's UpdatedAt is not a reliable creation time, so
+				// read the memory's actual CreatedAt (cheap: served from cache).
+				mem, err := store.Get(item.ID)
+				if err != nil || !mem.CreatedAt.Before(createdBefore) {
+					continue
+				}
 			}
 			targets = append(targets, item.ID)
 		}

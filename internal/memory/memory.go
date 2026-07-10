@@ -151,8 +151,8 @@ type Store struct {
 	db       *sql.DB
 	logger   *zap.Logger
 	embedder embedder.Service
-	writeMu  sync.Mutex   // serializes write operations (Store, Update, Delete, Merge, Promote)
-	mu       sync.RWMutex // protects in-memory cache (memories, contextIndex)
+	writeMu  sync.Mutex    // serializes write operations (Store, Update, Delete, Merge, Promote)
+	mu       sync.RWMutex  // protects in-memory cache (memories, contextIndex)
 	accessCh chan []string // batched access stats updates
 	accessWG sync.WaitGroup
 	// In-memory cache for fast search (minimal fields)
@@ -563,6 +563,9 @@ type MergeDuplicatesResult struct {
 	DuplicateIDs         []string `json:"duplicate_ids"`
 	ArchivedDuplicateIDs []string `json:"archived_duplicate_ids"`
 	MergedFromCount      int      `json:"merged_from_count"`
+	// SkippedDuplicateIDs lists duplicate ids that were missing/already-archived
+	// and skipped instead of failing the batch (T81 idempotent merge).
+	SkippedDuplicateIDs []string `json:"skipped_duplicate_ids,omitempty"`
 }
 
 type MarkOutdatedResult struct {
@@ -725,8 +728,8 @@ func backfillSedimentLayer(db *sql.DB) error {
 		return err
 	}
 	type backfillRow struct {
-		id      string
-		layer   SedimentLayer
+		id    string
+		layer SedimentLayer
 	}
 	var pending []backfillRow
 	for rows.Next() {

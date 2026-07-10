@@ -335,6 +335,7 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	seen := map[string]struct{}{primaryID: {}}
 	duplicates := make([]*Memory, 0, len(duplicateIDs))
 	normalizedDuplicateIDs := make([]string, 0, len(duplicateIDs))
+	skippedDuplicateIDs := make([]string, 0)
 	for _, duplicateID := range duplicateIDs {
 		duplicateID = strings.TrimSpace(duplicateID)
 		if duplicateID == "" {
@@ -346,12 +347,24 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 		seen[duplicateID] = struct{}{}
 		duplicate, err := ms.Get(duplicateID)
 		if err != nil {
-			return nil, err
+			// T81: a missing/already-archived duplicate id must not fail the
+			// whole batch — skip it (reported in the result) so bulk merges are
+			// idempotent and a single stale id doesn't abort the rest.
+			skippedDuplicateIDs = append(skippedDuplicateIDs, duplicateID)
+			continue
 		}
 		duplicates = append(duplicates, duplicate)
 		normalizedDuplicateIDs = append(normalizedDuplicateIDs, duplicateID)
 	}
 	if len(duplicates) == 0 {
+		if len(skippedDuplicateIDs) > 0 {
+			// Every requested duplicate was already gone — a no-op re-run, not an
+			// error. Return success with the skipped ids so callers can see it.
+			return &MergeDuplicatesResult{
+				PrimaryID:           primaryID,
+				SkippedDuplicateIDs: skippedDuplicateIDs,
+			}, nil
+		}
 		return nil, &ErrValidation{Message: "at least one duplicate memory id is required"}
 	}
 
@@ -454,6 +467,7 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 		DuplicateIDs:         normalizedDuplicateIDs,
 		ArchivedDuplicateIDs: archivedDuplicateIDs,
 		MergedFromCount:      len(normalizedDuplicateIDs),
+		SkippedDuplicateIDs:  skippedDuplicateIDs,
 	}, nil
 }
 
