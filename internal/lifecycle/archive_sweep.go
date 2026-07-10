@@ -65,7 +65,7 @@ type storeAPI interface {
 	List(ctx context.Context, filters memory.Filters, limit int) ([]*memory.Memory, error)
 	Store(ctx context.Context, m *memory.Memory) error
 	MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error)
-	PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error)
+	PromoteToCanonical(ctx context.Context, id string, owner string, verified bool) (*memory.PromoteToCanonicalResult, error)
 }
 
 // AutoPromoteOwner is the owner string written to memories that the sweep
@@ -420,7 +420,23 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 				break
 			}
 			if cfg.AutoPromote {
-				if _, err := sw.store.PromoteToCanonical(ctx, m.ID, AutoPromoteOwner); err != nil {
+				_, err := sw.store.PromoteToCanonical(ctx, m.ID, AutoPromoteOwner, false)
+				if errors.Is(err, memory.ErrPromotionRequiresVerification) {
+					// T77: a conversational-origin record must not be
+					// auto-canonicalized (memory-poisoning defense). Route it to
+					// human review instead of promoting or hard-erroring.
+					if cerr := sw.createPromotionCandidate(ctx, m, slug, existingReviews); cerr != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, cerr))
+						sw.logger.Warn("archive-sweep: create review-queue item failed",
+							zap.String("id", m.ID), zap.String("slug", slug), zap.Error(cerr))
+						break
+					}
+					existingReviews[m.ID] = struct{}{}
+					stats.PromotionCandidates++
+					result.TotalPromotionCand++
+					break
+				}
+				if err != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s: promote to canonical: %v", m.ID, err))
 					sw.logger.Warn("archive-sweep: promote to canonical failed",
 						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))

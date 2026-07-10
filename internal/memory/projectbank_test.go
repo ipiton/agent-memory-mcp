@@ -34,7 +34,7 @@ func TestProjectBankViewBuildsOverviewSections(t *testing.T) {
 	if err := store.Store(context.Background(), decision); err != nil {
 		t.Fatalf("Store decision: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(context.Background(), decision.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), decision.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -164,7 +164,7 @@ func TestProjectBankViewFiltersByOwnerStatusAndService(t *testing.T) {
 	if err := store.Store(context.Background(), canonicalDecision); err != nil {
 		t.Fatalf("Store canonical decision: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 

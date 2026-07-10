@@ -448,14 +448,18 @@ func TestSweep_ProceduralIsCandidate(t *testing.T) {
 }
 
 // TestSweep_AutoPromote_PromotesInsteadOfReviewItem (T62) verifies that when
-// cfg.AutoPromote=true, high-importance memories are promoted to canonical
-// in-place instead of producing a review-queue item. Inbox does not grow;
-// the source memory itself is updated to canonical knowledge_layer.
+// cfg.AutoPromote=true, a high-importance memory with TRUSTED provenance is
+// promoted to canonical in-place instead of producing a review-queue item.
+// Inbox does not grow; the source memory itself is updated to canonical
+// knowledge_layer. Post-T77 the memory must carry trusted provenance
+// (verified/external) — conversational-origin records are gated to review
+// (see TestSweep_AutoPromote_ConversationalGatedToReview).
 func TestSweep_AutoPromote_PromotesInsteadOfReviewItem(t *testing.T) {
 	store := newTestStore(t)
 	root := seedTempArchive(t, "task-autopromo")
 
-	target := seedWorkingMemory(t, store, "task-autopromo", "high-value", 0.85, nil, nil)
+	target := seedWorkingMemory(t, store, "task-autopromo", "high-value", 0.85, nil,
+		map[string]string{memory.MetadataProvenance: memory.ProvenanceVerified})
 
 	sw := NewSweeper(store)
 	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{
@@ -484,6 +488,43 @@ func TestSweep_AutoPromote_PromotesInsteadOfReviewItem(t *testing.T) {
 	}
 	if updated.Metadata["canonical"] != "true" {
 		t.Fatalf("expected canonical=true metadata, got %q", updated.Metadata["canonical"])
+	}
+}
+
+// TestSweep_AutoPromote_ConversationalGatedToReview pins the T77 memory-poisoning
+// defense: with AutoPromote on, a conversational-origin record (no trusted
+// provenance) is NOT auto-canonicalized — it is routed to the review queue for a
+// human decision instead. Prevents a planted record from being silently promoted
+// to the highest-trust layer by the automated pipeline.
+func TestSweep_AutoPromote_ConversationalGatedToReview(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-autopromo-gated")
+
+	target := seedWorkingMemory(t, store, "task-autopromo-gated", "planted", 0.85, nil, nil)
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{
+		Roots:       []string{root},
+		AutoPromote: true,
+	})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+	if result.TotalPromoted != 0 {
+		t.Fatalf("conversational record must NOT be auto-promoted, got %d promoted", result.TotalPromoted)
+	}
+	if result.TotalPromotionCand != 1 {
+		t.Fatalf("expected 1 promotion candidate (gated to review), got %d", result.TotalPromotionCand)
+	}
+	if n := countReviewQueueItemsForTarget(t, store, target.ID); n != 1 {
+		t.Fatalf("expected 1 review-queue item for gated target %s, got %d", target.ID, n)
+	}
+	updated, err := store.Get(target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Metadata["knowledge_layer"] == "canonical" {
+		t.Fatal("conversational record must not have been canonicalized")
 	}
 }
 
@@ -538,11 +579,11 @@ func (f *failingStore) MarkOutdated(ctx context.Context, id string, reason strin
 	return f.inner.MarkOutdated(ctx, id, reason, supersededBy)
 }
 
-func (f *failingStore) PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error) {
+func (f *failingStore) PromoteToCanonical(ctx context.Context, id string, owner string, verified bool) (*memory.PromoteToCanonicalResult, error) {
 	if err, ok := f.failIDs[id]; ok {
 		return nil, err
 	}
-	return f.inner.PromoteToCanonical(ctx, id, owner)
+	return f.inner.PromoteToCanonical(ctx, id, owner, verified)
 }
 
 // TestSweep_PartialFailure_ReportedInResult injects a failing MarkOutdated for

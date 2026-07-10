@@ -23,7 +23,7 @@ type storeAPI interface {
 	Delete(ctx context.Context, id string) error
 	MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*memory.MarkOutdatedResult, error)
 	MergeDuplicates(ctx context.Context, primaryID string, duplicateIDs []string) (*memory.MergeDuplicatesResult, error)
-	PromoteToCanonical(ctx context.Context, id string, owner string) (*memory.PromoteToCanonicalResult, error)
+	PromoteToCanonical(ctx context.Context, id string, owner string, verified bool) (*memory.PromoteToCanonicalResult, error)
 }
 
 // Service is the main stewardship orchestrator. It manages policy, runs scans,
@@ -263,7 +263,7 @@ func (s *Service) applyAction(ctx context.Context, a *Action, runID string) erro
 		if len(a.TargetIDs) == 0 {
 			return fmt.Errorf("no target IDs")
 		}
-		_, err := s.store.PromoteToCanonical(ctx, a.TargetIDs[0], "steward")
+		_, err := s.store.PromoteToCanonical(ctx, a.TargetIDs[0], "steward", false)
 		return err
 
 	case ActionDeleteExpiredWorking:
@@ -393,7 +393,7 @@ func (s *Service) executeResolution(ctx context.Context, action string, item *In
 		if len(item.TargetIDs) == 0 {
 			return fmt.Errorf("promote requires a target ID")
 		}
-		_, err := s.store.PromoteToCanonical(ctx, item.TargetIDs[0], resolvedBy)
+		_, err := s.store.PromoteToCanonical(ctx, item.TargetIDs[0], resolvedBy, true)
 		return err
 
 	case "verify":

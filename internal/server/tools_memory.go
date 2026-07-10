@@ -442,7 +442,7 @@ func (s *MCPServer) callPromoteToCanonical(args map[string]any) (any, *rpcError)
 	}
 	owner, _ := getString(args, "owner")
 
-	result, err := s.memoryStore.PromoteToCanonical(context.Background(), id, owner)
+	result, err := s.memoryStore.PromoteToCanonical(context.Background(), id, owner, true)
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to promote memory to canonical", Data: err.Error()}
 	}

@@ -799,7 +799,7 @@ func TestPromoteToCanonicalBoostsTrustRanking(t *testing.T) {
 	if err := store.Store(context.Background(), raw); err != nil {
 		t.Fatalf("Store raw: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -854,7 +854,7 @@ func TestListAndRecallCanonicalKnowledge(t *testing.T) {
 	if err := store.Store(context.Background(), raw); err != nil {
 		t.Fatalf("Store raw: %v", err)
 	}
-	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform"); err != nil {
+	if _, err := store.PromoteToCanonical(context.Background(), canonical.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 

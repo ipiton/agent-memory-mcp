@@ -28,7 +28,42 @@ const (
 	MetadataVerifiedBy         = "verified_by"
 	MetadataVerificationMethod = "verification_method"
 	MetadataVerificationStatus = "verification_status"
+	// MetadataProvenance records where a memory originated (T77 memory-poisoning
+	// defense). Canonical promotion is gated on it: auto-pipelines may not
+	// canonicalize a conversational-origin record without a human/verify step.
+	MetadataProvenance = "provenance"
 )
+
+// Provenance values for MetadataProvenance. Records with no explicit provenance
+// are treated as conversational (untrusted) — the safe default for the
+// promotion gate.
+const (
+	ProvenanceConversational = "conversational" // captured from a conversation/session; untrusted for auto-promotion
+	ProvenanceVerified       = "verified"       // vetted by a human or verification step
+	ProvenanceExternal       = "external"       // ingested from a trusted external source (docs, RAG)
+)
+
+// ProvenanceOf returns a memory's provenance, defaulting to conversational
+// (untrusted) when unset (T77).
+func ProvenanceOf(m *Memory) string {
+	if m != nil && len(m.Metadata) > 0 {
+		if p := normalizeStatus(m.Metadata[MetadataProvenance]); p != "" {
+			return p
+		}
+	}
+	return ProvenanceConversational
+}
+
+// ProvenanceIsTrusted reports whether a provenance value is trusted enough to be
+// auto-promoted to canonical without a human/verify gate (T77).
+func ProvenanceIsTrusted(provenance string) bool {
+	switch provenance {
+	case ProvenanceVerified, ProvenanceExternal:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	RecordKindSessionSummary    = "session_summary"

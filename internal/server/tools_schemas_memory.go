@@ -202,7 +202,7 @@ func memoryToolDefs() []tool {
 		},
 		{
 			Name:        "promote_to_canonical",
-			Description: "Promote a memory to canonical knowledge so trust-aware retrieval prefers it",
+			Description: "Promote a memory to canonical (highest-trust) knowledge so trust-aware retrieval prefers it. This is a human-verified promotion — it stamps provenance=verified. Automated pipelines cannot canonicalize conversational-origin records without such a verify step (T77 memory-poisoning defense), so promote only records you have reviewed.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

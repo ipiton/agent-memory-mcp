@@ -771,7 +771,7 @@ func TestCanonicalHealth(t *testing.T) {
 		Metadata:   map[string]string{"entity": "decision", "knowledge_layer": "canonical"},
 	}
 	_ = store.Store(ctx, m)
-	_, _ = store.PromoteToCanonical(ctx, m.ID, "test")
+	_, _ = store.PromoteToCanonical(ctx, m.ID, "test", true)
 
 	report, err := svc.Run(ctx, RunParams{Scope: ScopeCanonical, DryRun: true})
 	if err != nil {

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -242,14 +243,38 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 	}, nil
 }
 
+// ErrPromotionRequiresVerification is returned when an automated pipeline tries
+// to promote a conversational-origin memory to canonical without a human/verify
+// gate (T77 memory-poisoning defense). Canonical records are fully trusted, so
+// an attacker who plants ordinary-looking conversational records must not be
+// able to have them auto-promoted — promotion of untrusted-provenance records
+// requires an explicit verified=true (human review) decision.
+var ErrPromotionRequiresVerification = errors.New("promotion to canonical requires verification: conversational-origin memory cannot be auto-promoted")
+
 // PromoteToCanonical marks a memory as the current canonical entry.
-func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string) (*PromoteToCanonicalResult, error) {
+//
+// Threat model (T77): canonical is the highest-trust layer. Auto-promotion
+// pipelines (steward auto-run, archive-sweep) are an attack vector — a planted
+// conversational record could be silently canonicalized. So promotion is gated
+// on provenance: when verified is false (automated caller), a memory whose
+// provenance is not already trusted (verified/external) is refused with
+// ErrPromotionRequiresVerification. When verified is true (a human review via
+// the MCP tool or steward inbox), promotion proceeds and stamps
+// provenance=verified.
+func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string, verified bool) (*PromoteToCanonicalResult, error) {
 	mem, err := ms.Get(id)
 	if err != nil {
 		return nil, err
 	}
 
+	if !verified && !ProvenanceIsTrusted(ProvenanceOf(mem)) {
+		return nil, ErrPromotionRequiresVerification
+	}
+
 	metadata := copyMetadata(mem.Metadata)
+	if verified {
+		metadata[MetadataProvenance] = ProvenanceVerified
+	}
 	if strings.TrimSpace(owner) != "" {
 		metadata["owner"] = strings.TrimSpace(owner)
 	}

@@ -90,7 +90,7 @@ func TestCanonicalKnowledgeTools(t *testing.T) {
 	if err := s.memoryStore.Store(context.Background(), mem); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), mem.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), mem.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 

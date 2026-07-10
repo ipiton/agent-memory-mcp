@@ -56,7 +56,7 @@ func TestSummarizeProjectContextIncludesWorkflowSections(t *testing.T) {
 	if canonicalID == "" {
 		t.Fatal("failed to find decision memory to promote")
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestCallProjectBankViewOverviewShowsCanonicalSessionAndAttentionSections(t 
 	if err := s.memoryStore.Store(context.Background(), decision); err != nil {
 		t.Fatalf("Store decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), decision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), decision.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
@@ -198,7 +198,7 @@ func TestCallProjectBankViewJSONAppliesStatusOwnerAndServiceFilters(t *testing.T
 	if err := s.memoryStore.Store(context.Background(), canonicalDecision); err != nil {
 		t.Fatalf("Store canonical decision: %v", err)
 	}
-	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform"); err != nil {
+	if _, err := s.memoryStore.PromoteToCanonical(context.Background(), canonicalDecision.ID, "platform", true); err != nil {
 		t.Fatalf("PromoteToCanonical: %v", err)
 	}
 
