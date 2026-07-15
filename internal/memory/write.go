@@ -29,7 +29,11 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	m.UpdatedAt = now
 	m.AccessedAt = now
 
-	if ms.embedder != nil && len(m.Embedding) == 0 {
+	// T84: review-queue items are service pointers excluded from semantic recall,
+	// so embedding them is pure waste — a vector built from the target's query
+	// text that only ever added kNN noise. Skip it; the ProjectBank review view
+	// is List-based and needs no vector.
+	if ms.embedder != nil && len(m.Embedding) == 0 && !IsReviewQueueMemory(m) {
 		result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
 		if err != nil {
 			ms.logger.Warn("Failed to generate embedding for memory", zap.String("id", m.ID), zap.Error(err))

@@ -150,10 +150,10 @@ func inferTitle(text string) string {
 	if idx := strings.IndexAny(text, ".;"); idx > 0 {
 		text = strings.TrimSpace(text[:idx])
 	}
-	if len(text) > 80 {
-		text = text[:80] + "..."
-	}
-	return text
+	// Rune-aware (T87): a byte slice text[:80] can split a multibyte rune and
+	// produce an invalid-UTF-8 title, which the write boundary would then reject
+	// — silently dropping the whole extracted segment for Cyrillic/CJK titles.
+	return memory.TruncateRunes(text, 80)
 }
 
 func inferSessionMode(summary string, tags []string) memory.SessionMode {

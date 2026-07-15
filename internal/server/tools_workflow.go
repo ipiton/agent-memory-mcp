@@ -699,6 +699,14 @@ func resolveReviewItemInStore(store *memory.Store, id string, resolution string,
 		return nil, fmt.Errorf("memory is not a review queue item")
 	}
 
+	// T84: re-tag the item resolved rather than deleting it. Deleting broke three
+	// invariants — the archive-sweep re-proposal guard keys off an EXISTING
+	// review item for the target (delete → dismissed candidates get re-suggested
+	// every sweep), the resolution audit trail (note/owner/resolved-at) would be
+	// lost, and a retried resolve would hard-error on the missing id. The kNN
+	// pollution these caused is already fixed independently: Recall excludes
+	// review_queue_item (read.go) and they are no longer embedded (write.go), so
+	// a persisted-but-inert resolved pointer costs only a row.
 	metadata := map[string]string{
 		memory.MetadataReviewRequired: "false",
 		memory.MetadataStatus:         resolution,
@@ -775,11 +783,9 @@ func defaultTitle(title string, fallback string) string {
 	if title != "" {
 		return title
 	}
-	fallback = strings.TrimSpace(fallback)
-	if len(fallback) > 80 {
-		return fallback[:80] + "..."
-	}
-	return fallback
+	// Rune-aware (T87): byte-slicing a Cyrillic/CJK fallback at 80 bytes can
+	// split a rune and yield an invalid-UTF-8 title the write boundary rejects.
+	return memory.TruncateRunes(strings.TrimSpace(fallback), 80)
 }
 
 func prefixedLine(label string, value string) string {

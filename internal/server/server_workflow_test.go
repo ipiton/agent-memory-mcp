@@ -48,6 +48,9 @@ func TestCallResolveReviewItemRemovesItemFromActiveQueue(t *testing.T) {
 		t.Fatalf("resolve output missing resolution:\n%s", toolRes.Content[0].Text)
 	}
 
+	// T84: resolving re-tags the pointer (preserving the archive-sweep dedup
+	// guard, audit trail, and retry idempotency); recall exclusion + skip-embed
+	// keep it out of retrieval. The record persists with the resolution stamped.
 	updated, err := s.memoryStore.Get(item.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)

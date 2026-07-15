@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
@@ -69,7 +70,13 @@ func (m *Memory) Validate() error {
 	if content == "" {
 		return &ErrValidation{Message: "content parameter is required"}
 	}
-	m.Content = content
+	// T87: sanitize invalid UTF-8 at the write boundary rather than rejecting.
+	// Our own truncation paths are rune-aware, so this normally no-ops; it only
+	// repairs genuinely malformed external input. Sanitizing (not rejecting)
+	// keeps the boundary consistent with the startup repair and cache-load paths
+	// and avoids silently dropping an otherwise-valid record whose caller
+	// log-and-continues on error (e.g. session-close extraction).
+	m.Content = sanitizeUTF8(content)
 
 	normalizedType, err := ValidateType(m.Type, TypeSemantic)
 	if err != nil {
@@ -77,7 +84,7 @@ func (m *Memory) Validate() error {
 	}
 	m.Type = normalizedType
 
-	m.Title = strings.TrimSpace(m.Title)
+	m.Title = sanitizeUTF8(strings.TrimSpace(m.Title))
 	m.Context = strings.TrimSpace(m.Context)
 	m.Tags = NormalizeTags(m.Tags)
 
@@ -277,6 +284,16 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to migrate memory schema: %w", err)
 	}
+	// T87: one-time repair of rows whose content/title were byte-truncated
+	// mid-rune before the rune-aware fix. Gated on PRAGMA user_version so it runs
+	// a single full-table scan once, not on every boot — the write boundary now
+	// sanitizes, so no new corruption can appear after the repair.
+	if repaired, err := repairInvalidUTF8MemoriesOnce(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to repair invalid UTF-8 memories: %w", err)
+	} else if repaired > 0 {
+		logger.Warn("Repaired memories with invalid UTF-8 content/title", zap.Int("repaired", repaired))
+	}
 
 	store := &Store{
 		db:           db,
@@ -346,6 +363,16 @@ func (ms *Store) loadMemoriesToCache() error {
 			ms.logger.Warn("Failed to scan memory", zap.Error(err))
 			ms.loadErrors++
 			continue
+		}
+
+		// T87: name the record and sanitize the cache when content/title carry
+		// invalid UTF-8 (startup repair normally fixes these first; this is the
+		// backstop against silent degradation that memory_stats under-counted).
+		if !utf8.ValidString(m.Content) || !utf8.ValidString(m.Title) {
+			ms.logger.Warn("Memory has invalid UTF-8; sanitized in cache", zap.String("id", m.ID))
+			m.Content = sanitizeUTF8(m.Content)
+			m.Title = sanitizeUTF8(m.Title)
+			ms.loadErrors++
 		}
 
 		// Parse tags
@@ -675,6 +702,93 @@ func ensureMemorySchema(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// utf8RepairSchemaVersion is the PRAGMA user_version stamped once the T87 UTF-8
+// repair has run. Boots at a version >= this skip the repair scan entirely.
+const utf8RepairSchemaVersion = 1
+
+// repairInvalidUTF8MemoriesOnce runs repairInvalidUTF8Memories a single time,
+// gated on PRAGMA user_version, then stamps the version so later boots skip the
+// full-table scan. Safe because the write boundary now sanitizes — no new
+// corruption can appear after the one-time repair.
+func repairInvalidUTF8MemoriesOnce(db *sql.DB) (int, error) {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return 0, err
+	}
+	if version >= utf8RepairSchemaVersion {
+		return 0, nil
+	}
+	repaired, err := repairInvalidUTF8Memories(db)
+	if err != nil {
+		return 0, err
+	}
+	// PRAGMA does not accept bound parameters; the value is a trusted constant.
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, utf8RepairSchemaVersion)); err != nil {
+		return 0, err
+	}
+	return repaired, nil
+}
+
+// repairInvalidUTF8Memories rewrites rows whose content or title contain invalid
+// UTF-8 — byte-truncated mid-rune before the T87 rune-aware fix — to a sanitized
+// form (invalid bytes replaced with U+FFFD). It also clears the stale embedding
+// (derived from the corrupt text) so the background re-embed regenerates it from
+// the corrected content. It scans first and closes the cursor before issuing
+// UPDATEs, because modernc SQLite cannot UPDATE while a SELECT cursor is open on
+// the same connection. Returns the number of rows repaired.
+func repairInvalidUTF8Memories(db *sql.DB) (int, error) {
+	rows, err := db.Query(`SELECT id, content, title FROM memories`)
+	if err != nil {
+		return 0, err
+	}
+	type repair struct {
+		id      string
+		content string
+		title   sql.NullString
+	}
+	var pending []repair
+	for rows.Next() {
+		var id, content string
+		var title sql.NullString
+		if err := rows.Scan(&id, &content, &title); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		contentBad := !utf8.ValidString(content)
+		titleBad := title.Valid && !utf8.ValidString(title.String)
+		if !contentBad && !titleBad {
+			continue
+		}
+		r := repair{id: id, content: content, title: title}
+		if contentBad {
+			r.content = sanitizeUTF8(content)
+		}
+		if titleBad {
+			r.title.String = sanitizeUTF8(title.String)
+		}
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	for _, r := range pending {
+		// Clear the embedding: it was computed from the corrupt text and no
+		// longer matches the repaired content. Nulling embedding_model makes the
+		// background re-embed treat it as a model mismatch and regenerate it.
+		if _, err := db.Exec(
+			`UPDATE memories SET content = ?, title = ?, embedding = NULL, embedding_model = NULL WHERE id = ?`,
+			r.content, r.title, r.id,
+		); err != nil {
+			return 0, err
+		}
+	}
+	return len(pending), nil
 }
 
 // ensureMemoryTriplesSchema creates the memory_triples table and its indexes

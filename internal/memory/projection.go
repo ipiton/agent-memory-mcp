@@ -151,10 +151,9 @@ func ToCanonicalKnowledge(m *Memory, tm *trust.Metadata) *CanonicalKnowledge {
 	if entryTrust == nil {
 		entryTrust = deriveTrustMetadata(m, time.Now())
 	}
-	summary := strings.TrimSpace(m.Content)
-	if len(summary) > 280 {
-		summary = summary[:280] + "..."
-	}
+	// Rune-aware (T87): byte-slicing Cyrillic/CJK content at 280 bytes can split
+	// a rune and yield invalid UTF-8 in the projected summary.
+	summary := TruncateRunes(m.Content, 280)
 	return &CanonicalKnowledge{
 		ID:             m.ID,
 		SourceMemoryID: m.ID,

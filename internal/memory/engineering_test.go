@@ -191,3 +191,48 @@ func TestReviewRequiredReducesTrustConfidence(t *testing.T) {
 		t.Fatal("RequiresReview(review) = false, want true")
 	}
 }
+
+// TestCompletionSubjectAndTerminalRecognisesSiblingPrefixes pins the T83 widen:
+// every sibling completion prefix (and numbered slice variants) is recognised as
+// terminal and yields the right subject, while non-completion titles do not.
+func TestCompletionSubjectAndTerminalRecognisesSiblingPrefixes(t *testing.T) {
+	completion := map[string]string{
+		"Task complete: refactor auth":          "refactor auth",
+		"Implementation complete: cap-gate":     "cap-gate",
+		"Epic complete: model-autoprune":        "model-autoprune",
+		"Deploy complete: sema-prod":            "sema-prod",
+		"Research complete: granite-eval":       "granite-eval",
+		"Task S1 complete: ml-dead-endpoint":    "ml-dead-endpoint",
+		"Task S12 complete:   ml-dead-endpoint": "ml-dead-endpoint",
+	}
+	for title, wantSubject := range completion {
+		subject, ok := CompletionSubject(title)
+		if !ok || subject != wantSubject {
+			t.Errorf("CompletionSubject(%q) = (%q, %v), want (%q, true)", title, subject, ok, wantSubject)
+		}
+		if !IsTerminalRecord(&Memory{Title: title}) {
+			t.Errorf("IsTerminalRecord(%q) = false, want true", title)
+		}
+	}
+
+	nonCompletion := []string{
+		"Task started: migrate db",
+		"Pattern: prefer middleware",
+		"Strategy review 2026-05-04",
+		"Implementation notes: cap-gate", // not "complete:"
+		"Task SX complete: bad-number",   // S not followed by digits
+	}
+	for _, title := range nonCompletion {
+		if _, ok := CompletionSubject(title); ok {
+			t.Errorf("CompletionSubject(%q) = ok, want not a completion record", title)
+		}
+	}
+
+	// "Session close" is terminal but not a colon-subject completion record.
+	if _, ok := CompletionSubject("Session close / nats-drawing"); ok {
+		t.Error("CompletionSubject(Session close) should be false")
+	}
+	if !IsTerminalRecord(&Memory{Title: "Session close / nats-drawing"}) {
+		t.Error("IsTerminalRecord(Session close) = false, want true")
+	}
+}

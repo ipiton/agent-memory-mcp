@@ -99,11 +99,15 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing.T) {
 	s := newAutoSessionTestServer(t, time.Hour, 5*time.Millisecond, 1)
 
+	// A knowledge-bearing call so the checkpoint summary is not chore-log-only —
+	// the T85 guard suppresses checkpoints whose every line is a maintenance
+	// bullet (a session that only browsed project banks yields no memory).
 	first, _ := json.Marshal(map[string]any{
-		"name": "project_bank_view",
+		"name": "store_incident",
 		"arguments": map[string]any{
-			"view":    "canonical_overview",
+			"summary": "Traced the latency spike to a missing index and added it.",
 			"context": "payments",
+			"service": "api",
 		},
 	})
 	if _, rErr := s.handleToolsCall(first); rErr != nil {

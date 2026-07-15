@@ -672,11 +672,17 @@ func periodicSameType(a, b *memory.Memory) bool {
 	return titleHasPrefix(a, periodicPrefix) && titleHasPrefix(b, periodicPrefix)
 }
 
-// taskLifecyclePair (T82 class c): a "Task started: X" ↔ "Task complete: X" pair
-// for the same slug is a lifecycle progression, not a contradiction.
+// taskLifecyclePair (T82 class c): a "Task started: X" ↔ completion pair for the
+// same slug is a lifecycle progression, not a contradiction. T83 widened the
+// completion side to every sibling prefix ("Implementation/Epic/Deploy/Research
+// complete:", "Task S<N> complete:") via memory.CompletionSubject. Completion ↔
+// completion pairs are already suppressed one gate earlier by the T72 both-
+// terminal check in hasContradictionSignals.
 func taskLifecyclePair(a, b *memory.Memory) bool {
-	startedA, completeA := titleHasPrefix(a, "Task started:"), titleHasPrefix(a, "Task complete:")
-	startedB, completeB := titleHasPrefix(b, "Task started:"), titleHasPrefix(b, "Task complete:")
+	_, completeA := memory.CompletionSubject(a.Title)
+	_, completeB := memory.CompletionSubject(b.Title)
+	startedA := titleHasPrefix(a, "Task started:")
+	startedB := titleHasPrefix(b, "Task started:")
 	if !((startedA && completeB) || (completeA && startedB)) {
 		return false
 	}
@@ -684,13 +690,17 @@ func taskLifecyclePair(a, b *memory.Memory) bool {
 	return sameContext(a, b) || (taskSubject(a) != "" && taskSubject(a) == taskSubject(b))
 }
 
-// taskSubject returns the text after a "Task started:" / "Task complete:" prefix.
+// taskSubject returns the slug after a "Task started:" or any completion prefix.
 func taskSubject(m *memory.Memory) string {
+	if m == nil {
+		return ""
+	}
 	t := strings.TrimSpace(m.Title)
-	for _, p := range []string{"Task started:", "Task complete:"} {
-		if strings.HasPrefix(t, p) {
-			return strings.TrimSpace(strings.TrimPrefix(t, p))
-		}
+	if strings.HasPrefix(t, "Task started:") {
+		return strings.TrimSpace(strings.TrimPrefix(t, "Task started:"))
+	}
+	if subject, ok := memory.CompletionSubject(t); ok {
+		return subject
 	}
 	return ""
 }

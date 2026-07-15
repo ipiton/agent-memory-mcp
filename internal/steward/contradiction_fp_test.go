@@ -47,6 +47,24 @@ func TestHasContradictionSignals_SuppressesFPClasses(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "(T83) Implementation complete ↔ Task complete same subject → suppress",
+			a:    mem("Implementation complete: agent-cap-gate", "agent-cap-gate", nil),
+			b:    mem("Task complete: agent-cap-gate", "agent-cap-gate", nil),
+			want: false,
+		},
+		{
+			name: "(T83) Task S1 complete ↔ Task S2 complete same subject → suppress",
+			a:    mem("Task S1 complete: ml-dead-endpoint", "ml-dead-endpoint", nil),
+			b:    mem("Task S2 complete: ml-dead-endpoint", "ml-dead-endpoint", nil),
+			want: false,
+		},
+		{
+			name: "(T83) Task started ↔ Epic complete same subject → suppress",
+			a:    mem("Task started: model-autoprune", "model-autoprune", nil),
+			b:    mem("Epic complete: model-autoprune", "model-autoprune", nil),
+			want: false,
+		},
+		{
 			name: "control: genuine lifecycle invalidation still flagged",
 			a:    mem("API rate limit is 100/s", "api", map[string]string{memory.MetadataStatus: "outdated", "archived": "true"}),
 			b:    mem("API rate limit is 500/s", "api", map[string]string{memory.MetadataStatus: "active"}),

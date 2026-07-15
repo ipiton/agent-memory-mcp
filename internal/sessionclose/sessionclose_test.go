@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"go.uber.org/zap"
@@ -613,4 +614,18 @@ func contains(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// TestInferTitleRuneSafeForCyrillic pins the T87 review fix: a long Cyrillic
+// bullet must yield a valid-UTF-8 title (byte-slicing at 80 would split a rune
+// and the write boundary would then drop the whole extracted segment).
+func TestInferTitleRuneSafeForCyrillic(t *testing.T) {
+	long := "Исправил критический баг в модуле аутентификации и обновил конфигурацию сервиса для продакшена немедленно"
+	title := inferTitle(long)
+	if !utf8.ValidString(title) {
+		t.Fatalf("inferTitle produced invalid UTF-8: %q", title)
+	}
+	if utf8.RuneCountInString(strings.TrimSuffix(title, "...")) > 80 {
+		t.Fatalf("title exceeds 80 runes: %q", title)
+	}
 }

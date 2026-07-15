@@ -16,8 +16,8 @@ import (
 type DriftType string
 
 const (
-	DriftSourceChanged  DriftType = "source_changed"
-	DriftSourceMissing  DriftType = "source_missing"
+	DriftSourceChanged   DriftType = "source_changed"
+	DriftSourceMissing   DriftType = "source_missing"
 	DriftStaleUnverified DriftType = "stale_unverified"
 )
 
@@ -33,9 +33,9 @@ type DriftFinding struct {
 
 // DriftResult is the result of a drift scan.
 type DriftResult struct {
-	Scanned             int              `json:"scanned"`
-	Findings            []DriftFinding   `json:"findings"`
-	UnreachableSources  []UnreachableRef `json:"unreachable_sources,omitempty"`
+	Scanned            int              `json:"scanned"`
+	Findings           []DriftFinding   `json:"findings"`
+	UnreachableSources []UnreachableRef `json:"unreachable_sources,omitempty"`
 }
 
 // UnreachableRef records a memory that references a path that can't be checked.
@@ -175,9 +175,16 @@ func matchesDriftScope(scope string, entity memory.EngineeringType, isCanonical 
 	}
 }
 
+// pathRefExtensions are the file suffixes we treat as source-of-truth
+// references. Single source: the regex and the validator both derive from it.
+var pathRefExtensions = []string{
+	"go", "md", "yaml", "yml", "json", "toml", "sh", "sql",
+	"tf", "hcl", "py", "js", "ts", "conf", "cfg", "env",
+}
+
 // extractPathRefs extracts file path references from memory content.
 // Looks for common patterns like `/path/to/file`, `./path`, `docs/file.md`, etc.
-var pathRefPattern = regexp.MustCompile(`(?:^|[\s\x60"'(])([./][\w._/-]+\.(?:go|md|yaml|yml|json|toml|sh|sql|tf|hcl|py|js|ts|conf|cfg|env))`)
+var pathRefPattern = regexp.MustCompile(`(?:^|[\s\x60"'(])([./][\w._/-]+\.(?:` + strings.Join(pathRefExtensions, "|") + `))`)
 
 func extractPathRefs(content string) []string {
 	matches := pathRefPattern.FindAllStringSubmatch(content, -1)
@@ -188,6 +195,9 @@ func extractPathRefs(content string) []string {
 			continue
 		}
 		ref := strings.TrimSpace(m[1])
+		if !looksLikePathRef(ref) {
+			continue
+		}
 		if _, ok := seen[ref]; ok {
 			continue
 		}
@@ -195,4 +205,40 @@ func extractPathRefs(content string) []string {
 		refs = append(refs, ref)
 	}
 	return refs
+}
+
+// looksLikePathRef guards against the regex greedily capturing prose that is
+// not an actual file path — e.g. extension enumerations ("filter .sh/.py") or
+// bare dotted tokens (".build-manifest.json"). Without this, a source_missing
+// verdict (mark_outdated, conf 0.85) could hit healthy canonical memory while
+// steward runs in mode=auto. A confident path reference contains a directory
+// separator and has at least one segment with a real basename (not a bare
+// ".<ext>" like ".sh").
+func looksLikePathRef(ref string) bool {
+	// A lone dotted filename in prose (".build-manifest.json") is not a
+	// reliable repo-artifact reference — require a directory separator.
+	if !strings.Contains(ref, "/") {
+		return false
+	}
+	for _, seg := range strings.Split(ref, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			continue
+		}
+		if isDottedToken(seg) {
+			continue
+		}
+		return true // at least one real path segment
+	}
+	// Every segment was a bare dotted token (".sh/.py") — an extension list, not a path.
+	return false
+}
+
+// isDottedToken reports whether seg is a bare ".<word>" token with no inner dot
+// — ".sh", ".bash", ".github". Such tokens on their own carry no basename, so a
+// candidate made entirely of them is an extension enumeration, not a path. A
+// real path always pairs them with a non-dotted or basename-bearing segment
+// ("workflows", "ci.yml"), which the caller detects as a real segment.
+func isDottedToken(seg string) bool {
+	rest, ok := strings.CutPrefix(seg, ".")
+	return ok && rest != "" && !strings.Contains(rest, ".")
 }

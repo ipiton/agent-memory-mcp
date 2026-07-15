@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -280,13 +281,62 @@ func IsReviewQueueMemory(m *Memory) bool {
 	return strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataRecordKind]), RecordKindReviewQueueItem)
 }
 
+// isReviewQueueCached is the cachedMemory form of IsReviewQueueMemory, used on
+// the hot recall path where only the cache snapshot is available (T84).
+func isReviewQueueCached(m *cachedMemory) bool {
+	if m == nil || len(m.Metadata) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(m.Metadata[MetadataRecordKind]), RecordKindReviewQueueItem)
+}
+
+// completionPrefixes are the colon-delimited "<phase> complete:" title prefixes
+// that mark a session-terminal completion record written by /finalize-style
+// flows (these paths carry no reliable record_kind, so classification is by
+// title prefix). Single source of truth for the T71 idempotent writer, the T72
+// contradiction-suppression guard, and T82/T83 lifecycle pairing — extend here
+// and every consumer follows. Numbered slice variants ("Task S2 complete:") are
+// matched by taskSliceCompleteRE, not this list. "Session close" is terminal too
+// but has no colon-delimited subject, so it is handled separately.
+var completionPrefixes = []string{
+	"Task complete:",
+	"Implementation complete:",
+	"Epic complete:",
+	"Deploy complete:",
+	"Research complete:",
+}
+
+// taskSliceCompleteRE matches numbered slice completion titles like
+// "Task S1 complete:" / "Task S12 complete:".
+var taskSliceCompleteRE = regexp.MustCompile(`^Task S\d+ complete:`)
+
+// CompletionSubject returns the subject text following a terminal-completion
+// title prefix and true, or "", false when title is not a completion record.
+// "Session close" is intentionally not a completion prefix here — it carries no
+// colon-delimited subject. Shared so the T72/T82/T83 guards match same-slug
+// completion pairs off one prefix list.
+func CompletionSubject(title string) (string, bool) {
+	t := strings.TrimSpace(title)
+	for _, p := range completionPrefixes {
+		if strings.HasPrefix(t, p) {
+			return strings.TrimSpace(t[len(p):]), true
+		}
+	}
+	if m := taskSliceCompleteRE.FindString(t); m != "" {
+		return strings.TrimSpace(t[len(m):]), true
+	}
+	return "", false
+}
+
 // IsTerminalRecord reports whether m is a session-terminal episodic record: a
-// session summary (record_kind=session_summary) or a /finalize "Task complete:"
-// / "Session close" record recognised by title prefix (those paths carry no
-// reliable record_kind). Session checkpoints are intra-session ticks and are
-// explicitly excluded. Shared by the T71 session-close idempotent writer and the
-// T72 steward contradiction-suppression guard (a "Task complete: X" ↔ "Session
-// close / X" pair is dual-write of one task, not a contradiction).
+// session summary (record_kind=session_summary), a "Session close" record, or a
+// /finalize completion record ("Task complete:", "Implementation complete:",
+// "Epic complete:", "Deploy complete:", "Research complete:", "Task S<N>
+// complete:") recognised by title prefix. Session checkpoints are intra-session
+// ticks and are explicitly excluded. Shared by the T71 session-close idempotent
+// writer and the T72/T83 steward contradiction-suppression guard (a completion
+// record ↔ another completion / "Session close" of one task is dual-write, not a
+// contradiction).
 func IsTerminalRecord(m *Memory) bool {
 	if m == nil {
 		return false
@@ -298,7 +348,11 @@ func IsTerminalRecord(m *Memory) bool {
 		return true
 	}
 	title := strings.TrimSpace(m.Title)
-	return strings.HasPrefix(title, "Task complete:") || strings.HasPrefix(title, "Session close")
+	if strings.HasPrefix(title, "Session close") {
+		return true
+	}
+	_, ok := CompletionSubject(title)
+	return ok
 }
 
 func BuildEngineeringTags(entity EngineeringType, service string, severity string, status string, reviewRequired bool, extra []string) []string {

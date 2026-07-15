@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // parseMetadataJSON unmarshals a metadata blob from a sql.NullString into
@@ -150,8 +151,10 @@ func mergeContent(primary string, duplicates []*Memory) string {
 		} else {
 			content += "\n\nMerged note:\n" + duplicateContent
 		}
-		if len(content) > maxMergedContentLen {
-			content = content[:maxMergedContentLen] + "\n[truncated: merged content exceeded size limit]"
+		// Rune-aware: a byte slice content[:n] can split a multibyte rune and
+		// persist invalid UTF-8 (T87). maxMergedContentLen is a rune budget.
+		if utf8.RuneCountInString(content) > maxMergedContentLen {
+			content = truncateRunesSuffix(content, maxMergedContentLen, "\n[truncated: merged content exceeded size limit]")
 			break
 		}
 	}

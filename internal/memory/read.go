@@ -188,6 +188,15 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
+		// T84: review-queue items are service pointers ("Promotion candidate:
+		// memory <uuid>…"), not knowledge. Exclude them from semantic recall —
+		// their vector is built from the target's query text, so they self-poison
+		// kNN and surface above the answer. They remain visible via the
+		// ProjectBank review view (List-based), which is their only consumer.
+		if isReviewQueueCached(m) {
+			continue
+		}
+
 		// T48 layer-aware filtering: when the flag is on, surface memories
 		// are invisible outside their originating Context. This prevents
 		// session scratch state from leaking into unrelated recall calls.
