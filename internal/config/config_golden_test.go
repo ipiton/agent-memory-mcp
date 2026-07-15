@@ -1,11 +1,17 @@
 package config
 
 import (
+	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// updateConfigGolden rewrites the committed golden instead of comparing against
+// it. Run: go test ./internal/config -run TestConfigResolvedValuesGolden -update-golden
+var updateConfigGolden = flag.Bool("update-golden", false, "rewrite the config golden file")
 
 // h13GoldenEnv sets one non-default value per config field so the golden
 // captures every resolved value. Kept alphabetically-ish by subsystem.
@@ -194,13 +200,27 @@ func TestConfigResolvedValuesGolden(t *testing.T) {
 	}
 	got := serializeConfigForGolden(cfg)
 
-	goldenPath := "/private/tmp/claude-501/-Users-vit-Documents-Projects-mcp-memory/3ffe0da0-9694-419d-85c1-ee31ac484b86/scratchpad/config_golden.txt"
+	// Repo-relative testdata so the golden is portable across machines and CI
+	// (a prior version hardcoded a per-session scratchpad path that only the
+	// authoring session could read).
+	goldenPath := filepath.Join("testdata", "config_golden.txt")
 	want, err := os.ReadFile(goldenPath)
+	// Bootstrap on first run (missing golden) or explicit -update-golden: write
+	// the current resolved config as the new golden and pass.
+	if *updateConfigGolden || os.IsNotExist(err) {
+		if mkErr := os.MkdirAll(filepath.Dir(goldenPath), 0o755); mkErr != nil {
+			t.Fatalf("mkdir testdata: %v", mkErr)
+		}
+		if wErr := os.WriteFile(goldenPath, []byte(got), 0o644); wErr != nil {
+			t.Fatalf("write golden: %v", wErr)
+		}
+		t.Logf("wrote golden %s", goldenPath)
+		return
+	}
 	if err != nil {
 		t.Fatalf("read golden (%s): %v", goldenPath, err)
 	}
-	if got != string(want) {
-		_ = os.WriteFile("/private/tmp/claude-501/-Users-vit-Documents-Projects-mcp-memory/3ffe0da0-9694-419d-85c1-ee31ac484b86/scratchpad/config_after.txt", []byte(got), 0644)
-		t.Fatalf("resolved config differs from golden — see config_after.txt")
+	if strings.TrimRight(got, "\n") != strings.TrimRight(string(want), "\n") {
+		t.Fatalf("resolved config differs from golden %s — if intended, regenerate with -update-golden", goldenPath)
 	}
 }
