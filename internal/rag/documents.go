@@ -237,9 +237,7 @@ func classifySourceType(docPath string, title string, content string) string {
 			return "k8s"
 		}
 	case ext == ".md":
-		if baseLower == "readme.md" || strings.HasPrefix(pathLower, "docs/") || strings.Contains(pathLower, "/docs/") || strings.Contains(contentLower, "# ") {
-			return "docs"
-		}
+		return "docs"
 	case ext == ".yaml" || ext == ".yml":
 		if strings.Contains(contentLower, "apiVersion:") && strings.Contains(contentLower, "kind:") {
 			return "k8s"
