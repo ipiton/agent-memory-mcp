@@ -197,6 +197,14 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
+		// Superseded entries (temporal replacement, e.g. after a merge) are
+		// invisible to semantic recall — the successor carries the current
+		// knowledge. Kept in the DB for temporal history; List/ListLightweight
+		// still return them for maintenance tools.
+		if m.SupersededBy != "" {
+			continue
+		}
+
 		// T48 layer-aware filtering: when the flag is on, surface memories
 		// are invisible outside their originating Context. This prevents
 		// session scratch state from leaking into unrelated recall calls.

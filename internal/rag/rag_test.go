@@ -569,6 +569,8 @@ func TestClassifySourceType(t *testing.T) {
 		{path: "k8s/ingress.yaml", want: "k8s"},
 		{path: "dead_ends/why-we-avoid-async-migration.md", want: "dead_end"},
 		{path: "notes/why-we-avoid-shared-mutable-state.md", want: "dead_end"},
+		{path: "knowledge/mahoo-architecture.md", want: "docs"},
+		{path: "plans/analysis.md", want: "docs"},
 	}
 
 	for _, tc := range tests {
