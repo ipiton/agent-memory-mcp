@@ -467,6 +467,73 @@ func TestDocumentServiceCollectDocumentsSkipsExcludedGlob(t *testing.T) {
 	}
 }
 
+// Markdown listed in IndexDirs but living outside docs/ used to be dropped
+// without a trace: classifySourceType was called with an empty body, so its
+// "a heading is enough" branch could never fire. Operators saw the paths echoed
+// in the startup log and an index that quietly lacked them.
+func TestDocumentServiceIndexesMarkdownOutsideDocs(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "memory"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "memory", "fact.md"), []byte("# Fact\nbody"), 0o644); err != nil {
+		t.Fatalf("write fact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "AGENTS.md"), []byte("# Agents\nrules"), 0o644); err != nil {
+		t.Fatalf("write agents: %v", err)
+	}
+
+	ds := newDocumentService(docServiceConfig{
+		RepoRoot:     repoRoot,
+		IndexDirs:    []string{"memory", "AGENTS.md"},
+		ChunkSize:    2000,
+		ChunkOverlap: 200,
+	}, nil)
+
+	docs, err := ds.collectDocuments()
+	if err != nil {
+		t.Fatalf("collectDocuments: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, d := range docs {
+		got[d.Path] = true
+	}
+	for _, want := range []string{"memory/fact.md", "AGENTS.md"} {
+		if !got[want] {
+			t.Fatalf("%q missing from index; collected %v", want, got)
+		}
+	}
+}
+
+// The heading requirement still holds: a markdown file with no heading and no
+// docs/ ancestry carries nothing to classify, and admitting it would widen the
+// index to every stray note in the tree.
+func TestDocumentServiceSkipsHeadlessMarkdownOutsideDocs(t *testing.T) {
+	repoRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, "notes", "scratch.md"), []byte("just a line, no heading"), 0o644); err != nil {
+		t.Fatalf("write scratch: %v", err)
+	}
+
+	ds := newDocumentService(docServiceConfig{
+		RepoRoot:     repoRoot,
+		IndexDirs:    []string{"notes"},
+		ChunkSize:    2000,
+		ChunkOverlap: 200,
+	}, nil)
+
+	docs, err := ds.collectDocuments()
+	if err != nil {
+		t.Fatalf("collectDocuments: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Fatalf("len(docs) = %d, want 0 (headless markdown outside docs/)", len(docs))
+	}
+}
+
 func TestBuildHybridSearchResultsIncludesTrustMetadata(t *testing.T) {
 	now := time.Now()
 	chunks := []vectorstore.Chunk{

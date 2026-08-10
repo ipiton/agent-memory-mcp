@@ -44,6 +44,9 @@ func newDocumentService(cfg docServiceConfig, logger *zap.Logger) *documentServi
 
 func (ds *documentService) collectDocuments() ([]document, error) {
 	var allDocs []document
+	// A file that yields no documents is invisible otherwise, and a silently
+	// empty index reads exactly like a correctly empty one.
+	var considered, empty int
 
 	for _, dir := range ds.config.IndexDirs {
 		fullPath := dir
@@ -62,10 +65,14 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				continue
 			}
 			if ds.supportedSourceType(fullPath) != "" {
+				considered++
 				docs, err := ds.processFile(fullPath)
 				if err != nil {
 					ds.logger.Warn("Failed to process file", zap.String("path", fullPath), zap.Error(err))
 				} else {
+					if len(docs) == 0 {
+						empty++
+					}
 					allDocs = append(allDocs, docs...)
 				}
 			}
@@ -83,10 +90,14 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				return nil
 			}
 			if !d.IsDir() && ds.supportedSourceType(path) != "" {
+				considered++
 				docs, err := ds.processFile(path)
 				if err != nil {
 					ds.logger.Warn("Failed to process file", zap.String("path", path), zap.Error(err))
 					return nil
+				}
+				if len(docs) == 0 {
+					empty++
 				}
 				allDocs = append(allDocs, docs...)
 			}
@@ -96,6 +107,12 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 			ds.logger.Error("Failed to walk directory", zap.String("path", fullPath), zap.Error(err))
 		}
 	}
+
+	ds.logger.Info("Collected documents",
+		zap.Strings("index_dirs", ds.config.IndexDirs),
+		zap.Int("files_considered", considered),
+		zap.Int("files_without_documents", empty),
+		zap.Int("documents", len(allDocs)))
 
 	return allDocs, nil
 }
@@ -107,8 +124,14 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 	}
 
 	relPath := ds.relPath(path)
-	sourceType := classifySourceType(relPath, "", "")
+	// Content matters here: classifySourceType admits a markdown file outside
+	// docs/ when it carries a heading, and that branch is dead unless the body
+	// is actually passed in. Callers used to pass "" — every .md outside docs/
+	// was dropped without a trace, including files named explicitly in
+	// MCP_INDEX_DIRS.
+	sourceType := classifySourceType(relPath, "", string(content))
 	if sourceType == "" {
+		ds.logger.Debug("Skipped file: source type not recognized", zap.String("path", relPath))
 		return nil, nil
 	}
 
@@ -155,7 +178,15 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 	return docs, nil
 }
 
+// supportedSourceType gates a path before its content is read. Markdown is
+// always admitted: whether it qualifies depends on the body (a heading is
+// enough), so the real decision belongs to processFile. Classifying by path
+// alone here would drop every .md living outside docs/ — MEMORY.md, AGENTS.md,
+// a memory/ folder — even when the operator listed them in MCP_INDEX_DIRS.
 func (ds *documentService) supportedSourceType(absPath string) string {
+	if strings.EqualFold(filepath.Ext(absPath), ".md") {
+		return "docs"
+	}
 	return classifySourceType(ds.relPath(absPath), "", "")
 }
 
