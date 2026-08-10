@@ -260,7 +260,51 @@ func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 	}
 }
 
-func (s *MCPServer) handleInitialize(_ json.RawMessage) (any, *rpcError) {
+// initializeParams is the subset of the client's initialize request we inspect.
+// Everything outside these fields is deliberately ignored.
+type initializeParams struct {
+	ProtocolVersion string `json:"protocolVersion"`
+	ClientInfo      struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"clientInfo"`
+}
+
+// logClientProtocolVersion records which protocol revision the client asked for.
+//
+// The server does not negotiate: handleInitialize always answers with its own
+// protocolVersion regardless of the request. Without this log line a divergence
+// between client and server is unobservable, so we would learn that the client
+// moved to a newer revision from a failure rather than from telemetry. Logging
+// only — the response is unchanged, and a mismatch is not an error here.
+func (s *MCPServer) logClientProtocolVersion(params json.RawMessage) {
+	if s.fileLogger == nil {
+		return
+	}
+
+	var p initializeParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			s.fileLogger.Warn("initialize: failed to parse params",
+				zap.String("server_protocol_version", protocolVersion),
+				zap.Error(err),
+			)
+			return
+		}
+	}
+
+	s.fileLogger.Info("initialize: client protocol version",
+		zap.String("client_protocol_version", p.ProtocolVersion),
+		zap.String("server_protocol_version", protocolVersion),
+		zap.Bool("protocol_version_match", p.ProtocolVersion == protocolVersion),
+		zap.String("client_name", p.ClientInfo.Name),
+		zap.String("client_version", p.ClientInfo.Version),
+	)
+}
+
+func (s *MCPServer) handleInitialize(params json.RawMessage) (any, *rpcError) {
+	s.logClientProtocolVersion(params)
+
 	return map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
