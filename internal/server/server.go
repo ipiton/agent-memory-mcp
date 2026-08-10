@@ -256,8 +256,51 @@ func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 	case "tools/call":
 		return s.handleToolsCall(req.Params)
 	default:
+		s.logUnknownMethod(req)
 		return nil, &rpcError{Code: rpcErrMethodNotFound, Message: "method not found"}
 	}
+}
+
+// requestMeta is the subset of a request's `_meta` we inspect. Under revision
+// 2026-07-28 clients carry their protocol version on every request; under the
+// revision we implement (2025-11-25) the field is simply absent.
+type requestMeta struct {
+	Meta struct {
+		ProtocolVersion string `json:"io.modelcontextprotocol/protocolVersion"`
+	} `json:"_meta"`
+}
+
+// logUnknownMethod records calls to methods we do not implement.
+//
+// This is the migration tripwire for MCP-PROTOCOL-MIGRATION-2026-07-28, and it
+// exists because the obvious place to watch — initialize — turned out to be
+// blind. Measured 2026-08-10 against a live client: Claude Code reconnects to a
+// restarted HTTP server by going straight to tools/call and never re-sends
+// initialize, which our dispatch accepts because no handshake is required. A
+// detector on initialize therefore never fires for the case it was built for.
+//
+// An unknown method is the reliable signal instead: a client that has moved to
+// 2026-07-28 calls server/discover, a mandatory RPC we do not implement, and
+// today that returns method-not-found silently. The protocol version is read
+// from _meta when present, so the line says which revision the caller speaks
+// rather than only that something unknown was asked for.
+func (s *MCPServer) logUnknownMethod(req rpcRequest) {
+	if s.fileLogger == nil {
+		return
+	}
+
+	var m requestMeta
+	if len(req.Params) > 0 {
+		// A parse failure is not worth reporting separately: the method is
+		// unknown either way, and that is the fact we are recording.
+		_ = json.Unmarshal(req.Params, &m)
+	}
+
+	s.fileLogger.Warn("unknown method",
+		zap.String("method", req.Method),
+		zap.String("client_protocol_version", m.Meta.ProtocolVersion),
+		zap.String("server_protocol_version", protocolVersion),
+	)
 }
 
 // initializeParams is the subset of the client's initialize request we inspect.

@@ -94,6 +94,73 @@ func TestInitializeLogsMatchingProtocolVersion(t *testing.T) {
 	}
 }
 
+// TestUnknownMethodIsLogged is the working half of the migration tripwire.
+// Watching initialize does not fire for a real client (measured 2026-08-10:
+// Claude Code reconnects straight into tools/call), so the signal that a client
+// moved to 2026-07-28 is a call to a method we do not implement.
+func TestUnknownMethodIsLogged(t *testing.T) {
+	s, logPath := newLoggingTestServer(t)
+
+	req := rpcRequest{
+		JSONRPC: "2.0",
+		Method:  "server/discover",
+		Params:  json.RawMessage(`{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`),
+	}
+
+	result, rpcErr := s.dispatch(req)
+	if rpcErr == nil {
+		t.Fatal("server/discover unexpectedly handled — the tripwire assumes it is unimplemented")
+	}
+	if result != nil {
+		t.Errorf("unknown method returned a result: %v", result)
+	}
+
+	logged := readLog(t, logPath)
+	for _, want := range []string{
+		`"message":"unknown method"`,
+		`"method":"server/discover"`,
+		`"client_protocol_version":"2026-07-28"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log does not contain %s\nlog:\n%s", want, logged)
+		}
+	}
+}
+
+// TestUnknownMethodWithoutMetaIsStillLogged covers the current-revision shape:
+// clients on 2025-11-25 send no _meta at all, and the call must still be
+// visible — an empty version field is data, not a reason to stay silent.
+func TestUnknownMethodWithoutMetaIsStillLogged(t *testing.T) {
+	s, logPath := newLoggingTestServer(t)
+
+	for _, params := range []json.RawMessage{nil, json.RawMessage(`{}`), json.RawMessage(`{"_meta":`)} {
+		if _, rpcErr := s.dispatch(rpcRequest{Method: "some/unimplemented", Params: params}); rpcErr == nil {
+			t.Fatal("expected method-not-found")
+		}
+	}
+
+	logged := readLog(t, logPath)
+	if got := strings.Count(logged, `"method":"some/unimplemented"`); got != 3 {
+		t.Errorf("logged %d unknown-method lines, want 3\nlog:\n%s", got, logged)
+	}
+}
+
+// TestKnownMethodsAreNotLoggedAsUnknown pins the other side: the tripwire must
+// stay quiet on normal traffic, otherwise it is noise rather than a signal.
+func TestKnownMethodsAreNotLoggedAsUnknown(t *testing.T) {
+	s, logPath := newLoggingTestServer(t)
+
+	for _, method := range []string{"initialize", "tools/list", "resources/list", "resources/templates/list"} {
+		if _, rpcErr := s.dispatch(rpcRequest{Method: method}); rpcErr != nil {
+			t.Fatalf("%s returned error: %+v", method, rpcErr)
+		}
+	}
+
+	if logged := readLog(t, logPath); strings.Contains(logged, `"message":"unknown method"`) {
+		t.Errorf("known methods produced an unknown-method line\nlog:\n%s", logged)
+	}
+}
+
 // TestInitializeSurvivesUnusableParams guards the failure mode that matters:
 // logging is diagnostics, and it must never turn a working handshake into a
 // broken one. Both a malformed body and an absent one must still initialize.
