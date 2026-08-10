@@ -268,9 +268,11 @@ func classifySourceType(docPath string, title string, content string) string {
 			return "k8s"
 		}
 	case ext == ".md":
-		if baseLower == "readme.md" || strings.HasPrefix(pathLower, "docs/") || strings.Contains(pathLower, "/docs/") || strings.Contains(contentLower, "# ") {
-			return "docs"
-		}
+		// Any markdown reaching this point was walked from a configured index
+		// dir, so its presence is already the operator's intent. Requiring a
+		// docs/ ancestor or a "# " heading dropped whole knowledge bases:
+		// memory files written as frontmatter + prose carry neither.
+		return "docs"
 	case ext == ".yaml" || ext == ".yml":
 		if strings.Contains(contentLower, "apiVersion:") && strings.Contains(contentLower, "kind:") {
 			return "k8s"

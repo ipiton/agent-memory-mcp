@@ -506,21 +506,23 @@ func TestDocumentServiceIndexesMarkdownOutsideDocs(t *testing.T) {
 	}
 }
 
-// The heading requirement still holds: a markdown file with no heading and no
-// docs/ ancestry carries nothing to classify, and admitting it would widen the
-// index to every stray note in the tree.
-func TestDocumentServiceSkipsHeadlessMarkdownOutsideDocs(t *testing.T) {
+// Headless markdown counts too. Memory-style notes are frontmatter plus prose
+// with no "# " anywhere: in one live repo 52 of 58 such files looked empty to
+// the old heading heuristic. Exclusion stays the operator's lever
+// (IndexExcludeDirs / IndexExcludeGlobs), not a guess about file shape.
+func TestDocumentServiceIndexesHeadlessMarkdown(t *testing.T) {
 	repoRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repoRoot, "notes"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoRoot, "memory"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repoRoot, "notes", "scratch.md"), []byte("just a line, no heading"), 0o644); err != nil {
-		t.Fatalf("write scratch: %v", err)
+	body := "---\nname: rent\ntype: project\n---\n\nRent is due by the 10th, in cash.\n"
+	if err := os.WriteFile(filepath.Join(repoRoot, "memory", "rent.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write rent: %v", err)
 	}
 
 	ds := newDocumentService(docServiceConfig{
 		RepoRoot:     repoRoot,
-		IndexDirs:    []string{"notes"},
+		IndexDirs:    []string{"memory"},
 		ChunkSize:    2000,
 		ChunkOverlap: 200,
 	}, nil)
@@ -529,8 +531,11 @@ func TestDocumentServiceSkipsHeadlessMarkdownOutsideDocs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("collectDocuments: %v", err)
 	}
-	if len(docs) != 0 {
-		t.Fatalf("len(docs) = %d, want 0 (headless markdown outside docs/)", len(docs))
+	if len(docs) == 0 {
+		t.Fatal("headless markdown produced no documents")
+	}
+	if !strings.Contains(docs[0].Content, "due by the 10th") {
+		t.Fatalf("docs[0].Content = %q, want the note body", docs[0].Content)
 	}
 }
 
