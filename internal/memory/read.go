@@ -27,6 +27,15 @@ func (ms *Store) snapshotReadonlyMemories() []*cachedMemory {
 	return snapshot
 }
 
+// hasMemory reports whether the given id is present in the cache. Used to tell
+// a live supersession pointer from a dangling one.
+func (ms *Store) hasMemory(id string) bool {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	_, ok := ms.memories[id]
+	return ok
+}
+
 // snapshotForContext returns a read-only snapshot pre-filtered by context.
 func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
 	if ctx == "" {
@@ -194,6 +203,17 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		// kNN and surface above the answer. They remain visible via the
 		// ProjectBank review view (List-based), which is their only consumer.
 		if isReviewQueueCached(m) {
+			continue
+		}
+
+		// Superseded entries (temporal replacement, e.g. after a merge or
+		// MarkOutdated) are invisible to semantic recall — the successor
+		// carries the current knowledge, while the old vector is unchanged and
+		// keeps out-ranking it. They stay visible to List/ListLightweight so
+		// maintenance tools still see the temporal history. The successor is
+		// looked up rather than trusted: Delete does not clear superseded_by on
+		// predecessors, and a dangling pointer would bury the entry forever.
+		if m.SupersededBy != "" && ms.hasMemory(m.SupersededBy) {
 			continue
 		}
 

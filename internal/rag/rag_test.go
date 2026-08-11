@@ -641,6 +641,10 @@ func TestClassifySourceType(t *testing.T) {
 		{path: "k8s/ingress.yaml", want: "k8s"},
 		{path: "dead_ends/why-we-avoid-async-migration.md", want: "dead_end"},
 		{path: "notes/why-we-avoid-shared-mutable-state.md", want: "dead_end"},
+		// Issue #19: plain markdown outside docs/ and without a "# " heading
+		// used to classify as "" and get silently dropped from the index.
+		{path: "knowledge/mahoo-architecture.md", want: "docs"},
+		{path: "plans/analysis.md", want: "docs"},
 	}
 
 	for _, tc := range tests {
