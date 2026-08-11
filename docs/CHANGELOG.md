@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-08-11
+
+Retrieval-correctness release. Two silent-loss bugs are fixed: whole markdown
+knowledge bases were dropped from the RAG index without a log line, and merged
+entries kept competing with the successor that replaced them. Both were reported
+from a live deployment ([#19](https://github.com/ipiton/agent-memory-mcp/issues/19),
+[#18](https://github.com/ipiton/agent-memory-mcp/issues/18) — thanks
+@ch405canova-sudo).
+
+### Fixed
+
+- **Markdown outside `docs/` was silently dropped from the index (#19)** — `classifySourceType` admitted a `.md` file living outside `docs/` only when it carried a `# ` heading, but both call sites passed an empty body, so that branch could never fire; `supportedSourceType` gated the path before the file was read, so such files were skipped without ever being opened. No log line, no counter — the startup entry still echoed `index_dirs` faithfully while the index quietly lacked them. Measured on two live repos: a family-archive checkout lost all 58 files of `memory/` plus `AGENTS.md`; a sibling project lost 43 of 49 files under `memory-bank/`. Fixing the call sites revived the heading heuristic, which measurement showed to be the larger defect — only 6 of 58 memory files carried a `# ` line, because memory-style notes are frontmatter plus prose and carry no heading by design. Markdown reaching the classifier was already walked from a configured index dir, so its presence is the operator's intent; the heuristic is gone and exclusion stays where it belongs, in `IndexExcludeDirs` / `IndexExcludeGlobs`.
+- **Superseded entries stayed in semantic recall (#18)** — `Recall` never looked at `superseded_by`, so an entry retired by a merge or by `MarkOutdated` stayed in the result set with its original, unchanged vector and kept competing with — often out-ranking — the successor that replaced it. `MarkOutdated` only downranks (importance capped at `0.25`), which decides nothing when the two embeddings are near-identical. Recall now skips such entries; `List`/`ListLightweight` still return them, so the temporal-history and maintenance views are unchanged. The successor is looked up in the cache rather than trusted: `Delete` does not clear `superseded_by` on predecessors, and an unconditional skip would bury an entry forever once its successor is deleted — an archived entry beats no entry at all. `MarkOutdated` **without** a successor keeps the previous downrank behaviour: nothing replaced the entry, so hiding it would just lose the knowledge.
+
+### Added
+
+- **Protocol-migration telemetry (step 1 of MCP-PROTOCOL-MIGRATION-2026-07-28)** — `handleInitialize` discarded its params and always answered with the server's own `protocolVersion`, so a client moving to a newer MCP revision was unobservable: we would learn about it from a failure rather than from telemetry. The requested version is now logged along with a match flag (logging only — the response is unchanged and a mismatch is not an error). Watching `initialize` alone turned out to be blind, though: measured against a live client, Claude Code reconnects to a restarted HTTP server by going straight to `tools/call` and never re-sends `initialize`, which dispatch accepts because no handshake is required. Unknown methods are therefore logged as the reliable tripwire — a client on revision 2026-07-28 calls `server/discover`, a mandatory RPC this server does not implement, which until now returned method-not-found silently. The line carries the protocol version from `_meta` when present, so it reports which revision the caller speaks rather than only that something unknown was asked for.
+
 ## [0.9.0] - 2026-07-10
 
 Security, zero-ops, and architecture release. Canonical promotion is now guarded
