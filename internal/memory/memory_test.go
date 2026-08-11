@@ -967,7 +967,13 @@ func TestMergeDuplicatesAndConflictsReport(t *testing.T) {
 	}
 }
 
-func TestMarkOutdatedDownranksMemory(t *testing.T) {
+// TestMarkOutdatedHidesSupersededMemoryFromRecall pins issue #18. Marking an
+// entry outdated WITH a successor now removes it from semantic recall instead
+// of merely downranking it: the old vector is unchanged, so downranking alone
+// still let the dead copy compete with its successor. The downrank path stays
+// in force for MarkOutdated without a successor — see
+// TestOutdatedWithoutSuccessorStaysRecallable.
+func TestMarkOutdatedHidesSupersededMemoryFromRecall(t *testing.T) {
 	store := newTestStore(t)
 
 	current := &Memory{
@@ -998,11 +1004,14 @@ func TestMarkOutdatedDownranksMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
-	if len(results) < 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if results[0].Memory.ID != current.ID {
 		t.Fatalf("top result = %s, want %s", results[0].Memory.ID, current.ID)
+	}
+	if _, err := store.Get(old.ID); err != nil {
+		t.Fatalf("superseded entry must stay retrievable by id: %v", err)
 	}
 	outdated, err := store.Get(old.ID)
 	if err != nil {
