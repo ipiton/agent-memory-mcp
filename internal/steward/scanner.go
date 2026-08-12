@@ -350,9 +350,18 @@ func scanExpiredWorking(memories []*memory.Memory, policy Policy, now time.Time,
 		if m.Importance >= cutoff || memory.IsCanonicalMemory(m) {
 			handling = HandlingReviewRequired
 		}
-		// AutoDelete kill-switch: when disabled, all entries go to review.
+		// AutoDelete kill-switch (T104): when disabled, the action is not
+		// produced at all.
+		//
+		// It used to reroute the entry to review instead. That reads as caution
+		// but is worse than either alternative: the operator asked for this work
+		// NOT to happen, and got an unbounded queue of it — 409 items on the
+		// 2026-08-12 scan, none of which the inbox can actually carry out,
+		// leaving `suppress` (a lie: it is not a false positive) or `defer` as
+		// the only ways out. A switch that is off must revoke the right to act,
+		// not hide the button and file a ticket.
 		if !policy.AutoDeleteExpiredWorking {
-			handling = HandlingReviewRequired
+			continue
 		}
 
 		title := displayTitle(m, 60)

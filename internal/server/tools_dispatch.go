@@ -3,7 +3,10 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/ipiton/agent-memory-mcp/internal/stats"
 )
@@ -149,12 +152,40 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 		return nil, rErr
 	}
 
-	result, rErr := handler(req.Arguments)
+	result, rErr := s.invokeTool(name, handler, req.Arguments)
 	s.logToolEvent(name, req.Arguments, start, rErr)
 	if s.sessionTracker != nil {
 		s.sessionTracker.HandleToolCall(name, req.Arguments, rErr)
 	}
 	return result, rErr
+}
+
+// invokeTool runs a tool handler with a panic barrier. A panic in one handler
+// must not take the process down: in stdio mode the server is the process, so
+// an unrecovered panic loses the whole session (and every other in-flight tool)
+// over one bad argument. The panic is reported to the caller as a JSON-RPC
+// internal error and written to the diagnostics log with its stack.
+func (s *MCPServer) invokeTool(name string, handler toolHandler, args map[string]any) (result any, rErr *rpcError) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		result = nil
+		rErr = &rpcError{
+			Code:    rpcErrInternalError,
+			Message: fmt.Sprintf("internal error in tool %s", name),
+			Data:    fmt.Sprint(r),
+		}
+		if s.fileLogger != nil {
+			s.fileLogger.Error("tool handler panicked",
+				zap.String("tool", name),
+				zap.Any("panic", r),
+				zap.ByteString("stack", debug.Stack()),
+			)
+		}
+	}()
+	return handler(args)
 }
 
 func (s *MCPServer) logToolEvent(name string, args map[string]any, start time.Time, rErr *rpcError) {

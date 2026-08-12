@@ -372,6 +372,21 @@ func (s *MCPServer) getRagEngine() *rag.Engine {
 	return s.ragEngine
 }
 
+// configSnapshot returns a consistent copy of the effective config under the
+// ragMu read lock, honouring the write-barrier contract documented on
+// ReloadConfig.
+//
+// T88 H3: background goroutines (the archive-sweep scheduler) must call this
+// rather than touching s.config directly — they run concurrently with SIGHUP
+// and the config watcher, which reassign s.config under ragMu.Lock. Request-path
+// readers still access s.config directly; migrating them belongs with the config
+// rework (T89/T91), not here.
+func (s *MCPServer) configSnapshot() config.Config {
+	s.ragMu.RLock()
+	defer s.ragMu.RUnlock()
+	return s.config
+}
+
 // getMemoryStore returns the memory store. memoryStore is set once during
 // New() and never reassigned afterwards (no ReloadMemory equivalent), so
 // no lock is needed. Provided as a getter for symmetry with getRagEngine

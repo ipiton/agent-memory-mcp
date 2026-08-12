@@ -34,7 +34,7 @@ func TestResolveArchiveSweepRoots(t *testing.T) {
 	s := newTestServer(t, "")
 
 	// No explicit roots -> convention <root>/tasks/archive.
-	got := s.resolveArchiveSweepRoots()
+	got := resolveArchiveSweepRoots(s.config)
 	want := filepath.Join(s.config.RootPath, "tasks", "archive")
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("convention roots = %v, want [%s]", got, want)
@@ -42,7 +42,7 @@ func TestResolveArchiveSweepRoots(t *testing.T) {
 
 	// Explicit config wins.
 	s.config.Lifecycle.TaskArchiveRoots = []string{"/tmp/explicit-a", "/tmp/explicit-b"}
-	got = s.resolveArchiveSweepRoots()
+	got = resolveArchiveSweepRoots(s.config)
 	if len(got) != 2 || got[0] != "/tmp/explicit-a" {
 		t.Fatalf("explicit roots = %v, want the configured pair", got)
 	}

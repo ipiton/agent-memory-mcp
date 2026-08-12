@@ -166,7 +166,7 @@ func FormatReport(r *Report) string {
 		mode = "DRY RUN"
 	}
 
-	fmt.Fprintf(&sb, "Steward Run [%s] — %s\n", mode, r.ID[:8])
+	fmt.Fprintf(&sb, "Steward Run [%s] — %s\n", mode, r.ID[:min(8, len(r.ID))])
 	fmt.Fprintf(&sb, "Scope: %s | Duration: %s\n", r.Scope, r.CompletedAt.Sub(r.StartedAt).Round(time.Millisecond))
 	if r.Context != "" {
 		fmt.Fprintf(&sb, "Context: %s", r.Context)

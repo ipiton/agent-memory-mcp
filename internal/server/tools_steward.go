@@ -100,14 +100,18 @@ func (s *MCPServer) callStewardPolicy(args map[string]any) (any, *rpcError) {
 		if err != nil {
 			return nil, &rpcError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("invalid policy: %v", err)}
 		}
-		var p steward.Policy
-		if err := json.Unmarshal(data, &p); err != nil {
+		// T103: unmarshal into a patch, not into Policy. Every Policy field is a
+		// value type, so decoding a one-field object into Policy and saving it
+		// whole resets every other field to 0/false without saying so.
+		var patch steward.PolicyPatch
+		if err := json.Unmarshal(data, &patch); err != nil {
 			return nil, &rpcError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("invalid policy structure: %v", err)}
 		}
-		if err := s.stewardService.SetPolicy(p); err != nil {
+		updated, err := s.stewardService.PatchPolicy(patch)
+		if err != nil {
 			return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("failed to save policy: %v", err)}
 		}
-		return toolResultText("Policy updated."), nil
+		return toolResultJSON(updated), nil
 
 	default:
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: fmt.Sprintf("unknown action: %s (expected get or set)", action)}
@@ -286,7 +290,7 @@ func formatStewardStatus(s *steward.Status) string {
 	out := fmt.Sprintf("Steward Mode: %s\nPending Review: %d\n", s.PolicyMode, s.PendingReview)
 	if s.LastRun != nil {
 		out += fmt.Sprintf("\nLast Run: %s\n  Started: %s\n  Duration: %s\n  Scanned: %d | Applied: %d | Pending: %d\n",
-			s.LastRun.RunID[:8], s.LastRun.StartedAt.Format("2006-01-02 15:04:05"),
+			s.LastRun.RunID[:min(8, len(s.LastRun.RunID))], s.LastRun.StartedAt.Format("2006-01-02 15:04:05"),
 			s.LastRun.Duration,
 			s.LastRun.Stats.Scanned, s.LastRun.Stats.ActionsApplied, s.LastRun.Stats.ActionsPendingReview)
 	}
@@ -309,7 +313,7 @@ func formatDriftResult(r *steward.DriftResult) string {
 	if len(r.UnreachableSources) > 0 {
 		sb.WriteString("\nUnreachable sources:\n")
 		for _, u := range r.UnreachableSources {
-			fmt.Fprintf(&sb, "  - %s: %s (%s)\n", u.MemoryID[:8], u.SourcePath, u.Reason)
+			fmt.Fprintf(&sb, "  - %s: %s (%s)\n", u.MemoryID[:min(8, len(u.MemoryID))], u.SourcePath, u.Reason)
 		}
 	}
 	return sb.String()
@@ -424,7 +428,7 @@ func formatKnowledgeTimeline(entries []memory.TimelineEntry, query string) strin
 	for i, e := range entries {
 		status := e.Status
 		if e.SupersededBy != "" {
-			status += " -> " + e.SupersededBy[:8]
+			status += " -> " + e.SupersededBy[:min(8, len(e.SupersededBy))]
 		}
 		fromStr := e.CreatedAt.Format("2006-01-02")
 		if e.ValidFrom != nil {

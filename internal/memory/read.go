@@ -522,11 +522,16 @@ func (ms *Store) flushAccessStats(ids []string) {
 		return
 	}
 
+	// T88 H1: copy-on-write. Recall/ListLightweight read these fields off
+	// snapshot pointers without the lock, so the published entry is replaced,
+	// not edited.
 	ms.mu.Lock()
 	for _, id := range successIDs {
 		if m, exists := ms.memories[id]; exists {
-			m.AccessedAt = now
-			m.AccessCount++
+			updated := m.cloneForUpdate()
+			updated.AccessedAt = now
+			updated.AccessCount++
+			ms.cacheSetLocked(updated)
 		}
 	}
 	ms.mu.Unlock()
