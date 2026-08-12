@@ -44,6 +44,50 @@ const (
 	ActionDeleteExpiredWorking ActionKind = "delete_expired_working"
 )
 
+// AllActionKinds lists every kind a scan can produce. It exists so the
+// resolution side can be checked for coverage (T104): ActionKind and the
+// resolution verbs are two independent string vocabularies, and nothing in the
+// compiler ties them together — a new kind with no verb able to carry it out
+// yields inbox items that cannot be resolved by their own intent, only
+// suppressed or deferred. TestEveryActionKindHasAResolution enforces the link.
+var AllActionKinds = []ActionKind{
+	ActionMergeDuplicates,
+	ActionMarkStale,
+	ActionPromoteCanonical,
+	ActionRefreshFreshness,
+	ActionFlagConflict,
+	ActionFlagContradiction,
+	ActionDeleteExpiredWorking,
+}
+
+// ResolutionAction is the verb an operator applies to an inbox item.
+type ResolutionAction string
+
+const (
+	ResolveMerge          ResolutionAction = "merge"
+	ResolveMarkOutdated   ResolutionAction = "mark_outdated"
+	ResolveMarkSuperseded ResolutionAction = "mark_superseded"
+	ResolvePromote        ResolutionAction = "promote"
+	ResolveVerify         ResolutionAction = "verify"
+	ResolveDelete         ResolutionAction = "delete"
+	ResolveSuppress       ResolutionAction = "suppress"
+	ResolveDefer          ResolutionAction = "defer"
+)
+
+// ResolutionForActionKind names the verb that carries out each scanned kind —
+// the action a reviewer would pick to say "yes, do what the scan proposed".
+// Other verbs remain available on any item; this map only records that at least
+// one verb exists per kind.
+var ResolutionForActionKind = map[ActionKind]ResolutionAction{
+	ActionMergeDuplicates:      ResolveMerge,
+	ActionMarkStale:            ResolveMarkOutdated,
+	ActionPromoteCanonical:     ResolvePromote,
+	ActionRefreshFreshness:     ResolveVerify,
+	ActionFlagConflict:         ResolveMarkSuperseded,
+	ActionFlagContradiction:    ResolveMarkSuperseded,
+	ActionDeleteExpiredWorking: ResolveDelete,
+}
+
 // ActionHandling indicates whether an action can be auto-applied.
 type ActionHandling string
 
@@ -78,7 +122,10 @@ type Policy struct {
 
 	// Working memory has a separate, more aggressive TTL because working entries
 	// are short-lived by design (transient task state, session-extracted noise).
-	WorkingMemoryTTLDays          int     `json:"working_memory_ttl_days"`          // 0 = disabled
+	// T106: ≤0 does NOT disable the TTL — EffectiveWorkingTTLDays falls back to
+	// 14 days. There is no value of this field that turns working-memory expiry
+	// off; use AutoDeleteExpiredWorking to stop acting on it.
+	WorkingMemoryTTLDays          int     `json:"working_memory_ttl_days"`          // ≤0 → fallback 14
 	WorkingDeleteImportanceCutoff float64 `json:"working_delete_importance_cutoff"` // entries above are sent to review, not auto-deleted
 
 	// Auto-apply rules — only applied when dry_run=false.
@@ -112,9 +159,14 @@ func (p Policy) EffectiveStaleDays() int {
 	return p.StaleDays
 }
 
-// EffectiveWorkingTTLDays returns WorkingMemoryTTLDays with a fallback to 14 days
-// if not set. 0 means "disabled" only when explicitly set via SetPolicy with
-// the field absent from JSON; new installations get 14 via DefaultPolicy.
+// EffectiveWorkingTTLDays returns WorkingMemoryTTLDays, falling back to 14 days
+// when it is ≤0.
+//
+// T106: the field's old comment claimed 0 meant "disabled". It never did — this
+// fallback fires for 0 exactly as it does for a negative value, so the TTL
+// cannot be switched off through this field at all. The claim cost debugging
+// time on 2026-08-12, when a policy reading working_memory_ttl_days: 0 sat next
+// to an inbox reporting "TTL: 14 days" and the pair read as a counter bug.
 func (p Policy) EffectiveWorkingTTLDays() int {
 	if p.WorkingMemoryTTLDays <= 0 {
 		return 14
@@ -151,6 +203,71 @@ func (p Policy) EffectiveAutoMergeContentSimilarity() float64 {
 		return 0.85
 	}
 	return p.AutoMergeRequireContentSimilarity
+}
+
+// PolicyPatch is the wire form of a `steward_policy set` request: every field
+// is optional, and only the fields actually present in the JSON are applied.
+//
+// T103: the tool used to unmarshal straight into Policy and save the result
+// whole. Policy's fields are value types, so "absent" and "zero" are the same
+// bit pattern — a caller sending one field silently reset every other one to
+// 0/false. That is how a live store lost its T72/T73 operator decisions
+// (auto_merge_duplicate_min_confidence → 0 disables auto-merge outright,
+// auto_delete_expired_working → false diverts the whole expiry stream into the
+// review queue) with no error and no audit trail. Pointers make the two states
+// distinguishable at the type level, which no amount of handler-side validation
+// can do.
+type PolicyPatch struct {
+	Mode             *PolicyMode `json:"mode,omitempty"`
+	ScheduleInterval *string     `json:"schedule_interval,omitempty"`
+	EventTriggers    *[]string   `json:"event_triggers,omitempty"`
+
+	DuplicateSimilarity    *float64 `json:"duplicate_similarity,omitempty"`
+	StaleDays              *int     `json:"stale_days,omitempty"`
+	CanonicalMinConfidence *float64 `json:"canonical_min_confidence,omitempty"`
+	CanonicalMinEvidence   *int     `json:"canonical_min_evidence,omitempty"`
+
+	WorkingMemoryTTLDays          *int     `json:"working_memory_ttl_days,omitempty"`
+	WorkingDeleteImportanceCutoff *float64 `json:"working_delete_importance_cutoff,omitempty"`
+
+	AutoMergeExactDuplicates   *bool `json:"auto_merge_exact_duplicates,omitempty"`
+	AutoMarkStaleBeyondDays    *int  `json:"auto_mark_stale_beyond_days,omitempty"`
+	AutoRefreshFreshnessScores *bool `json:"auto_refresh_freshness_scores,omitempty"`
+	AutoDeleteExpiredWorking   *bool `json:"auto_delete_expired_working,omitempty"`
+
+	AutoMarkStaleImportanceCutoff *float64 `json:"auto_mark_stale_importance_cutoff,omitempty"`
+
+	AutoMergeDuplicateMinConfidence   *float64 `json:"auto_merge_duplicate_min_confidence,omitempty"`
+	AutoMergeRequireContentSimilarity *float64 `json:"auto_merge_require_content_similarity,omitempty"`
+}
+
+// Apply returns p with the patch's present fields overwritten. A nil field
+// leaves the current value alone; a present field is applied verbatim, so an
+// explicit 0 or false is honoured.
+func (p Policy) Apply(patch PolicyPatch) Policy {
+	applyPtr(&p.Mode, patch.Mode)
+	applyPtr(&p.ScheduleInterval, patch.ScheduleInterval)
+	applyPtr(&p.EventTriggers, patch.EventTriggers)
+	applyPtr(&p.DuplicateSimilarity, patch.DuplicateSimilarity)
+	applyPtr(&p.StaleDays, patch.StaleDays)
+	applyPtr(&p.CanonicalMinConfidence, patch.CanonicalMinConfidence)
+	applyPtr(&p.CanonicalMinEvidence, patch.CanonicalMinEvidence)
+	applyPtr(&p.WorkingMemoryTTLDays, patch.WorkingMemoryTTLDays)
+	applyPtr(&p.WorkingDeleteImportanceCutoff, patch.WorkingDeleteImportanceCutoff)
+	applyPtr(&p.AutoMergeExactDuplicates, patch.AutoMergeExactDuplicates)
+	applyPtr(&p.AutoMarkStaleBeyondDays, patch.AutoMarkStaleBeyondDays)
+	applyPtr(&p.AutoRefreshFreshnessScores, patch.AutoRefreshFreshnessScores)
+	applyPtr(&p.AutoDeleteExpiredWorking, patch.AutoDeleteExpiredWorking)
+	applyPtr(&p.AutoMarkStaleImportanceCutoff, patch.AutoMarkStaleImportanceCutoff)
+	applyPtr(&p.AutoMergeDuplicateMinConfidence, patch.AutoMergeDuplicateMinConfidence)
+	applyPtr(&p.AutoMergeRequireContentSimilarity, patch.AutoMergeRequireContentSimilarity)
+	return p
+}
+
+func applyPtr[T any](dst *T, src *T) {
+	if src != nil {
+		*dst = *src
+	}
 }
 
 // DefaultPolicy returns the starting policy for new installations.

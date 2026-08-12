@@ -35,6 +35,13 @@ type Service struct {
 	logger   *zap.Logger
 	policyMu sync.RWMutex
 	policy   Policy
+
+	// runMu serializes scans (T88 H4). Two Run calls overlapping — the interval
+	// loop against a session_close trigger, or a background run against an
+	// explicit steward_run — scan the same corpus and each files its own inbox
+	// items, since CreateInboxItem does not deduplicate. Serializing makes the
+	// second scan observe the first one's results instead of racing them.
+	runMu sync.Mutex
 }
 
 // NewService creates a steward service and ensures the required database tables exist.
@@ -91,6 +98,27 @@ func (s *Service) SetPolicy(p Policy) error {
 	return nil
 }
 
+// PatchPolicy merges the given patch into the current policy and persists the
+// result. Fields absent from the patch keep their current values — see
+// PolicyPatch (T103) for why a whole-object SetPolicy is the wrong entry point
+// for a partial update.
+// The lock is held across the DB write so the read-modify-write is atomic:
+// two concurrent partial patches must not each merge onto the same stale base
+// and lose one another's fields — the very failure mode this type exists to
+// prevent. Policy writes are rare; readers block only for the duration of one
+// small UPSERT.
+func (s *Service) PatchPolicy(patch PolicyPatch) (Policy, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+
+	updated := s.policy.Apply(patch)
+	if err := SavePolicy(s.db, updated); err != nil {
+		return Policy{}, err
+	}
+	s.policy = updated
+	return updated, nil
+}
+
 // RunParams configures a steward run.
 type RunParams struct {
 	Scope   RunScope
@@ -104,6 +132,9 @@ func (s *Service) Run(ctx context.Context, params RunParams) (*Report, error) {
 	if s.Policy().Mode == PolicyModeOff {
 		return nil, fmt.Errorf("steward: stewardship is disabled (mode=off)")
 	}
+
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
 
 	startedAt := time.Now().UTC()
 
@@ -399,7 +430,8 @@ func (s *Service) ListInbox(q InboxQuery) ([]InboxItem, error) {
 //   - suppress         → no target mutation (dismiss a false positive)
 //   - defer            → move item to deferred, no target mutation
 func (s *Service) ResolveInbox(id, action, note, resolvedBy string) error {
-	if action == "defer" {
+	verb := ResolutionAction(action)
+	if verb == ResolveDefer {
 		return DeferInboxItem(s.db, id, note)
 	}
 
@@ -411,7 +443,7 @@ func (s *Service) ResolveInbox(id, action, note, resolvedBy string) error {
 		return fmt.Errorf("steward: inbox item %s not found or already resolved", id)
 	}
 
-	if err := s.executeResolution(context.Background(), action, item, note, resolvedBy); err != nil {
+	if err := s.executeResolution(context.Background(), verb, item, note, resolvedBy); err != nil {
 		return fmt.Errorf("steward: apply %q to inbox item %s: %w", action, id, err)
 	}
 
@@ -421,28 +453,33 @@ func (s *Service) ResolveInbox(id, action, note, resolvedBy string) error {
 // executeResolution applies an inbox resolution action to the item's target
 // memories. suppress is an intentional no-op (dismissing a false positive);
 // every other action mutates the store so the queue actually drains (T73).
-func (s *Service) executeResolution(ctx context.Context, action string, item *InboxItem, note, resolvedBy string) error {
+//
+// The parameter is typed (T104): it used to be a bare string compared against
+// literals, so the verbs recognised here and the ActionKind values a scan can
+// produce were two unrelated vocabularies. delete_expired_working fell in that
+// gap — the scanner filed it, and no branch here could carry it out.
+func (s *Service) executeResolution(ctx context.Context, action ResolutionAction, item *InboxItem, note, resolvedBy string) error {
 	reason := strings.TrimSpace(note)
 	if reason == "" {
 		reason = fmt.Sprintf("steward inbox resolve: %s", action)
 	}
 
 	switch action {
-	case "merge":
+	case ResolveMerge:
 		if len(item.TargetIDs) < 2 {
 			return fmt.Errorf("merge requires at least 2 target IDs, item has %d", len(item.TargetIDs))
 		}
 		_, err := s.store.MergeDuplicates(ctx, item.TargetIDs[0], item.TargetIDs[1:])
 		return err
 
-	case "mark_outdated":
+	case ResolveMarkOutdated:
 		if len(item.TargetIDs) == 0 {
 			return fmt.Errorf("mark_outdated requires a target ID")
 		}
 		_, err := s.store.MarkOutdated(ctx, item.TargetIDs[0], reason, "")
 		return err
 
-	case "mark_superseded":
+	case ResolveMarkSuperseded:
 		if len(item.TargetIDs) == 0 {
 			return fmt.Errorf("mark_superseded requires a target ID")
 		}
@@ -453,14 +490,14 @@ func (s *Service) executeResolution(ctx context.Context, action string, item *In
 		_, err := s.store.MarkOutdated(ctx, item.TargetIDs[0], reason, supersededBy)
 		return err
 
-	case "promote":
+	case ResolvePromote:
 		if len(item.TargetIDs) == 0 {
 			return fmt.Errorf("promote requires a target ID")
 		}
 		_, err := s.store.PromoteToCanonical(ctx, item.TargetIDs[0], resolvedBy, true)
 		return err
 
-	case "verify":
+	case ResolveVerify:
 		if len(item.TargetIDs) == 0 {
 			return fmt.Errorf("verify requires a target ID")
 		}
@@ -472,9 +509,27 @@ func (s *Service) executeResolution(ctx context.Context, action string, item *In
 			},
 		})
 
-	case "suppress":
+	case ResolveDelete:
+		// T104: the verb that carries out delete_expired_working. Without it the
+		// scanner could file that kind and nothing could act on it.
+		if len(item.TargetIDs) == 0 {
+			return fmt.Errorf("delete requires a target ID")
+		}
+		for _, id := range item.TargetIDs {
+			if err := s.store.Delete(ctx, id); err != nil {
+				return fmt.Errorf("delete %s: %w", id, err)
+			}
+		}
+		return nil
+
+	case ResolveSuppress:
 		// Dismiss a false positive (spurious contradiction/duplicate). Marking
 		// the item resolved IS the whole action — no target mutation.
+		return nil
+
+	case ResolveDefer:
+		// Handled by ResolveInbox before it gets here; listed so the switch
+		// covers every declared verb.
 		return nil
 
 	default:

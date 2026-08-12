@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/lifecycle"
 	"go.uber.org/zap"
 )
@@ -20,14 +21,17 @@ var archiveSweepInitialDelay = 15 * time.Second
 // zero-config install consolidates out of the box (T63). A non-existent
 // convention path is a harmless no-op — the sweeper stats each root and skips
 // the ones it cannot read.
-func (srv *MCPServer) resolveArchiveSweepRoots() []string {
-	if roots := srv.config.Lifecycle.TaskArchiveRoots; len(roots) > 0 {
+// The config is passed in rather than read off srv so that a caller running on
+// a background goroutine takes one consistent snapshot (T88 H3) instead of
+// racing ReloadConfig field by field.
+func resolveArchiveSweepRoots(cfg config.Config) []string {
+	if roots := cfg.Lifecycle.TaskArchiveRoots; len(roots) > 0 {
 		return append([]string(nil), roots...)
 	}
-	if srv.config.RootPath == "" {
+	if cfg.RootPath == "" {
 		return nil
 	}
-	return []string{filepath.Join(srv.config.RootPath, "tasks", "archive")}
+	return []string{filepath.Join(cfg.RootPath, "tasks", "archive")}
 }
 
 // runArchiveSweepOnce performs one background consolidation pass with the
@@ -37,13 +41,14 @@ func (srv *MCPServer) runArchiveSweepOnce(ctx context.Context) (*lifecycle.Sweep
 	if srv.memoryStore == nil {
 		return nil, nil
 	}
-	roots := srv.resolveArchiveSweepRoots()
+	snapshot := srv.configSnapshot()
+	roots := resolveArchiveSweepRoots(snapshot)
 	if len(roots) == 0 {
 		return nil, nil
 	}
 	cfg := lifecycle.ArchiveSweepConfig{
 		Roots:              roots,
-		SlugPattern:        srv.config.Lifecycle.TaskSlugPattern,
+		SlugPattern:        snapshot.Lifecycle.TaskSlugPattern,
 		PromotionThreshold: lifecycle.DefaultPromotionThreshold,
 		KeepTag:            lifecycle.KeepAfterArchiveTag,
 		AutoPromote:        true,

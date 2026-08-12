@@ -145,7 +145,7 @@ func stewardToolDefs() []tool {
 		},
 		tool{
 			Name:        "steward_policy",
-			Description: "Get or update the stewardship policy that controls detection thresholds, auto-apply rules, and scheduling",
+			Description: "Get or update the stewardship policy that controls detection thresholds, auto-apply rules, and scheduling. action=set applies a PARTIAL patch: only the fields you send are changed, the rest keep their current values. It returns the full resulting policy.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -153,11 +153,11 @@ func stewardToolDefs() []tool {
 						"type":        "string",
 						"enum":        []string{"get", "set"},
 						"default":     "get",
-						"description": "Get the current policy or set a new one",
+						"description": "Get the current policy or patch it",
 					},
 					"policy": map[string]any{
 						"type":        "object",
-						"description": "The new policy object (required when action=set)",
+						"description": "Patch object with the fields to change (required when action=set). Omitted fields are left untouched; a field sent as 0 or false is applied as that value.",
 					},
 				},
 			},
@@ -240,7 +240,7 @@ func stewardToolDefs() []tool {
 				"type": "object",
 				"properties": map[string]any{
 					"item_id": map[string]any{"type": "string", "description": "ID of the inbox item to resolve"},
-					"action":  map[string]any{"type": "string", "enum": []string{"merge", "mark_outdated", "mark_superseded", "promote", "verify", "suppress", "defer"}, "description": "Resolution action"},
+					"action":  map[string]any{"type": "string", "enum": []string{"merge", "mark_outdated", "mark_superseded", "promote", "verify", "delete", "suppress", "defer"}, "description": "Resolution action, applied immediately to target_ids: merge (MergeDuplicates), mark_outdated, mark_superseded (supersedes by target_ids[1]), promote (to canonical), verify (stamp last_verified_at), delete (removes the targets — the verb for expired working entries), suppress (dismiss as a false positive, no target change), defer (postpone, no target change)"},
 					"note":    map[string]any{"type": "string", "description": "Optional note explaining the resolution"},
 				},
 				"required": []string{"item_id", "action"},

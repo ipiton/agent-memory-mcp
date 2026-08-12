@@ -3,6 +3,7 @@ package steward
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,6 +21,13 @@ type Scheduler struct {
 	interval time.Duration
 	lastRun  time.Time
 	nextRun  time.Time
+
+	// runInFlight coalesces overlapping background triggers (T88 H4). A burst
+	// of session_close events used to spawn one goroutine each; with Run now
+	// serialized they would merely queue, so N identical full scans would still
+	// run back to back. A scan already under way covers the same corpus, so the
+	// overlapping trigger is dropped rather than deferred.
+	runInFlight atomic.Bool
 }
 
 // NewScheduler creates a scheduler for the given service.
@@ -144,6 +152,12 @@ func (s *Scheduler) runOnce(trigger string) {
 }
 
 func (s *Scheduler) runOnceWithCtx(ctx context.Context, trigger string) {
+	if !s.runInFlight.CompareAndSwap(false, true) {
+		s.logger.Info("steward run already in flight, trigger coalesced", zap.String("trigger", trigger))
+		return
+	}
+	defer s.runInFlight.Store(false)
+
 	s.logger.Info("steward scheduled run starting", zap.String("trigger", trigger))
 
 	report, err := s.service.Run(ctx, RunParams{

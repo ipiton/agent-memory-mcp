@@ -40,11 +40,15 @@ func parseMetadataJSON(raw sql.NullString) (map[string]string, error) {
 // SQL UPDATE and fn — the previous pattern called time.Now() in two places
 // per write, causing microsecond drift between SQL.updated_at and the
 // cached UpdatedAt field.
+// T88 H1: fn runs against a copy, which then replaces the published entry —
+// see cloneForUpdate for why mutating in place is unsafe even under the lock.
 func (ms *Store) updateCachedField(id string, fn func(*cachedMemory)) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if cm, ok := ms.memories[id]; ok && cm != nil {
-		fn(cm)
+		updated := cm.cloneForUpdate()
+		fn(updated)
+		ms.cacheSetLocked(updated)
 	}
 }
 

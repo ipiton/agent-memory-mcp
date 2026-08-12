@@ -1020,9 +1020,10 @@ func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool)
 	if v, ok := getBool(args, "auto_promote"); ok {
 		autoPromote = v
 	}
+	snapshot := srv.configSnapshot()
 	sweepCfg := lifecycle.ArchiveSweepConfig{
-		Roots:              srv.resolveArchiveSweepRoots(),
-		SlugPattern:        srv.config.Lifecycle.TaskSlugPattern,
+		Roots:              resolveArchiveSweepRoots(snapshot),
+		SlugPattern:        snapshot.Lifecycle.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: lifecycle.DefaultPromotionThreshold,
 		KeepTag:            lifecycle.KeepAfterArchiveTag,

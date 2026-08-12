@@ -500,6 +500,26 @@ func deriveCachedFields(cm *cachedMemory, metadata map[string]string, memType Ty
 	}
 }
 
+// cloneForUpdate returns a copy of cm for copy-on-write cache updates.
+//
+// T88 H1: readers (Recall, ListLightweight) take *cachedMemory pointers from a
+// snapshot and then dereference their fields WITHOUT holding ms.mu — the
+// snapshot copies pointers, not values. A published entry must therefore never
+// be mutated in place, even under mu.Lock: the lock excludes other writers, not
+// those lock-free readers. Cheap-update paths mutate this copy and swap it into
+// the map via cacheSetLocked instead.
+//
+// A shallow copy suffices. Tags, Metadata and Embedding are immutable once
+// published — every write path rebuilds them through toCachedMemory rather than
+// editing them — so sharing their backing storage adds no second mutation site.
+func (cm *cachedMemory) cloneForUpdate() *cachedMemory {
+	if cm == nil {
+		return nil
+	}
+	clone := *cm
+	return &clone
+}
+
 // cacheDeleteLocked removes a memory from the cache and context index.
 // Caller MUST hold ms.mu for writing.
 func (ms *Store) cacheDeleteLocked(id string) {

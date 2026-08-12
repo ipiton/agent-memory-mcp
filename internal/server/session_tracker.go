@@ -417,7 +417,22 @@ func (st *sessionTracker) saveCheckpoint(session *trackedSession) {
 		st.logWarn("background checkpoint dropped: worker pool busy")
 		return
 	}
+
+	// T88 M4: register with the WaitGroup under the same mutex that guards
+	// `closed`. The caller dropped st.mu before getting here, so Close could
+	// otherwise slip in between — pass its checkpointWG.Wait() drain, cancel
+	// st.ctx, and leave this goroutine to write the last checkpoint on a dead
+	// context. Now either Close waits for it, or it sees closed and declines
+	// (Close flushes the session itself).
+	st.mu.Lock()
+	if st.closed {
+		st.mu.Unlock()
+		<-st.checkpointSem
+		return
+	}
 	st.checkpointWG.Add(1)
+	st.mu.Unlock()
+
 	go func() {
 		defer st.checkpointWG.Done()
 		defer func() { <-st.checkpointSem }()
