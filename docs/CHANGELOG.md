@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Published to the official MCP Registry** — a `server.json` descriptor (`io.github.ipiton/agent-memory-mcp`) and a `publish-registry` job that runs after every tagged release. Namespace ownership is proven by GitHub OIDC, so no secret is involved; the job rewrites `version` in `server.json` from the tag before publishing, which keeps the tag the single source of truth. The release job's `contents: write` moved from workflow scope to job scope so the publish job can hold `id-token: write` without inheriting write access to the repository. The entry currently carries no `packages` block: the binaries ship as GoReleaser tarballs and a Homebrew tap, neither of which is a registry-supported package type, so registry clients get the repository pointer rather than an install command.
+
 ## [0.9.2] - 2026-08-11
 
 Retrieval-correctness release. Two silent-loss bugs are fixed: whole markdown
