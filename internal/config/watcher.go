@@ -84,13 +84,21 @@ func (w *Watcher) run() {
 	}
 }
 
-// LoadFromFile loads config from a specific .env file in isolation.
-// It temporarily clears MCP_* env vars, loads the file, reads config, then restores.
+// LoadFromFile loads config from a specific .env file.
+//
+// T89 H5: the file is parsed fresh on every call and consulted only where the
+// real environment is silent, so a reload genuinely observes the file's current
+// contents. The previous implementation pushed values into the process
+// environment and skipped keys that were already set — which, after the first
+// load, meant all of them. Its godoc claimed it cleared and restored MCP_* vars;
+// it never did, and that was the whole defect: SIGHUP and the file watcher
+// reported a successful reload while the config they computed was the old one.
 func LoadFromFile(path string) (Config, error) {
-	if err := loadDotEnv(path); err != nil {
+	dotenv, err := parseDotEnvFile(path)
+	if err != nil {
 		return Config{}, err
 	}
-	ev, err := readEnvValues()
+	ev, err := readEnvValues(dotenv)
 	if err != nil {
 		return Config{}, err
 	}

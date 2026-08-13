@@ -176,22 +176,35 @@ func TestGetStringStrict(t *testing.T) {
 	}
 }
 
-// TestGetImportanceHonestContract pins Round 3 L29: a valid in-range float
-// returns (v, true); missing/wrong-type/out-of-range returns (0, false) so the
-// caller applies its own default instead of the value being silently swallowed.
+// TestGetImportanceHonestContract pins the contract after T89 M9. Round 3 L29
+// established that an invalid value must not be silently swallowed; it stopped
+// half way, folding "absent" and "invalid" into the same (0, false) so the
+// caller applied its default either way. That left store_memory rejecting
+// importance=1.5 while store_decision accepted it and quietly stored something
+// else. Absent still yields the caller's default; invalid is now an error.
 func TestGetImportanceHonestContract(t *testing.T) {
-	if v, ok := getImportance(map[string]any{"importance": 0.7}); !ok || v != 0.7 {
-		t.Errorf("valid: got (%v, %v), want (0.7, true)", v, ok)
+	v, ok, err := getImportance(map[string]any{"importance": 0.7})
+	if err != nil || !ok || v != 0.7 {
+		t.Errorf("valid: got (%v, %v, %v), want (0.7, true, nil)", v, ok, err)
 	}
-	cases := map[string]map[string]any{
-		"missing":      {},
+
+	if v, ok, err := getImportance(map[string]any{}); err != nil || ok || v != 0 {
+		t.Errorf("missing: got (%v, %v, %v), want (0, false, nil) so the caller's default applies", v, ok, err)
+	}
+
+	invalid := map[string]map[string]any{
 		"out of range": {"importance": 1.5},
 		"negative":     {"importance": -0.1},
 		"wrong type":   {"importance": "0.7"},
 	}
-	for name, args := range cases {
-		if v, ok := getImportance(args); ok || v != 0 {
-			t.Errorf("%s: got (%v, %v), want (0, false)", name, v, ok)
+	for name, args := range invalid {
+		v, ok, err := getImportance(args)
+		if err == nil {
+			t.Errorf("%s: got (%v, %v, nil), want an invalid-params error", name, v, ok)
+			continue
+		}
+		if err.Code != rpcErrInvalidParams {
+			t.Errorf("%s: error code = %d, want %d", name, err.Code, rpcErrInvalidParams)
 		}
 	}
 }

@@ -41,6 +41,18 @@ func buildDSN(dbPath string) string {
 	return dbPath + "?" + q.Encode()
 }
 
+// buildReadOnlyDSN is the reader's variant: busy_timeout still matters (a
+// reader contends with the writer's checkpoint), but journal_mode is not set —
+// switching the journal is a write, and a read-only connection reads a WAL
+// database perfectly well without asking for it. The file: prefix is required
+// for the driver to honour mode=ro.
+func buildReadOnlyDSN(dbPath string) string {
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Add("_pragma", "busy_timeout(5000)")
+	return "file:" + dbPath + "?" + q.Encode()
+}
+
 // OpenSQLite opens a SQLite database at dbPath with the standard pragmas
 // (busy_timeout=5000, journal_mode=WAL, synchronous=NORMAL) applied to every
 // pooled connection via the DSN, and BEGIN IMMEDIATE transaction locking.
@@ -68,5 +80,27 @@ func OpenSQLite(dbPath string, logger *zap.Logger) (*sql.DB, error) {
 		)
 	}
 
+	return db, nil
+}
+
+// OpenSQLiteReadOnly opens dbPath for reading only, with busy_timeout applied
+// per pooled connection.
+//
+// T89 M11: the hooks context-inject path used to build its DSN by string
+// concatenation — `path + "?_journal_mode=WAL&mode=ro"`. modernc.org/sqlite
+// does not recognise `_journal_mode` (its knob is the `_pragma` parameter), so
+// that DSN set no journal mode and, more importantly, no busy_timeout: the
+// reader returned SQLITE_BUSY instantly whenever it met a writer. That is the
+// exact shape of the incident that produced this package.
+func OpenSQLiteReadOnly(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", buildReadOnlyDSN(dbPath))
+	if err != nil {
+		return nil, fmt.Errorf("open %s read-only: %w", dbPath, err)
+	}
+	// sql.Open is lazy; force a connection so a bad path fails here.
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open %s read-only: %w", dbPath, err)
+	}
 	return db, nil
 }

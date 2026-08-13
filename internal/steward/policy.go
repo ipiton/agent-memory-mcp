@@ -39,13 +39,22 @@ func LoadPolicy(db *sql.DB) (Policy, error) {
 	return p, nil
 }
 
-// SavePolicy writes the policy to the database.
-func SavePolicy(db *sql.DB, p Policy) error {
+// SavePolicy writes the policy to the database and returns it with the
+// persisted UpdatedAt stamp.
+//
+// T108: the stamp used to be applied to this function's own copy, so callers
+// stored the un-stamped original in memory and `steward_policy get` reported an
+// UpdatedAt older than the row on disk until the service restarted. That is the
+// one field an operator reads to answer "when was this policy last touched" —
+// it was the evidence that diagnosed T103 — so a stale value there is worse
+// than none. Measured live on 2026-08-13: get said 08-12T13:22, the row said
+// 08-13T19:53.
+func SavePolicy(db *sql.DB, p Policy) (Policy, error) {
 	p.UpdatedAt = time.Now().UTC()
 
 	data, err := json.Marshal(p)
 	if err != nil {
-		return fmt.Errorf("steward: marshal policy: %w", err)
+		return Policy{}, fmt.Errorf("steward: marshal policy: %w", err)
 	}
 
 	_, err = db.Exec(`
@@ -54,7 +63,7 @@ func SavePolicy(db *sql.DB, p Policy) error {
 		ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
 	`, policyKey, string(data), p.UpdatedAt)
 	if err != nil {
-		return fmt.Errorf("steward: save policy: %w", err)
+		return Policy{}, fmt.Errorf("steward: save policy: %w", err)
 	}
-	return nil
+	return p, nil
 }

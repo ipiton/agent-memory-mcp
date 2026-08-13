@@ -40,17 +40,29 @@ func setResolvedConfigPath(p string) {
 	configPathMu.Unlock()
 }
 
-// loadDotEnvFiles loads .env files from a chain of known paths.
-// If explicitPath is non-empty, only that file is loaded (no chain).
-// Each file only fills in values not already set in the environment.
-func loadDotEnvFiles(explicitPath string) error {
+// loadDotEnvFiles reads the .env chain and returns the merged values.
+// If explicitPath is non-empty, only that file is read (no chain).
+//
+// T89 H5/M14: this used to push the values into the process environment with
+// os.Setenv, skipping any key already present. On the first load that is the
+// intended precedence — a real environment variable beats the file. On the
+// SECOND load it was fatal: every key was now "already present" because the
+// first load had set it, so a reload re-read nothing, the config compared equal
+// to itself, and SIGHUP/the watcher reported success while applying nothing.
+// The file is now parsed into a map the caller consults after the real
+// environment, which keeps the precedence, makes reload actually re-read, and
+// removes the os.Setenv race between the watcher and the signal handler.
+//
+// Earlier files in the chain still win over later ones.
+func loadDotEnvFiles(explicitPath string) (map[string]string, error) {
 	if explicitPath != "" {
 		setResolvedConfigPath(explicitPath)
-		return loadDotEnv(explicitPath)
+		return parseDotEnvFile(explicitPath)
 	}
 
 	// Chain: CWD .env → XDG config → Homebrew prefix
 	resolved := ""
+	merged := map[string]string{}
 	paths := collectConfigPaths()
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
@@ -59,13 +71,19 @@ func loadDotEnvFiles(explicitPath string) error {
 		if resolved == "" {
 			resolved = p
 		}
-		if err := loadDotEnv(p); err != nil {
+		values, err := parseDotEnvFile(p)
+		if err != nil {
 			setResolvedConfigPath(resolved)
-			return err
+			return nil, err
+		}
+		for k, v := range values {
+			if _, seen := merged[k]; !seen {
+				merged[k] = v
+			}
 		}
 	}
 	setResolvedConfigPath(resolved)
-	return nil
+	return merged, nil
 }
 
 // collectConfigPaths returns the ordered list of config file paths to try.
@@ -101,13 +119,18 @@ func collectConfigPaths() []string {
 	return paths
 }
 
-func loadDotEnv(path string) error {
+// parseDotEnvFile reads a .env file into a map. A missing file is not an error
+// (an installation may legitimately configure everything through the real
+// environment). It performs no os.Setenv — see loadDotEnvFiles.
+func parseDotEnvFile(path string) (map[string]string, error) {
+	values := map[string]string{}
+
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return values, nil
 		}
-		return fmt.Errorf("open %s: %w", path, err)
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -130,19 +153,16 @@ func loadDotEnv(path string) error {
 			continue
 		}
 
-		if current := strings.TrimSpace(os.Getenv(key)); current != "" {
+		if _, seen := values[key]; seen {
 			continue
 		}
-
-		if err := os.Setenv(key, parseDotEnvValue(value)); err != nil {
-			return fmt.Errorf("set %s from %s: %w", key, path, err)
-		}
+		values[key] = parseDotEnvValue(value)
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
+		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	return nil
+	return values, nil
 }
 
 func parseDotEnvValue(value string) string {

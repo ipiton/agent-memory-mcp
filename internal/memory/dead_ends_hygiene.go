@@ -30,10 +30,10 @@ type StaleDeadEnd struct {
 // a CLI wants to show ALL dead_ends with their ages and let the operator
 // pick visually.
 func (ms *Store) StaleDeadEnds(ctx context.Context, olderThan time.Duration) ([]*StaleDeadEnd, error) {
-	all, err := ms.List(ctx, Filters{}, 0)
-	if err != nil {
-		return nil, err
-	}
+	// T89 M2: the report needs metadata and timestamps, both cache-resident
+	// since T52. List would round-trip the whole corpus through SQL and load
+	// every embedding blob to produce a list of dead ends.
+	all := ms.ListLightweight(Filters{})
 
 	now := ms.now()
 	var out []*StaleDeadEnd

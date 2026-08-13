@@ -116,3 +116,41 @@ func TestEffectiveWorkingTTLHasNoDisableValue(t *testing.T) {
 		t.Errorf("EffectiveWorkingTTLDays(7) = %d, want 7", got)
 	}
 }
+
+// T108. The persisted UpdatedAt must be the one callers see. SavePolicy stamps
+// the time itself, and used to stamp its own copy — so the in-memory policy
+// (and every steward_policy get until the next restart) reported a stamp older
+// than the row on disk.
+func TestPatchPolicyStampMatchesPersistedRow(t *testing.T) {
+	store := newTestStore(t)
+	svc := newTestService(t, store)
+
+	if err := svc.SetPolicy(DefaultPolicy()); err != nil {
+		t.Fatalf("SetPolicy: %v", err)
+	}
+
+	var patch PolicyPatch
+	if err := json.Unmarshal([]byte(`{"stale_days":45}`), &patch); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	returned, err := svc.PatchPolicy(patch)
+	if err != nil {
+		t.Fatalf("PatchPolicy: %v", err)
+	}
+
+	inMemory := svc.Policy()
+	persisted, err := LoadPolicy(store.DB())
+	if err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+
+	if !returned.UpdatedAt.Equal(persisted.UpdatedAt) {
+		t.Errorf("returned UpdatedAt = %s, persisted = %s", returned.UpdatedAt, persisted.UpdatedAt)
+	}
+	if !inMemory.UpdatedAt.Equal(persisted.UpdatedAt) {
+		t.Errorf("in-memory UpdatedAt = %s, persisted = %s — a get would report a stale stamp", inMemory.UpdatedAt, persisted.UpdatedAt)
+	}
+	if inMemory.StaleDays != 45 {
+		t.Errorf("stale_days = %d, want 45", inMemory.StaleDays)
+	}
+}

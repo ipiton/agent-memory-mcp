@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
@@ -77,7 +78,10 @@ func runContextInject(args []string) error {
 		return err
 	}
 
-	db, err := sql.Open("sqlite", cfg.Memory.DBPath+"?_journal_mode=WAL&mode=ro")
+	// T89 M11: goes through dbutil so the reader gets busy_timeout. The old
+	// hand-built DSN used `_journal_mode`, which this driver ignores, and set no
+	// busy timeout at all.
+	db, err := dbutil.OpenSQLiteReadOnly(cfg.Memory.DBPath)
 	if err != nil {
 		return err
 	}
