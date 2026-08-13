@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -20,17 +19,18 @@ import (
 const autoSessionOrigin = "background_auto"
 
 type sessionTracker struct {
-	store              *memory.Store
-	closeService       *sessionclose.Service
-	fileLogger         *logger.FileLogger
-	idleTimeout        time.Duration
-	checkpointInterval time.Duration
-	minEvents          int
-	dedupCfg           hooks.DedupConfig
-	now                func() time.Time
-	ctx                context.Context
-	cancel             context.CancelFunc
-	onSessionClose     func() // optional callback after session close
+	store               *memory.Store
+	closeService        *sessionclose.Service
+	fileLogger          *logger.FileLogger
+	idleTimeout         time.Duration
+	checkpointInterval  time.Duration
+	minEvents           int
+	suppressReviewQueue bool
+	dedupCfg            hooks.DedupConfig
+	now                 func() time.Time
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	onSessionClose      func() // optional callback after session close
 
 	mu      sync.Mutex
 	timer   *time.Timer
@@ -96,12 +96,13 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionTracker{
-		store:              store,
-		closeService:       sessionclose.New(store),
-		fileLogger:         fileLogger,
-		idleTimeout:        cfg.Session.IdleTimeout,
-		checkpointInterval: cfg.Session.CheckpointInterval,
-		minEvents:          cfg.Session.MinEvents,
+		store:               store,
+		closeService:        sessionclose.New(store),
+		fileLogger:          fileLogger,
+		idleTimeout:         cfg.Session.IdleTimeout,
+		checkpointInterval:  cfg.Session.CheckpointInterval,
+		minEvents:           cfg.Session.MinEvents,
+		suppressReviewQueue: cfg.Session.SuppressReviewQueueWrites,
 		dedupCfg: hooks.NewDedupConfig(
 			cfg.HooksDedup.Disabled,
 			cfg.HooksDedup.Threshold,
@@ -479,11 +480,13 @@ func (st *sessionTracker) persistReviewQueue(ctx context.Context, boundary strin
 		return nil
 	}
 
-	// Env-controlled suppression: when SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES=1, skip persisting
-	// auto-generated review queue items as working memories. They accumulate as noise
-	// (typically 5-10 per session_close, low-importance 0.35–0.55) and pollute recall.
-	// Caller can still get them via close_session result.Actions in-memory.
-	if os.Getenv("SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES") == "1" {
+	// Config-controlled suppression: when SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES=1,
+	// skip persisting auto-generated review queue items as working memories. They
+	// accumulate as noise (typically 5-10 per session_close, low-importance
+	// 0.35–0.55) and pollute recall. Caller can still get them via close_session
+	// result.Actions in-memory. Resolved at config load (T89 H5) rather than read
+	// from the process environment, which stopped carrying .env values.
+	if st.suppressReviewQueue {
 		return nil
 	}
 

@@ -46,10 +46,9 @@ func suggestedAction(reason string) string {
 }
 
 func (ms *Store) ConflictsReport(ctx context.Context, filters Filters, limit int) ([]ConflictReportItem, error) {
-	memories, err := ms.List(ctx, filters, 0)
-	if err != nil {
-		return nil, err
-	}
+	// T89 M2: cache-resident fields only (metadata, timestamps) — no need to
+	// pull the full embedding corpus through SQL.
+	memories := ms.ListLightweight(filters)
 
 	groups := make(map[string][]*Memory)
 	for _, mem := range memories {
@@ -174,10 +173,8 @@ func ToCanonicalKnowledge(m *Memory, tm *trust.Metadata) *CanonicalKnowledge {
 
 // ListCanonical returns canonical knowledge entries projected from canonical memories.
 func (ms *Store) ListCanonical(ctx context.Context, filters Filters, limit int) ([]*CanonicalKnowledge, error) {
-	memories, err := ms.List(ctx, filters, 0)
-	if err != nil {
-		return nil, err
-	}
+	// T89 M2: see ConflictsReport — same corpus, same cache-resident fields.
+	memories := ms.ListLightweight(filters)
 
 	now := ms.now()
 	result := make([]*CanonicalKnowledge, 0)

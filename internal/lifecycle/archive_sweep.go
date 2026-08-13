@@ -267,6 +267,12 @@ func (sw *Sweeper) SweepArchive(ctx context.Context, cfg ArchiveSweepConfig) (*S
 		}
 
 		for _, entry := range entries {
+			// T89 M6: a sweep over a large archive is long-running and used to
+			// ignore cancellation entirely, so shutdown had to wait it out and
+			// the writes it kept issuing ran on an already-cancelled context.
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("archive-sweep: %w", err)
+			}
 			if !entry.IsDir() {
 				continue
 			}
@@ -387,6 +393,11 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 	result.PerSlug[slug] = stats
 
 	for _, m := range memories {
+		// T89 M6: same reason as the slug loop — a slug with thousands of
+		// entries must not outlive a cancelled context.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("sweep slug %q: %w", slug, err)
+		}
 		if m == nil {
 			continue
 		}

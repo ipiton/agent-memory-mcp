@@ -258,7 +258,11 @@ func (s *MCPServer) storeEngineeringMemory(args map[string]any, entityType memor
 	severity := mustString(args, "severity")
 	status := mustString(args, "status")
 	importance := defaultImportance
-	if v, ok := getImportance(args); ok {
+	v, ok, impErr := getImportance(args)
+	if impErr != nil {
+		return nil, impErr
+	}
+	if ok {
 		importance = v
 	}
 	mem := &memory.Memory{
@@ -806,15 +810,30 @@ func joinContentLines(lines ...string) string {
 	return strings.Join(filtered, "\n")
 }
 
-// getImportance returns the caller-supplied importance and whether a valid
-// explicit value was present. A missing key, non-float value, or an out-of-range
-// value ([0,1]) yields ok=false so the caller applies its own default rather
-// than having invalid input silently swallowed (Round 3 L29 — honest contract).
-func getImportance(args map[string]any) (float64, bool) {
-	if importance, ok := args["importance"].(float64); ok && importance >= 0 && importance <= 1 {
-		return importance, true
+// getImportance returns the caller-supplied importance, or an rpcError when the
+// key is present but unusable.
+//
+// T89 M9: it used to fold "absent" and "present but out of range" into a single
+// ok=false, so `store_memory` rejected importance=5 with an invalid-params
+// error while `store_decision` and its siblings accepted the same argument and
+// silently substituted their own default. One contract, two answers, and the
+// engineering path's answer was the one that discarded caller intent without
+// saying so. Absent still means "use the default"; invalid is now an error on
+// both paths.
+func getImportance(args map[string]any) (float64, bool, *rpcError) {
+	raw, present := args["importance"]
+	if !present || raw == nil {
+		return 0, false, nil
 	}
-	return 0, false
+	importance, ok := raw.(float64)
+	if !ok {
+		return 0, false, &rpcError{Code: rpcErrInvalidParams, Message: "importance must be a number between 0.0 and 1.0"}
+	}
+	normalized, err := userio.NormalizeImportance(importance, 0)
+	if err != nil {
+		return 0, false, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+	}
+	return normalized, true, nil
 }
 
 func boundedLimit(args map[string]any, defaultValue int, maxValue int) int {

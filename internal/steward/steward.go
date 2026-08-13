@@ -89,11 +89,12 @@ func (s *Service) Policy() Policy {
 
 // SetPolicy updates and persists the stewardship policy.
 func (s *Service) SetPolicy(p Policy) error {
-	if err := SavePolicy(s.db, p); err != nil {
+	saved, err := SavePolicy(s.db, p)
+	if err != nil {
 		return err
 	}
 	s.policyMu.Lock()
-	s.policy = p
+	s.policy = saved
 	s.policyMu.Unlock()
 	return nil
 }
@@ -111,12 +112,12 @@ func (s *Service) PatchPolicy(patch PolicyPatch) (Policy, error) {
 	s.policyMu.Lock()
 	defer s.policyMu.Unlock()
 
-	updated := s.policy.Apply(patch)
-	if err := SavePolicy(s.db, updated); err != nil {
+	saved, err := SavePolicy(s.db, s.policy.Apply(patch))
+	if err != nil {
 		return Policy{}, err
 	}
-	s.policy = updated
-	return updated, nil
+	s.policy = saved
+	return saved, nil
 }
 
 // RunParams configures a steward run.

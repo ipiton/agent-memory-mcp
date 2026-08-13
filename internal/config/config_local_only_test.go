@@ -84,19 +84,36 @@ func TestLoadFromEnvEmbeddingTuningOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvEmbeddingTimeoutGarbageFallsBack(t *testing.T) {
+// T89 M12 inverts what this test used to assert. Durations were read as raw
+// strings and parsed after the fail-fast scan, so a typo fell back to the
+// default — the same silent-default failure M13 removed for numbers and bools,
+// left in place for durations. A mistyped MCP_EMBEDDING_TIMEOUT now fails the
+// load like a mistyped MCP_HTTP_PORT does.
+func TestLoadFromEnvRejectsUnparseableDuration(t *testing.T) {
 	hermeticDotEnv(t)
 	t.Setenv("MCP_ROOT", ".")
-	// Durations are read as strings (EnvOrDefault) and parsed later, so garbage
-	// still falls back — M13 fail-fast covers only numeric/bool env vars.
 	t.Setenv("MCP_EMBEDDING_TIMEOUT", "garbage")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv accepted MCP_EMBEDDING_TIMEOUT=garbage, want a fail-fast error")
+	}
+	if !strings.Contains(err.Error(), "MCP_EMBEDDING_TIMEOUT") {
+		t.Fatalf("error = %v, want it to name the offending variable", err)
+	}
+}
+
+func TestLoadFromEnvValidDurationIsApplied(t *testing.T) {
+	hermeticDotEnv(t)
+	t.Setenv("MCP_ROOT", ".")
+	t.Setenv("MCP_EMBEDDING_TIMEOUT", "12s")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatalf("LoadFromEnv: %v", err)
 	}
-	if cfg.Embeddings.Timeout != 5*time.Second {
-		t.Fatalf("EmbeddingTimeout = %s, want fallback 5s", cfg.Embeddings.Timeout)
+	if cfg.Embeddings.Timeout != 12*time.Second {
+		t.Fatalf("EmbeddingTimeout = %s, want 12s", cfg.Embeddings.Timeout)
 	}
 }
 

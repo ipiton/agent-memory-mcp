@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,7 +75,14 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
+	return ms.updateLocked(ctx, id, updates)
+}
 
+// updateLocked performs the update assuming the caller already holds writeMu.
+// Compound operations (MarkOutdated, PromoteToCanonical) hold the lock across
+// their whole read-modify-write so a concurrent writer cannot slip in between
+// their Get and this call — T89 H2.
+func (ms *Store) updateLocked(ctx context.Context, id string, updates Update) error {
 	current, err := ms.Get(id)
 	if err != nil {
 		return err
@@ -186,15 +194,39 @@ func (ms *Store) Delete(ctx context.Context, id string) error {
 }
 
 // MarkOutdated archives a memory from normal operational use while keeping it queryable.
+//
+// T89 H2. This used to run as four independent writes — Update, then
+// SetTemporalFields on the retired entry, then SetTemporalFields and
+// IncrementReferencedByCount on the successor — each taking writeMu on its own,
+// with the initial Get taken outside any lock. Two consequences, both observed
+// as possible by construction:
+//
+//   - Lost update: a concurrent writer could commit between the Get and the
+//     Update and have its change silently overwritten.
+//   - Split-brain supersession: a failure after the second write left an entry
+//     marked superseded while the successor knew nothing about it, or the
+//     reverse. Nothing retried and nothing rolled back.
+//
+// Now the whole operation holds writeMu, re-reads under it, and commits both
+// rows in one transaction. A dangling superseded_by (successor not in the
+// store) is still tolerated — the pointer is recorded on the retired entry and
+// the successor half is skipped, as before. What is no longer tolerated is a
+// half-written pair.
 func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, supersededBy string) (*MarkOutdatedResult, error) {
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+
 	mem, err := ms.Get(id)
 	if err != nil {
 		return nil, err
 	}
 
+	now := ms.now()
+	nowUTC := now.UTC()
+	supersededBy = strings.TrimSpace(supersededBy)
+
 	metadata := copyMetadata(mem.Metadata)
 	status := "outdated"
-	supersededBy = strings.TrimSpace(supersededBy)
 	if supersededBy != "" {
 		status = "superseded"
 		metadata["superseded_by"] = supersededBy
@@ -204,40 +236,82 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 	}
 	metadata["status"] = status
 	metadata["archived"] = "true"
-	metadata["last_verified_at"] = ms.now().UTC().Format(time.RFC3339)
+	metadata["last_verified_at"] = nowUTC.Format(time.RFC3339)
 
 	importance := mem.Importance
 	if importance > 0.25 {
 		importance = 0.25
 	}
 
-	if err := ms.Update(ctx, id, Update{
-		Importance: &importance,
-		Metadata:   metadata,
-	}); err != nil {
+	retired := copyMemory(mem)
+	retired.Importance = importance
+	retired.Metadata = NormalizeMetadata(metadata)
+	retired.ValidUntil = &nowUTC
+	if supersededBy != "" {
+		retired.SupersededBy = supersededBy
+	}
+	retired.UpdatedAt = now
+	if err := retired.Validate(); err != nil {
 		return nil, err
 	}
 
-	// Build supersession chain: set temporal fields on old entry.
-	now := ms.now().UTC()
-	if err := ms.SetTemporalFields(ctx, id, nil, &now, supersededBy, ""); err != nil {
-		// Non-fatal: temporal fields are supplementary.
-		ms.logger.Warn("Failed to set temporal fields on outdated entry", zap.String("id", id), zap.Error(err))
+	// Link the successor back and bump its referenced_by_count so the T48
+	// semantic→character "by refs" rule eventually fires. A successor that
+	// cannot be read is not an error: the supersession still stands on the
+	// retired entry.
+	var successor *Memory
+	if supersededBy != "" {
+		s, sErr := ms.Get(supersededBy)
+		if sErr != nil {
+			ms.logger.Warn("Superseding entry not found; recording supersession without back-link",
+				zap.String("id", supersededBy), zap.Error(sErr))
+		} else {
+			successor = copyMemory(s)
+			successor.ValidFrom = &nowUTC
+			successor.Replaces = id
+			successorMeta := copyMetadata(successor.Metadata)
+			if successorMeta == nil {
+				successorMeta = make(map[string]string)
+			}
+			successorMeta[MetadataReferencedByCount] = strconv.Itoa(referencedByCountFromMetadata(successorMeta) + 1)
+			successor.Metadata = NormalizeMetadata(successorMeta)
+			successor.UpdatedAt = now
+			if err := successor.Validate(); err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	// If superseding entry exists, link it back and bump its
-	// referenced_by_count so the T48 semantic→character "by refs" rule
-	// eventually fires. Best-effort — logging Warn on failure does not
-	// undo the supersession.
-	if supersededBy != "" {
-		if err := ms.SetTemporalFields(ctx, supersededBy, &now, nil, "", id); err != nil {
-			ms.logger.Warn("Failed to set temporal fields on superseding entry", zap.String("id", supersededBy), zap.Error(err))
-		}
-		if err := ms.IncrementReferencedByCount(ctx, supersededBy); err != nil {
-			ms.logger.Warn("Failed to increment referenced_by_count on superseding entry",
-				zap.String("id", supersededBy), zap.Error(err))
+	tx, err := ms.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("mark outdated: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := updateMemoryRow(tx, retired); err != nil {
+		return nil, err
+	}
+	if successor != nil {
+		if err := updateMemoryRow(tx, successor); err != nil {
+			return nil, err
 		}
 	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("mark outdated: commit: %w", err)
+	}
+
+	ms.mu.Lock()
+	ms.cacheSetLocked(toCachedMemory(retired))
+	if successor != nil {
+		ms.cacheSetLocked(toCachedMemory(successor))
+	}
+	ms.mu.Unlock()
+
+	ms.logger.Info("Memory marked outdated",
+		zap.String("id", id),
+		zap.String("status", status),
+		zap.String("superseded_by", supersededBy),
+	)
 
 	return &MarkOutdatedResult{
 		ID:           id,
@@ -265,7 +339,15 @@ var ErrPromotionRequiresVerification = errors.New("promotion to canonical requir
 // ErrPromotionRequiresVerification. When verified is true (a human review via
 // the MCP tool or steward inbox), promotion proceeds and stamps
 // provenance=verified.
+// T89 H2/M3: holds writeMu across the whole read-modify-write (the Get used to
+// sit outside any lock, so a concurrent writer's change could be overwritten),
+// and lifts the sediment layer along with the canonical flag — the two axes
+// used to drift apart, leaving entries that were canonical on one axis and
+// surface-level on the other.
 func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string, verified bool) (*PromoteToCanonicalResult, error) {
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+
 	mem, err := ms.Get(id)
 	if err != nil {
 		return nil, err
@@ -297,12 +379,29 @@ func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string
 		importance = 0.95
 	}
 
-	if err := ms.Update(ctx, id, Update{
-		Importance: &importance,
-		Metadata:   metadata,
-	}); err != nil {
+	promoted := copyMemory(mem)
+	promoted.Importance = importance
+	promoted.Metadata = NormalizeMetadata(metadata)
+	// M3: canonical knowledge is load-bearing by definition, so it belongs in
+	// the character layer. The sediment cycle proposes this transition only from
+	// `semantic` and only as a non-auto suggestion, so an entry promoted from
+	// surface or episodic stayed there indefinitely — canonical on one axis,
+	// evictable on the other.
+	promoted.SedimentLayer = string(LayerCharacter)
+	promoted.UpdatedAt = ms.now()
+	if err := promoted.Validate(); err != nil {
 		return nil, err
 	}
+
+	if err := updateMemoryRow(ms.db, promoted); err != nil {
+		return nil, err
+	}
+
+	ms.mu.Lock()
+	ms.cacheSetLocked(toCachedMemory(promoted))
+	ms.mu.Unlock()
+
+	ms.logger.Info("Memory promoted to canonical", zap.String("id", id), zap.Bool("verified", verified))
 
 	resultOwner := strings.TrimSpace(owner)
 	if resultOwner == "" {

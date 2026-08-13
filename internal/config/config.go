@@ -135,6 +135,15 @@ type SessionConfig struct {
 	IdleTimeout        time.Duration // Idle timeout before auto-close
 	CheckpointInterval time.Duration // Periodic raw checkpoint interval during active sessions
 	MinEvents          int           // Minimum observed tool events before auto-close
+
+	// SuppressReviewQueueWrites mirrors SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES.
+	// T89 H5: it used to be read straight from the process environment by
+	// session_tracker, which worked only because the .env loader exported every
+	// key with os.Setenv. Now that the loader no longer mutates the environment,
+	// the switch has to travel through the config like everything else —
+	// otherwise setting it in config.env (the only way to set it for the
+	// launchd service) would quietly stop working.
+	SuppressReviewQueueWrites bool
 }
 
 // StewardConfig holds knowledge-stewardship settings.
@@ -241,7 +250,7 @@ type envValues struct {
 	tripleExtractorBaseURL           string
 	tripleExtractorAPIKey            string
 	tripleExtractorModel             string
-	tripleExtractorTimeout           string
+	tripleExtractorTimeout           time.Duration
 	jinaAPIKey                       string
 	openaiAPIKey                     string
 	openaiBaseURL                    string
@@ -251,22 +260,24 @@ type envValues struct {
 	llamaCPPModel                    string
 	embeddingDimension               int
 	embeddingMode                    string
-	embeddingTimeout                 string
+	embeddingTimeout                 time.Duration
 	embeddingMaxRetries              int
 	autoIndex                        bool
 	fileWatcher                      bool
-	watchInterval                    string
-	debounceDuration                 string
+	watchInterval                    time.Duration
+	debounceDuration                 time.Duration
 	httpMode                         string
 	httpHost                         string
 	httpPort                         int
 	httpAuthToken                    string
 	httpInsecureAllowUnauthenticated bool
 	sessionTrackingEnabled           bool
-	sessionIdleTimeout               string
-	sessionCheckpointInterval        string
+	sessionIdleTimeout               time.Duration
+	sessionCheckpointInterval        time.Duration
 	sessionMinEvents                 int
+	sessionSuppressReviewQueue       bool
 	stewardEnabled                   bool
+	stewardEnabledSet                bool
 	stewardMode                      string
 	stewardScheduleInterval          string
 	stewardDuplicateThreshold        float64
@@ -274,42 +285,43 @@ type envValues struct {
 	stewardCanonicalMinConf          float64
 	checkpointDedupDisabled          bool
 	checkpointDedupThreshold         float64
-	checkpointDedupWindow            string
+	checkpointDedupWindow            time.Duration
 	checkpointDedupMinChars          int
 	taskArchiveRoots                 string
 	taskSlugPattern                  string
 	archiveSweepEnabled              bool
-	archiveSweepInterval             string
+	archiveSweepInterval             time.Duration
 	rerankEnabled                    bool
 	rerankProvider                   string
 	jinaRerankerModel                string
-	rerankTimeout                    string
+	rerankTimeout                    time.Duration
 	rerankTopN                       int
 	sedimentEnabled                  bool
-	sedimentScheduleInterval         string
+	sedimentScheduleInterval         time.Duration
 	recallHalfLifeDays               float64
 	toolGrouping                     bool
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
 func loadEnv() (envValues, error) {
-	if err := loadDotEnvFiles(getExplicitConfigPath()); err != nil {
+	dotenv, err := loadDotEnvFiles(getExplicitConfigPath())
+	if err != nil {
 		return envValues{}, err
 	}
-	return readEnvValues()
+	return readEnvValues(dotenv)
 }
 
 // readEnvValues reads all configuration from current environment variables.
 // A variable that is set but unparseable (typo) makes the whole load fail via
 // the envScan error aggregation (Round 3 M13) rather than silently defaulting.
-func readEnvValues() (envValues, error) {
-	s := &envScan{}
+func readEnvValues(dotenv map[string]string) (envValues, error) {
+	s := &envScan{dotenv: dotenv}
 	ev := envValues{
-		root:                             EnvOrDefault("MCP_ROOT", ""),
-		allow:                            EnvOrDefault("MCP_ALLOW_DIRS", ""),
-		outputMode:                       normalizeOutputMode(EnvOrDefault("MCP_STDIO_MODE", "")),
+		root:                             s.String("MCP_ROOT", ""),
+		allow:                            s.String("MCP_ALLOW_DIRS", ""),
+		outputMode:                       normalizeOutputMode(s.String("MCP_STDIO_MODE", "")),
 		statsEnabled:                     s.Bool("MCP_STATS_ENABLED", false),
-		statsPath:                        EnvOrDefault("MCP_STATS_PATH", ""),
+		statsPath:                        s.String("MCP_STATS_PATH", ""),
 		statsSample:                      s.Float("MCP_STATS_SAMPLE_RATE", 1),
 		maxFileBytes:                     s.Int64("MCP_MAX_FILE_BYTES", DefaultMaxFileBytes),
 		maxSearch:                        s.Int("MCP_MAX_SEARCH_RESULTS", DefaultMaxSearchResult),
@@ -318,67 +330,69 @@ func readEnvValues() (envValues, error) {
 		ragMaxResults:                    s.Int("MCP_RAG_MAX_RESULTS", 10),
 		memoryEnabled:                    s.Bool("MCP_MEMORY_ENABLED", true),
 		memoryPreviewRunes:               s.Int("MCP_MEMORY_PREVIEW_RUNES", 0),
-		dataPath:                         EnvOrDefault("MCP_DATA_PATH", ""),
-		ragIndexPath:                     EnvOrDefault("MCP_RAG_INDEX_PATH", ""),
-		memoryDBPath:                     EnvOrDefault("MCP_MEMORY_DB_PATH", ""),
-		logPath:                          EnvOrDefault("MCP_LOG_PATH", ""),
-		indexDirs:                        EnvOrDefault("MCP_INDEX_DIRS", "docs"),
-		indexExcludeDirs:                 EnvOrDefault("MCP_INDEX_EXCLUDE_DIRS", ""),
-		indexExcludeGlobs:                EnvOrDefault("MCP_INDEX_EXCLUDE_GLOBS", ""),
+		dataPath:                         s.String("MCP_DATA_PATH", ""),
+		ragIndexPath:                     s.String("MCP_RAG_INDEX_PATH", ""),
+		memoryDBPath:                     s.String("MCP_MEMORY_DB_PATH", ""),
+		logPath:                          s.String("MCP_LOG_PATH", ""),
+		indexDirs:                        s.String("MCP_INDEX_DIRS", "docs"),
+		indexExcludeDirs:                 s.String("MCP_INDEX_EXCLUDE_DIRS", ""),
+		indexExcludeGlobs:                s.String("MCP_INDEX_EXCLUDE_GLOBS", ""),
 		redactSecrets:                    s.Bool("MCP_REDACT_SECRETS", true),
 		chunkSize:                        s.Int("MCP_CHUNK_SIZE", 2000),
 		chunkOverlap:                     s.Int("MCP_CHUNK_OVERLAP", 200),
 		ragKeepNoise:                     s.Bool("MCP_RAG_KEEP_NOISE", false),
 		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
-		tripleExtractorBaseURL:           EnvOrDefault("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
-		tripleExtractorAPIKey:            EnvOrDefault("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
-		tripleExtractorModel:             EnvOrDefault("MCP_TRIPLE_EXTRACTOR_MODEL", ""),
-		tripleExtractorTimeout:           EnvOrDefault("MCP_TRIPLE_EXTRACTOR_TIMEOUT", "30s"),
-		jinaAPIKey:                       EnvOrDefault("JINA_API_KEY", ""),
-		openaiAPIKey:                     EnvOrDefault("OPENAI_API_KEY", ""),
-		openaiBaseURL:                    EnvOrDefault("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-		openaiModel:                      EnvOrDefault("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-		ollamaBaseURL:                    EnvOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"),
-		llamaCPPBaseURL:                  EnvOrDefault("LLAMACPP_BASE_URL", ""),
-		llamaCPPModel:                    EnvOrDefault("LLAMACPP_EMBEDDING_MODEL", "bge-m3"),
+		tripleExtractorBaseURL:           s.String("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
+		tripleExtractorAPIKey:            s.String("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
+		tripleExtractorModel:             s.String("MCP_TRIPLE_EXTRACTOR_MODEL", ""),
+		tripleExtractorTimeout:           s.Duration("MCP_TRIPLE_EXTRACTOR_TIMEOUT", 30*time.Second),
+		jinaAPIKey:                       s.String("JINA_API_KEY", ""),
+		openaiAPIKey:                     s.String("OPENAI_API_KEY", ""),
+		openaiBaseURL:                    s.String("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+		openaiModel:                      s.String("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+		ollamaBaseURL:                    s.String("OLLAMA_BASE_URL", "http://localhost:11434"),
+		llamaCPPBaseURL:                  s.String("LLAMACPP_BASE_URL", ""),
+		llamaCPPModel:                    s.String("LLAMACPP_EMBEDDING_MODEL", "bge-m3"),
 		embeddingDimension:               s.Int("MCP_EMBEDDING_DIMENSION", 1024),
-		embeddingMode:                    normalizeEmbeddingMode(EnvOrDefault("MCP_EMBEDDING_MODE", "auto")),
-		embeddingTimeout:                 EnvOrDefault("MCP_EMBEDDING_TIMEOUT", "5s"),
+		embeddingMode:                    normalizeEmbeddingMode(s.String("MCP_EMBEDDING_MODE", "auto")),
+		embeddingTimeout:                 s.Duration("MCP_EMBEDDING_TIMEOUT", 5*time.Second),
 		embeddingMaxRetries:              s.Int("MCP_EMBEDDING_MAX_RETRIES", 1),
 		autoIndex:                        s.Bool("MCP_RAG_AUTO_INDEX", true),
 		fileWatcher:                      s.Bool("MCP_RAG_FILE_WATCHER", true),
-		watchInterval:                    EnvOrDefault("MCP_RAG_WATCH_INTERVAL", "5m"),
-		debounceDuration:                 EnvOrDefault("MCP_RAG_DEBOUNCE", "30s"),
-		httpMode:                         EnvOrDefault("MCP_HTTP_MODE", "stdio"),
-		httpHost:                         EnvOrDefault("MCP_HTTP_HOST", "127.0.0.1"),
+		watchInterval:                    s.Duration("MCP_RAG_WATCH_INTERVAL", 5*time.Minute),
+		debounceDuration:                 s.Duration("MCP_RAG_DEBOUNCE", 30*time.Second),
+		httpMode:                         s.String("MCP_HTTP_MODE", "stdio"),
+		httpHost:                         s.String("MCP_HTTP_HOST", "127.0.0.1"),
 		httpPort:                         s.Int("MCP_HTTP_PORT", 18080),
-		httpAuthToken:                    EnvOrDefault("MCP_HTTP_AUTH_TOKEN", ""),
+		httpAuthToken:                    s.String("MCP_HTTP_AUTH_TOKEN", ""),
 		httpInsecureAllowUnauthenticated: s.Bool("MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED", false),
 		sessionTrackingEnabled:           s.Bool("MCP_SESSION_TRACKING_ENABLED", true),
-		sessionIdleTimeout:               EnvOrDefault("MCP_SESSION_IDLE_TIMEOUT", "10m"),
-		sessionCheckpointInterval:        EnvOrDefault("MCP_SESSION_CHECKPOINT_INTERVAL", "30m"),
+		sessionIdleTimeout:               s.Duration("MCP_SESSION_IDLE_TIMEOUT", 10*time.Minute),
+		sessionCheckpointInterval:        s.Duration("MCP_SESSION_CHECKPOINT_INTERVAL", 30*time.Minute),
 		sessionMinEvents:                 s.Int("MCP_SESSION_MIN_EVENTS", 2),
+		sessionSuppressReviewQueue:       s.raw("SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES") == "1",
 		stewardEnabled:                   s.Bool("MCP_STEWARD_ENABLED", false),
-		stewardMode:                      EnvOrDefault("MCP_STEWARD_MODE", "manual"),
-		stewardScheduleInterval:          EnvOrDefault("MCP_STEWARD_SCHEDULE_INTERVAL", "24h"),
+		stewardEnabledSet:                s.raw("MCP_STEWARD_ENABLED") != "",
+		stewardMode:                      s.String("MCP_STEWARD_MODE", "manual"),
+		stewardScheduleInterval:          s.String("MCP_STEWARD_SCHEDULE_INTERVAL", "24h"),
 		stewardDuplicateThreshold:        s.Float("MCP_STEWARD_DUPLICATE_THRESHOLD", 0.85),
 		stewardStaleDays:                 s.Int("MCP_STEWARD_STALE_DAYS", 30),
 		stewardCanonicalMinConf:          s.Float("MCP_STEWARD_CANONICAL_MIN_CONFIDENCE", 0.80),
 		checkpointDedupDisabled:          s.Bool("MCP_CHECKPOINT_DEDUP_DISABLED", false),
 		checkpointDedupThreshold:         s.Float("MCP_CHECKPOINT_DEDUP_THRESHOLD", 0.9),
-		checkpointDedupWindow:            EnvOrDefault("MCP_CHECKPOINT_DEDUP_WINDOW", "10m"),
+		checkpointDedupWindow:            s.Duration("MCP_CHECKPOINT_DEDUP_WINDOW", 10*time.Minute),
 		checkpointDedupMinChars:          s.Int("MCP_CHECKPOINT_DEDUP_MIN_CHARS", 100),
-		taskArchiveRoots:                 EnvOrDefault("MCP_TASK_ARCHIVE_ROOTS", ""),
-		taskSlugPattern:                  EnvOrDefault("MCP_TASK_SLUG_PATTERN", ""),
+		taskArchiveRoots:                 s.String("MCP_TASK_ARCHIVE_ROOTS", ""),
+		taskSlugPattern:                  s.String("MCP_TASK_SLUG_PATTERN", ""),
 		archiveSweepEnabled:              s.Bool("MCP_ARCHIVE_SWEEP_ENABLED", true),
-		archiveSweepInterval:             EnvOrDefault("MCP_ARCHIVE_SWEEP_INTERVAL", "1h"),
+		archiveSweepInterval:             s.Duration("MCP_ARCHIVE_SWEEP_INTERVAL", time.Hour),
 		rerankEnabled:                    s.Bool("MCP_RERANK_ENABLED", false),
-		rerankProvider:                   EnvOrDefault("MCP_RERANK_PROVIDER", "disabled"),
-		jinaRerankerModel:                EnvOrDefault("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
-		rerankTimeout:                    EnvOrDefault("MCP_RERANK_TIMEOUT", "5s"),
+		rerankProvider:                   s.String("MCP_RERANK_PROVIDER", "disabled"),
+		jinaRerankerModel:                s.String("JINA_RERANKER_MODEL", "jina-reranker-v2-base-multilingual"),
+		rerankTimeout:                    s.Duration("MCP_RERANK_TIMEOUT", 5*time.Second),
 		rerankTopN:                       s.Int("MCP_RERANK_TOP_N", 40),
 		sedimentEnabled:                  s.Bool("MCP_SEDIMENT_ENABLED", false),
-		sedimentScheduleInterval:         EnvOrDefault("MCP_SEDIMENT_SCHEDULE_INTERVAL", "0"),
+		sedimentScheduleInterval:         s.Duration("MCP_SEDIMENT_SCHEDULE_INTERVAL", 0),
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
 	}
@@ -484,8 +498,8 @@ func resolvePaths(ev envValues) (Config, error) {
 			KeepNoise:         ev.ragKeepNoise,
 			AutoIndex:         ev.autoIndex,
 			FileWatcher:       ev.fileWatcher,
-			WatchInterval:     parseDurationOrDefault(ev.watchInterval, 5*time.Minute),
-			DebounceDuration:  parseDurationOrDefault(ev.debounceDuration, 30*time.Second),
+			WatchInterval:     ev.watchInterval,
+			DebounceDuration:  ev.debounceDuration,
 		},
 
 		Embeddings: EmbeddingsConfig{
@@ -498,7 +512,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			LlamaCPPModel:   ev.llamaCPPModel,
 			Dimension:       ev.embeddingDimension,
 			Mode:            ev.embeddingMode,
-			Timeout:         parseDurationOrDefault(ev.embeddingTimeout, 5*time.Second),
+			Timeout:         ev.embeddingTimeout,
 			MaxRetries:      ev.embeddingMaxRetries,
 		},
 
@@ -507,7 +521,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			BaseURL: ev.tripleExtractorBaseURL,
 			APIKey:  ev.tripleExtractorAPIKey,
 			Model:   ev.tripleExtractorModel,
-			Timeout: parseDurationOrDefault(ev.tripleExtractorTimeout, 30*time.Second),
+			Timeout: ev.tripleExtractorTimeout,
 		},
 
 		HTTP: HTTPConfig{
@@ -520,9 +534,11 @@ func resolvePaths(ev envValues) (Config, error) {
 
 		Session: SessionConfig{
 			TrackingEnabled:    ev.sessionTrackingEnabled,
-			IdleTimeout:        parseDurationOrDefault(ev.sessionIdleTimeout, 10*time.Minute),
-			CheckpointInterval: parseDurationOrDefault(ev.sessionCheckpointInterval, 30*time.Minute),
+			IdleTimeout:        ev.sessionIdleTimeout,
+			CheckpointInterval: ev.sessionCheckpointInterval,
 			MinEvents:          sessionMinEvents,
+
+			SuppressReviewQueueWrites: ev.sessionSuppressReviewQueue,
 		},
 
 		Steward: StewardConfig{
@@ -537,27 +553,27 @@ func resolvePaths(ev envValues) (Config, error) {
 		HooksDedup: HooksDedupConfig{
 			Disabled:  ev.checkpointDedupDisabled,
 			Threshold: ev.checkpointDedupThreshold,
-			Window:    parseDurationOrDefault(ev.checkpointDedupWindow, 10*time.Minute),
+			Window:    ev.checkpointDedupWindow,
 			MinChars:  ev.checkpointDedupMinChars,
 		},
 
 		Lifecycle: LifecycleConfig{
 			TaskArchiveRoots:     parseArchiveRoots(ev.taskArchiveRoots, root),
 			ArchiveSweepEnabled:  ev.archiveSweepEnabled,
-			ArchiveSweepInterval: parseDurationOrDefault(ev.archiveSweepInterval, time.Hour),
+			ArchiveSweepInterval: ev.archiveSweepInterval,
 		},
 
 		Rerank: RerankConfig{
 			Enabled:   ev.rerankEnabled,
 			Provider:  ev.rerankProvider,
 			JinaModel: ev.jinaRerankerModel,
-			Timeout:   parseDurationOrDefault(ev.rerankTimeout, 5*time.Second),
+			Timeout:   ev.rerankTimeout,
 			TopN:      ev.rerankTopN,
 		},
 
 		Sediment: SedimentConfig{
 			Enabled:            ev.sedimentEnabled,
-			ScheduleInterval:   parseDurationOrDefault(ev.sedimentScheduleInterval, 0),
+			ScheduleInterval:   ev.sedimentScheduleInterval,
 			RecallHalfLifeDays: ev.recallHalfLifeDays,
 		},
 	}
@@ -678,10 +694,56 @@ func EnvOrDefault(key, fallback string) string {
 // fallback without recording an error.
 type envScan struct {
 	errs []error
+
+	// dotenv holds values parsed from the .env chain. They are consulted only
+	// when the real environment does not define the key, which keeps the
+	// documented precedence (environment beats file, so `sops exec-env` and
+	// launchd overrides still win) without the loader having to mutate the
+	// process environment — see loadDotEnvFiles for why that mattered.
+	dotenv map[string]string
+}
+
+// raw resolves a key: the real environment first, the .env overlay second.
+func (s *envScan) raw(key string) string {
+	if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+		return val
+	}
+	if s == nil {
+		return ""
+	}
+	return strings.TrimSpace(s.dotenv[key])
+}
+
+// Duration parses a duration variable, recording an error for a value that is
+// set but unparseable.
+//
+// T89 M12: durations used to be carried as raw strings through envValues and
+// parsed in resolvePaths by parseDurationOrDefault, which swallowed a bad value
+// into the default. Every other typed variable fails the load on a typo (Round
+// 3 M13); MCP_EMBEDDING_TIMEOUT=abc quietly became 5s. Same contract now.
+func (s *envScan) Duration(key string, fallback time.Duration) time.Duration {
+	val := s.raw(key)
+	if val == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(val)
+	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("%s=%q: invalid duration (e.g. 30s, 5m, 1h)", key, val))
+		return fallback
+	}
+	return parsed
+}
+
+// String returns the resolved value or the fallback when unset.
+func (s *envScan) String(key, fallback string) string {
+	if val := s.raw(key); val != "" {
+		return val
+	}
+	return fallback
 }
 
 func (s *envScan) Int(key string, fallback int) int {
-	val := strings.TrimSpace(os.Getenv(key))
+	val := s.raw(key)
 	if val == "" {
 		return fallback
 	}
@@ -694,7 +756,7 @@ func (s *envScan) Int(key string, fallback int) int {
 }
 
 func (s *envScan) Int64(key string, fallback int64) int64 {
-	val := strings.TrimSpace(os.Getenv(key))
+	val := s.raw(key)
 	if val == "" {
 		return fallback
 	}
@@ -707,7 +769,7 @@ func (s *envScan) Int64(key string, fallback int64) int64 {
 }
 
 func (s *envScan) Float(key string, fallback float64) float64 {
-	val := strings.TrimSpace(os.Getenv(key))
+	val := s.raw(key)
 	if val == "" {
 		return fallback
 	}
@@ -720,7 +782,7 @@ func (s *envScan) Float(key string, fallback float64) float64 {
 }
 
 func (s *envScan) Bool(key string, fallback bool) bool {
-	val := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	val := strings.ToLower(s.raw(key))
 	if val == "" {
 		return fallback
 	}
@@ -788,22 +850,15 @@ func EnvFloat(key string, fallback float64) float64 {
 	return (&envScan{}).Float(key, fallback)
 }
 
-func parseDurationOrDefault(s string, fallback time.Duration) time.Duration {
-	if s == "" {
-		return fallback
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return fallback
-	}
-	return d
-}
-
 // resolveStewardEnabled determines if steward should be enabled.
 // Auto-enables in HTTP mode with memory, unless explicitly disabled via env var.
 func resolveStewardEnabled(ev envValues) bool {
-	// If user explicitly set the env var, respect it.
-	if raw := os.Getenv("MCP_STEWARD_ENABLED"); raw != "" {
+	// If user explicitly set the variable, respect it. T89 H5: explicitness is
+	// recorded during the scan, because a value coming from the .env file is no
+	// longer visible through os.Getenv — asking the process environment here
+	// would silently ignore MCP_STEWARD_ENABLED=false set in config.env and
+	// auto-enable steward in HTTP mode against the operator's instruction.
+	if ev.stewardEnabledSet {
 		return ev.stewardEnabled
 	}
 	// Auto-enable in HTTP mode when memory is also enabled.

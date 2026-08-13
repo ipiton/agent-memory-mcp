@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-08-13
+
+Correctness release, the second wave of the same review that produced 0.9.3.
+Two defects stand out because both were silent by construction: a concurrent
+writer could have its change overwritten with no error anywhere, and config
+hot-reload had never worked through a `.env` file — SIGHUP and the file watcher
+both reported success while applying the values from the previous load.
+
+### Fixed
+
+- **Concurrent writes to the same memory could be lost (T89 H2)** — `MarkOutdated` and `PromoteToCanonical` read the memory outside any lock and wrote it back under one, so a writer that committed in between was silently overwritten. `MarkOutdated` was worse still: four independent transactions (the update, temporal fields on the retired entry, temporal fields on the successor, the successor's reference count), any of which could fail on its own, leaving an entry marked superseded while its successor knew nothing about it. Nothing retried and nothing rolled back. Both operations now hold the write lock across the whole read-modify-write and re-read under it, and the supersession pair commits in a single transaction. A `superseded_by` pointing at an entry that is not in the store is still accepted — the retirement is real regardless — but a half-written pair is not.
+- **Config hot-reload silently applied nothing (T89 H5)** — the `.env` loader pushed values into the process environment and skipped keys already set. On first load that is the intended precedence: a real environment variable beats the file. On reload every key was "already set" because the first load had set it, so nothing was re-read, the new config compared equal to the old one, and the RAG-restart hook never fired. `LoadFromFile`'s own documentation claimed it cleared and restored `MCP_*` variables; it never did. The file is now parsed into a map consulted only where the real environment is silent — same precedence, but a reload observes the current file. This also removes the `os.Setenv` race between the watcher and the signal handler (M14). Two knobs that reached their readers only through that environment export, `MCP_STEWARD_ENABLED` and `SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES`, now travel through the config; an explicit `MCP_STEWARD_ENABLED=false` in `config.env` would otherwise have started being ignored.
+- **A mistyped duration silently became the default (T89 M12)** — `MCP_EMBEDDING_TIMEOUT=abc` resolved to 5s without complaint. Numbers and booleans have failed the load on a typo since the previous hardening round; durations were read as raw strings and parsed after that check, so they kept the old silent-default behaviour. They now fail the same way, naming the offending variable.
+- **The hooks reader opened SQLite without a busy timeout (T89 M11)** — `context-inject` built its DSN by string concatenation as `path + "?_journal_mode=WAL&mode=ro"`. This driver's knob is `_pragma`, so `_journal_mode` was ignored and no busy timeout was set at all: the reader returned `SQLITE_BUSY` the instant it met a writer — the exact shape of the incident that made these pragmas centralised in the first place. It now opens through `dbutil.OpenSQLiteReadOnly`.
+- **Canonical promotion left the sediment layer behind (T89 M3)** — an entry promoted to canonical stayed at whatever sediment layer it had. The sediment cycle proposes the move to `character` only from `semantic`, and only as a non-automatic suggestion, so anything promoted from `surface` or `episodic` remained evictable while claiming to be load-bearing knowledge. Promotion now moves both axes.
+- **Long sweeps ignored cancellation (T89 M6)** — the archive sweep never checked its context, so shutdown had to wait out a full pass and the writes it kept issuing ran on an already-cancelled context. Both loops now stop.
+- **`importance` was rejected on one path and silently replaced on another (T89 M9)** — `store_memory` refused an out-of-range value while `store_decision` and its siblings accepted the same argument and quietly substituted their own default. Absent still means "use the default"; invalid is now an error on both paths.
+- **Four report paths loaded the whole embedding corpus (T89 M2)** — `StaleDeadEnds`, `ConflictsReport`, `ListCanonical` and `ProjectBankView` went through `List`, round-tripping every memory through SQL with its embedding blob to produce reports that read only cache-resident fields. They now use `ListLightweight`, as the steward paths already did.
+- **The steward policy's `updated_at` lagged the database (T108)** — `SavePolicy` stamped the timestamp on its own copy, so callers kept the un-stamped original in memory and `steward_policy get` reported an older time than the stored row until the service restarted. That field is what an operator reads to answer "when was this policy last changed" — it was the evidence that diagnosed the policy-wipe defect in 0.9.3 — so a stale value there is worse than none.
+
 ## [0.9.3] - 2026-08-12
 
 Stability release. One crash reachable from ordinary tool arguments, three data

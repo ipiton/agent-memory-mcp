@@ -52,7 +52,7 @@ type ProjectBankItem struct {
 	Importance     float64         `json:"importance,omitempty"`
 	LastVerifiedAt time.Time       `json:"last_verified_at,omitempty"`
 	UpdatedAt      time.Time       `json:"updated_at,omitempty"`
-	Trust          *trust.Metadata  `json:"trust,omitempty"`
+	Trust          *trust.Metadata `json:"trust,omitempty"`
 }
 
 type ProjectBankSection struct {
@@ -105,10 +105,8 @@ func (ms *Store) ProjectBankView(ctx context.Context, view ProjectBankView, opti
 	}
 	options = normalizeProjectBankOptions(options)
 
-	memories, err := ms.List(ctx, options.Filters, 0)
-	if err != nil {
-		return nil, err
-	}
+	// T89 M2: the bank view reads metadata, titles and timestamps, all cached.
+	memories := ms.ListLightweight(options.Filters)
 
 	now := ms.now()
 	items := make([]*ProjectBankItem, 0, len(memories))
