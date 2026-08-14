@@ -3,7 +3,7 @@
   "name": "io.github.ipiton/agent-memory-mcp",
   "title": "Agent Memory MCP",
   "description": "Memory, docs, and repo context layer for engineering agents.",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "websiteUrl": "https://github.com/ipiton/agent-memory-mcp",
   "repository": {
     "url": "https://github.com/ipiton/agent-memory-mcp",

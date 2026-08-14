@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-14
+
+A minor bump rather than a patch, for one reason: recall now scores over
+mean-centered embeddings by default, and that changes which memories come back
+for a given query. The rest of the release is the retrieval branch getting its
+instruments — a strict mode that refuses instead of degrading, a report of what
+the corpus actually contains, a usefulness counter that counts usefulness, and
+an evaluation harness that had quietly stopped compiling four months ago.
+
+### Added
+
+- **Strict retrieval mode (T99)** — `MCP_RETRIEVAL_STRICT=true` turns every silent degradation on the read path into a failed call: an embedding provider that fell through to the next one, a reranker that timed out, a multihop query with no graph to walk. Graceful degradation stays the production default; what was missing was the ability to ask for the opposite, without which a measurement cannot know it measured what it meant to. Independently of the flag, `semantic_search` responses now carry a `retrieval` block naming the provider that served the query, any providers that failed first, and why reranking was skipped. The text surface prints a line only when something actually degraded.
+- **Corpus coverage after indexing (T97)** — `index_documents` answered `"Documents indexed successfully."`, so the one question worth asking afterwards had no answer. It now reports files and chunks per configured root, and a root that contributed nothing is named on its own line — that state is exactly what once read as "there is nothing to find".
+- **A usefulness counter that measures usefulness (T113)** — new `targeted_access_count`, incremented only by recalls with a result budget. `access_count` counts every appearance in a result set, sweeps included; on a live bank that drove its median to 110 and made it a function of age rather than use. The sediment promotion gates read the new counter, and both numbers appear in tool output. Deliberately not backfilled: the old values are the defect.
+- **`MCP_RECALL_CENTERED` (T76a)**, default `true` — see Changed.
+- **A retrieval evaluation instrument with headroom (T119)** — the committed QA set reports Hit@5 = 1.0 with an oracle reranker worth +0.032, so nothing decided "by measured win" could be decided on it. `make eval-corpus` builds a harder set from a local task archive, `make eval-real` runs against it, and `make eval-recall` measures memory recall itself (Hit@5 0.62 before this release's scoring change). The harness can now take a real encoder: the built-in fixture is a hash of ASCII tokens, which on a non-English corpus produces no tokens and therefore pure noise.
+- **Secrets from SOPS (T101)** — the service starts through a wrapper that runs `sops exec-env --same-process` when an encrypted secrets file is present, and execs the binary directly when it is not. `--same-process` matters: without it launchd would supervise `sops` rather than the service. See `docs/SECRETS.md`.
+- **`docs/EMBEDDING_MIGRATION.md`** — the order of operations for switching encoders, the batch-size failure that reads as a provider error while its real cause sits in the server log, and the reason the scoring code and the model have to ship together.
+
+### Changed
+
+- **Recall scores over mean-centered embeddings (T76a)** — raw cosine on a real corpus is anisotropic: unrelated pairs sat at a median of 0.555 and same-task pairs at 0.786, so most of the scale carried no information. Centering moves unrelated pairs to −0.033 and widens the separation from 0.231 to 0.527. Measured on 345 machine-labelled queries against a live bank: **Hit@5 0.6232 → 0.7217, MRR 0.4922 → 0.5739**. The second effect is on the gate rather than the ranking — `minScore = 0.05` was cleared by 100.0% of a sampled 68 025 candidate comparisons and by 34.1% after centering, so the threshold began doing its job without being retuned. Banks under 100 embeddings keep raw cosine, since a mean over a handful of vectors is dominated by the vectors it must cancel. Set `MCP_RECALL_CENTERED=false` to score the way earlier releases did.
+- **The launchd service runs through `libexec/service-wrapper`** instead of the binary directly (see Added, secrets). With no secrets file the wrapper execs exactly what ran before.
+- **`make vet` now covers tagged code and formatting** — `go vet` runs for `./...`, `-tags=eval` and `-tags=corpus`, and depends on a new `fmt-check` target. CI calls `make vet` rather than a bare `go vet`.
+
+### Fixed
+
+- **Dry-run promotion forecast was wrong by 15× (T92)** — `sweep_archive --dry-run` counted every aged entry as a promotion while the live path routed most of them to review, so the forecast bore no relation to what a real run would do. The decision is now computed once by the same predicate both paths use, and only the write is conditional.
+- **`OPENAI_API_KEY` could travel to a third-party endpoint (T100)** — the triple extractor fell back to it whenever its own key was unset, regardless of where its base URL pointed. The fallback survives only when the extractor addresses the same endpoint as the embeddings config; otherwise the extractor refuses to start with a message naming both variables.
+- **The contradiction detector was removed (T105)** — it fired on a keyword appearing in *either* entry of a pair, which made any entry containing "superseded" a universal hub. Measured on a live bank: 13 of 13 findings false. The obvious repair — requiring the marker in both — inverts the semantics, since two entries that agree about a supersession share the vocabulary of agreement. The layer is gone rather than left misfiring; the reasoning sits where the code was.
+- **A memory embedding could be silently dropped (T109)** — embeddings are stored as a binary blob, and the loader treated a leading `0x5B` as the start of a legacy JSON array. One byte in 256 collides, and 21 entries in a live bank were affected. The loader now tries JSON only when the blob actually parses as JSON, and falls through to the binary path otherwise.
+- **`resolve_review_queue` filters didn't compose (T110)** — `tags` and `created_before` were applied to different candidate sets, so the combination returned nothing and the date cutoff was useless as a guard on a bulk operation.
+- **`sweep_archive` stamped `last_verified_at` on entries nobody verified (T111)** — 45 canonical entries in a live bank looked freshly verified without ever passing `verify_entry`. The stamp is now written only when verification actually happened.
+- **The evaluation harness had not compiled for four months (T112)** — the config struct was reshaped and the file behind `//go:build eval` kept naming the old fields. Build, vet and test all skip tagged files, so one tag hid broken code from every gate at once. Repaired, and the committed baseline was corrected from a recorded MRR of 0.918 to the actual 0.968 — at the 0.05 tolerance the stale figure let a real regression pass unnoticed.
+- **Rune-aware truncation restored across surfaces (T90)** and **reload scope, per-action schema fidelity, and oversized-file splits (T91)** — the tail of the previous review round, unreleased until now.
+
 ## [0.9.4] - 2026-08-13
 
 Correctness release, the second wave of the same review that produced 0.9.3.
