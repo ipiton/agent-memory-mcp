@@ -45,6 +45,25 @@ type recallCase struct {
 	slug     string
 	question string
 	expected map[string]struct{}
+	// ageDays is how old the freshest expected record is. Age decay is a
+	// multiplier on relevance, so a grid over half-lives measured on one pool
+	// only re-derives "decay hurts old material" — which is its definition,
+	// not evidence. Bucketing by this lets the same run answer the question
+	// that actually decides a default: is there a bucket where decay helps?
+	ageDays float64
+}
+
+// ageBucket labels a case for the per-bucket breakdown. Boundaries follow the
+// half-life being questioned: inside one half-life, inside six, beyond.
+func ageBucket(days float64) string {
+	switch {
+	case days <= 30:
+		return "fresh(<=30d)"
+	case days <= 180:
+		return "mid(30-180d)"
+	default:
+		return "old(>180d)"
+	}
 }
 
 func TestRecallEval(t *testing.T) {
@@ -92,6 +111,17 @@ func TestRecallEval(t *testing.T) {
 	}
 	store.SetRecallHalfLife(halfLife)
 
+	// T121 sub-hypothesis: events and working state age on a calendar, a
+	// pattern or a fact does not. Empty means every type decays.
+	var decayTypes []Type
+	decaySpec := envOr("MCP_EVAL_DECAY_TYPES", "")
+	for _, part := range strings.Split(decaySpec, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			decayTypes = append(decayTypes, Type(part))
+		}
+	}
+	store.SetRecallDecayTypes(decayTypes)
+
 	cases := buildRecallCases(t, store, archive)
 	if len(cases) == 0 {
 		t.Fatal("no cases: does the bank's `context` match the archive's directory names?")
@@ -99,6 +129,8 @@ func TestRecallEval(t *testing.T) {
 
 	const k = 5
 	hits, mrrSum, misses := 0, 0.0, 0
+	type bucket struct{ n, hits int }
+	buckets := map[string]*bucket{}
 	for _, c := range cases {
 		results, err := store.Recall(context.Background(), c.question, Filters{}, k)
 		if err != nil {
@@ -114,20 +146,32 @@ func TestRecallEval(t *testing.T) {
 				break
 			}
 		}
+		b := buckets[ageBucket(c.ageDays)]
+		if b == nil {
+			b = &bucket{}
+			buckets[ageBucket(c.ageDays)] = b
+		}
+		b.n++
 		if rank >= 0 {
+			b.hits++
 			hits++
 			mrrSum += 1.0 / float64(rank+1)
 			continue
 		}
 		misses++
-		if misses <= 8 {
+		if misses <= 5 {
 			t.Logf("  MISS %s q=%.70q", c.slug, c.question)
 		}
 	}
 
 	n := float64(len(cases))
-	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v, halflife=%.0fd)",
-		k, float64(hits)/n, mrrSum/n, len(cases), centered, halfLife)
+	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v, halflife=%.0fd, decays=%s)",
+		k, float64(hits)/n, mrrSum/n, len(cases), centered, halfLife, envOr("MCP_EVAL_DECAY_TYPES", "all"))
+	for _, name := range []string{"fresh(<=30d)", "mid(30-180d)", "old(>180d)"} {
+		if b := buckets[name]; b != nil && b.n > 0 {
+			t.Logf("  bucket %-13s n=%3d Hit@%d=%.4f", name, b.n, k, float64(b.hits)/float64(b.n))
+		}
+	}
 	t.Logf("misses: %d of %d (%.1f%% headroom)", misses, len(cases), 100*float64(misses)/n)
 }
 
@@ -138,6 +182,7 @@ func buildRecallCases(t *testing.T, store *Store, archive string) []recallCase {
 	t.Helper()
 
 	byContext := map[string]map[string]struct{}{}
+	freshest := map[string]time.Time{}
 	for _, m := range store.ListLightweight(Filters{}) {
 		if m.Context == "" {
 			continue
@@ -146,7 +191,11 @@ func buildRecallCases(t *testing.T, store *Store, archive string) []recallCase {
 			byContext[m.Context] = map[string]struct{}{}
 		}
 		byContext[m.Context][m.ID] = struct{}{}
+		if m.CreatedAt.After(freshest[m.Context]) {
+			freshest[m.Context] = m.CreatedAt
+		}
 	}
+	now := time.Now()
 
 	slugs := make([]string, 0, len(byContext))
 	for slug := range byContext {
@@ -182,7 +231,12 @@ func buildRecallCases(t *testing.T, store *Store, archive string) []recallCase {
 		if len([]rune(q)) < 15 {
 			continue
 		}
-		cases = append(cases, recallCase{slug: slug, question: q, expected: ids})
+		cases = append(cases, recallCase{
+			slug:     slug,
+			question: q,
+			expected: ids,
+			ageDays:  now.Sub(freshest[slug]).Hours() / 24,
+		})
 	}
 	return cases
 }

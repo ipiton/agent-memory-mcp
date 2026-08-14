@@ -113,6 +113,33 @@ func (ms *Store) LastInContext(ctx context.Context, contextName string, since ti
 // days <= 0 disables decay; otherwise λ = ln(2)/days so a memory exactly one
 // half-life old scores at half its undecayed weight. Set once at startup
 // (idempotent); retrieval reads the atomic without a lock.
+// TypesFromStrings converts configured type names into Type values, dropping
+// blanks. Unknown names are kept as-is: they simply never match a stored type,
+// which fails toward not decaying rather than toward decaying everything.
+func TypesFromStrings(names []string) []Type {
+	out := make([]Type, 0, len(names))
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			out = append(out, Type(n))
+		}
+	}
+	return out
+}
+
+// SetRecallDecayTypes restricts age decay to the given memory types. An empty
+// list restores the default, where every type decays.
+func (ms *Store) SetRecallDecayTypes(types []Type) {
+	if len(types) == 0 {
+		ms.decayTypes.Store(nil)
+		return
+	}
+	set := make(map[Type]bool, len(types))
+	for _, t := range types {
+		set[t] = true
+	}
+	ms.decayTypes.Store(&set)
+}
+
 func (ms *Store) SetRecallHalfLife(days float64) {
 	var lambda float64
 	if days > 0 {
@@ -132,6 +159,15 @@ func (ms *Store) recallDecayMultiplier(m *cachedMemory, now time.Time) float64 {
 	}
 	if m.Lifecycle == LifecycleCanonical || m.KnowledgeLayer == "canonical" || m.SedimentLayer == LayerCharacter {
 		return 1.0
+	}
+	// T121: an optional narrowing of what ages. Events and working state go
+	// stale on a calendar; a pattern or a fact does not stop being true
+	// because a quarter passed. Nil means every type decays, which is the
+	// behaviour T68 shipped and the default here.
+	if types := ms.decayTypes.Load(); types != nil {
+		if !(*types)[m.Type] {
+			return 1.0
+		}
 	}
 	ageDays := now.Sub(m.CreatedAt).Hours() / 24
 	if ageDays <= 0 {

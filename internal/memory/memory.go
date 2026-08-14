@@ -193,6 +193,11 @@ type Store struct {
 	// callers (and tests) keep pre-T68 Recall behaviour until configured.
 	recallDecayLambda atomic.Uint64
 
+	// decayTypes restricts T68 age decay to the listed memory types. Nil —
+	// the default and the behaviour T68 shipped — decays every type. Set via
+	// SetRecallDecayTypes; retrieval reads the pointer without a lock.
+	decayTypes atomic.Pointer[map[Type]bool]
+
 	// retrievalStrict makes the read path refuse instead of quietly returning
 	// a lesser answer: an embedding provider that fell through to the next
 	// one, an embedder that failed entirely (Recall drops to text matching),
