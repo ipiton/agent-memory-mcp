@@ -24,6 +24,7 @@ package memory
 //	MCP_EVAL_MEMORY_DB     copy of memories.db — never the live file
 //	MCP_EVAL_TASK_ARCHIVE  directory of <slug>/ task dirs, for query text
 //	LLAMACPP_BASE_URL      encoder for the query side
+//	MCP_EVAL_CENTERED      1 to score with mean-centered cosine (T76a)
 
 import (
 	"context"
@@ -71,6 +72,9 @@ func TestRecallEval(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
+	centered := envOr("MCP_EVAL_CENTERED", "0") == "1"
+	store.SetRecallCentered(centered)
+
 	cases := buildRecallCases(t, store, archive)
 	if len(cases) == 0 {
 		t.Fatal("no cases: does the bank's `context` match the archive's directory names?")
@@ -105,7 +109,8 @@ func TestRecallEval(t *testing.T) {
 	}
 
 	n := float64(len(cases))
-	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d)", k, float64(hits)/n, mrrSum/n, len(cases))
+	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v)",
+		k, float64(hits)/n, mrrSum/n, len(cases), centered)
 	t.Logf("misses: %d of %d (%.1f%% headroom)", misses, len(cases), 100*float64(misses)/n)
 }
 

@@ -202,6 +202,19 @@ type Store struct {
 	// config.Config.RetrievalStrict (T99).
 	retrievalStrict atomic.Bool
 
+	// recallCentered switches Recall's semantic leg from raw cosine to
+	// cosine over mean-centered vectors (T76a). Set via SetRecallCentered;
+	// retrieval reads the atomic without a lock.
+	recallCentered atomic.Bool
+
+	// center is the corpus mean embedding, recomputed whenever the cache is
+	// loaded. Published as a pointer so the hot path reads it without the
+	// cache mutex. Writes between reloads shift a mean over thousands of
+	// vectors by a negligible amount, so it is deliberately not maintained
+	// incrementally — nil until the first load, and nil on a bank with no
+	// embeddings.
+	center atomic.Pointer[embeddingCenter]
+
 	// tripleExtractor (T50 slice 2) is an optional LLM-backed component that
 	// turns a stored memory into knowledge-graph (subj, rel, obj) triples
 	// asynchronously. Nil when MCP_TRIPLE_EXTRACTOR_ENABLED is false; the
@@ -378,8 +391,22 @@ func (ms *Store) loadMemoriesToCache() error {
 
 		ms.cacheSetLocked(toCachedMemory(m))
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
-	return rows.Err()
+	// T76a: the mean is a property of the loaded corpus, so it is computed
+	// here — one pass while everything is already in hand — rather than on
+	// first use, where it would land in the middle of a query.
+	vectors := make([][]float32, 0, len(ms.memories))
+	for _, cm := range ms.memories {
+		if len(cm.Embedding) > 0 {
+			vectors = append(vectors, cm.Embedding)
+		}
+	}
+	ms.center.Store(newEmbeddingCenter(vectors))
+
+	return nil
 }
 
 // cacheSetLocked adds or updates a memory in the cache and context index.

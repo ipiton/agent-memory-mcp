@@ -56,6 +56,19 @@ type Config struct {
 	// both return results.
 	RetrievalStrict bool
 
+	// RecallCentered scores memory recall over mean-centered embeddings
+	// instead of raw cosine. Env: MCP_RECALL_CENTERED, default true.
+	//
+	// T76a, adopted on a measured win: on 345 machine-labelled queries against
+	// the live bank, Hit@5 went 0.6232 → 0.7217 and MRR 0.4922 → 0.5739. The
+	// reason is visible in the geometry — raw cosine puts unrelated pairs at a
+	// median of 0.555 and same-task pairs at 0.786, so most of the scale
+	// carries no information; centering moves unrelated pairs to −0.033 and
+	// widens the separation from 0.231 to 0.527. Set to false to score the way
+	// releases before this one did. Banks with fewer than minCenterVectors
+	// embeddings ignore the setting and use raw cosine.
+	RecallCentered bool
+
 	Stats           StatsConfig
 	Memory          MemoryConfig
 	RAG             RAGConfig
@@ -367,6 +380,7 @@ type envValues struct {
 	recallHalfLifeDays               float64
 	toolGrouping                     bool
 	retrievalStrict                  bool
+	recallCentered                   bool
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -463,6 +477,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
 		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
+		recallCentered:                   s.Bool("MCP_RECALL_CENTERED", true),
 	}
 	if err := s.err(); err != nil {
 		return envValues{}, err
@@ -541,6 +556,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		LogPath:          logPath,
 		ToolGrouping:     ev.toolGrouping,
 		RetrievalStrict:  ev.retrievalStrict,
+		RecallCentered:   ev.recallCentered,
 
 		Stats: StatsConfig{
 			Enabled:    ev.statsEnabled,
