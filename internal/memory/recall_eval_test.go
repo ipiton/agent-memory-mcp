@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,22 @@ func TestRecallEval(t *testing.T) {
 	centered := envOr("MCP_EVAL_CENTERED", "0") == "1"
 	store.SetRecallCentered(centered)
 
+	// The harness exists to predict production, so it has to score the way
+	// production scores. The first version of this test left age decay off
+	// while the service runs it at 30 days by default — and the two interact:
+	// decay is a multiplier on a score whose spread centering deliberately
+	// narrows, so a measurement without decay cannot see centering trading
+	// relevance for recency. Defaults follow config.RecallHalfLifeDays.
+	halfLife := 30.0
+	if v := envOr("MCP_EVAL_HALFLIFE_DAYS", ""); v != "" {
+		parsed, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			t.Fatalf("MCP_EVAL_HALFLIFE_DAYS=%q: %v", v, err)
+		}
+		halfLife = parsed
+	}
+	store.SetRecallHalfLife(halfLife)
+
 	cases := buildRecallCases(t, store, archive)
 	if len(cases) == 0 {
 		t.Fatal("no cases: does the bank's `context` match the archive's directory names?")
@@ -109,8 +126,8 @@ func TestRecallEval(t *testing.T) {
 	}
 
 	n := float64(len(cases))
-	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v)",
-		k, float64(hits)/n, mrrSum/n, len(cases), centered)
+	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v, halflife=%.0fd)",
+		k, float64(hits)/n, mrrSum/n, len(cases), centered, halfLife)
 	t.Logf("misses: %d of %d (%.1f%% headroom)", misses, len(cases), 100*float64(misses)/n)
 }
 
