@@ -23,3 +23,6 @@ logs/
 
 # Go
 vendor/
+
+# T119: generated eval corpus — private product docs, never committed
+.eval-corpus/

@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank
+.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank eval-corpus eval-real eval-recall
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/agent-memory-mcp
@@ -41,6 +41,39 @@ eval:
 # caused the metrics to move.
 eval-update:
 	go test -tags=eval ./internal/rag/eval/ -args -update-baseline
+
+# T119: the committed QA set is saturated (Hit@5 = 1.0), so nothing that has to
+# be decided "by measured win" can be decided on it. These two targets build a
+# harder set out of a local task archive and run against it with a real
+# encoder. The generated corpus is private and stays out of git — the toy
+# corpus above remains the CI gate.
+EVAL_TASK_ARCHIVE ?= $(HOME)/Sema/tasks/archive
+EVAL_OUT_DIR      ?= $(CURDIR)/.eval-corpus
+EVAL_MAX_TASKS    ?= 150
+
+eval-corpus:
+	MCP_EVAL_TASK_ARCHIVE=$(EVAL_TASK_ARCHIVE) MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) \
+	MCP_EVAL_MAX_TASKS=$(EVAL_MAX_TASKS) \
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run TestGenerateEvalCorpus
+
+eval-real:
+	MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) \
+	LLAMACPP_BASE_URL=$${LLAMACPP_BASE_URL:-http://127.0.0.1:8090/v1} \
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -timeout 30m -run TestRetrievalEvalGenerated
+
+# The instrument with actual headroom (Hit@5 = 0.62): memory recall, not
+# document search. Runs against a COPY of the bank — never the live file, since
+# opening a store migrates and writes to it.
+EVAL_BANK_SRC ?= /opt/homebrew/var/agent-memory-mcp/memory-store/memories.db
+EVAL_BANK_COPY ?= $(EVAL_OUT_DIR)/bank.db
+
+eval-recall:
+	@mkdir -p $(EVAL_OUT_DIR)
+	cp $(EVAL_BANK_SRC) $(EVAL_BANK_COPY)
+	-cp $(EVAL_BANK_SRC)-wal $(EVAL_BANK_COPY)-wal
+	MCP_EVAL_MEMORY_DB=$(EVAL_BANK_COPY) MCP_EVAL_TASK_ARCHIVE=$(EVAL_TASK_ARCHIVE) \
+	LLAMACPP_BASE_URL=$${LLAMACPP_BASE_URL:-http://127.0.0.1:8090/v1} \
+	go test -tags=eval ./internal/memory/ -count=1 -v -timeout 30m -run TestRecallEval
 
 # Run the T44 rerank eval variant that compares no-rerank, oracle, and
 # reversing rerankers on the same corpus. Logs MRR deltas for inspection.

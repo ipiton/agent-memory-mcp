@@ -34,6 +34,16 @@ type HarnessConfig struct {
 	// compare oracle/reversing/no-rerank retrieval quality. Production
 	// plumbing goes through config.Config and does not touch this field.
 	Reranker reranker.Reranker
+
+	// Embeddings, when non-nil, replaces the deterministic fixture encoder
+	// with a real provider. T119: the fixture is a hash of ASCII tokens — it
+	// carries no semantics at all, and on a Russian corpus it produces no
+	// tokens and therefore pure noise. That is fine for checking that the
+	// pipeline ranks *something*, and useless for any question about
+	// embedding quality (T74) or about the geometry of the vector space
+	// (T76a). Those need a real encoder, so the harness has to be able to
+	// take one.
+	Embeddings *config.EmbeddingsConfig
 }
 
 // Harness wires up a temporary RAG engine against a test corpus and exposes
@@ -70,8 +80,17 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 	}
 
 	const dim = 64
-	srv := newDeterministicEmbeddingServer(dim)
-	t.Cleanup(srv.Close)
+	embeddings := config.EmbeddingsConfig{
+		Dimension: dim,
+		Mode:      "local-only",
+	}
+	if cfg.Embeddings != nil {
+		embeddings = *cfg.Embeddings
+	} else {
+		srv := newDeterministicEmbeddingServer(dim)
+		t.Cleanup(srv.Close)
+		embeddings.OllamaBaseURL = srv.URL
+	}
 
 	indexDir := t.TempDir()
 
@@ -99,11 +118,7 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 			AutoIndex:    false,
 			FileWatcher:  false,
 		},
-		Embeddings: config.EmbeddingsConfig{
-			OllamaBaseURL: srv.URL,
-			Dimension:     dim,
-			Mode:          "local-only",
-		},
+		Embeddings: embeddings,
 	}
 
 	engine := rag.NewEngine(ragCfg, nil)
