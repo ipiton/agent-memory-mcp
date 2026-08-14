@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 	"go.uber.org/zap"
 )
@@ -74,14 +75,29 @@ func TestRecallEval(t *testing.T) {
 		t.Skip("set MCP_EVAL_MEMORY_DB (a copy!), MCP_EVAL_TASK_ARCHIVE and LLAMACPP_BASE_URL")
 	}
 
-	emb, err := embedder.New(embedder.Config{
-		LlamaCPPBaseURL: baseURL,
-		LlamaCPPModel:   envOr("LLAMACPP_EMBEDDING_MODEL", "embeddinggemma-300m"),
-		Dimension:       768,
-		Mode:            "local-only",
-		Timeout:         30 * time.Second,
-		MaxRetries:      2,
-	}, zap.NewNop())
+	// The harness exists to predict production, so it has to score the way
+	// production scores — and "has to" means taking the numbers from the same
+	// place, not copying them.
+	//
+	// 🔴 This trap has now fired twice. The first version left age decay off
+	// while the service ran it at 30 days; the fix hardcoded 30.0 here with a
+	// comment claiming it followed config. When T121 moved the production
+	// defaults (half-life 30 → 0, decay narrowed to `working`, centering on),
+	// the harness kept the old literals and reported Hit@5 0.0232 for a
+	// configuration the service does not have. A copied default is a copy that
+	// silently stops matching; only the load does not.
+	defaults, cfgErr := config.LoadFromEnv()
+	if cfgErr != nil {
+		t.Fatalf("load production defaults: %v", cfgErr)
+	}
+
+	// The encoder label is part of that same configuration, and the sharpest
+	// part: it goes into the derived model id the bank's records are compared
+	// against. Held as a literal here it survived the Granite migration and
+	// mismatched every record — see assertEncoderMatchesBank.
+	embCfg := defaults.EmbedderConfig()
+	embCfg.LlamaCPPBaseURL = baseURL
+	emb, err := embedder.New(embCfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("embedder: %v", err)
 	}
@@ -92,16 +108,13 @@ func TestRecallEval(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	centered := envOr("MCP_EVAL_CENTERED", "0") == "1"
+	centered := defaults.RecallCentered
+	if v := envOr("MCP_EVAL_CENTERED", ""); v != "" {
+		centered = v == "1"
+	}
 	store.SetRecallCentered(centered)
 
-	// The harness exists to predict production, so it has to score the way
-	// production scores. The first version of this test left age decay off
-	// while the service runs it at 30 days by default — and the two interact:
-	// decay is a multiplier on a score whose spread centering deliberately
-	// narrows, so a measurement without decay cannot see centering trading
-	// relevance for recency. Defaults follow config.RecallHalfLifeDays.
-	halfLife := 30.0
+	halfLife := defaults.Sediment.RecallHalfLifeDays
 	if v := envOr("MCP_EVAL_HALFLIFE_DAYS", ""); v != "" {
 		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
@@ -113,14 +126,16 @@ func TestRecallEval(t *testing.T) {
 
 	// T121 sub-hypothesis: events and working state age on a calendar, a
 	// pattern or a fact does not. Empty means every type decays.
+	decaySpec := envOr("MCP_EVAL_DECAY_TYPES", strings.Join(defaults.Sediment.RecallDecayTypes, ","))
 	var decayTypes []Type
-	decaySpec := envOr("MCP_EVAL_DECAY_TYPES", "")
 	for _, part := range strings.Split(decaySpec, ",") {
 		if part = strings.TrimSpace(part); part != "" {
 			decayTypes = append(decayTypes, Type(part))
 		}
 	}
 	store.SetRecallDecayTypes(decayTypes)
+
+	assertEncoderMatchesBank(t, store, emb)
 
 	cases := buildRecallCases(t, store, archive)
 	if len(cases) == 0 {
@@ -166,7 +181,7 @@ func TestRecallEval(t *testing.T) {
 
 	n := float64(len(cases))
 	t.Logf("recall eval: Hit@%d=%.4f MRR=%.4f (N=%d, centered=%v, halflife=%.0fd, decays=%s)",
-		k, float64(hits)/n, mrrSum/n, len(cases), centered, halfLife, envOr("MCP_EVAL_DECAY_TYPES", "all"))
+		k, float64(hits)/n, mrrSum/n, len(cases), centered, halfLife, decaySpecLabel(decaySpec))
 	for _, name := range []string{"fresh(<=30d)", "mid(30-180d)", "old(>180d)"} {
 		if b := buckets[name]; b != nil && b.n > 0 {
 			t.Logf("  bucket %-13s n=%3d Hit@%d=%.4f", name, b.n, k, float64(b.hits)/float64(b.n))
@@ -246,4 +261,67 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// decaySpecLabel renders the decay-type set for the result line. An empty set
+// means every type decays, and printing "" there is how a run gets misread.
+func decaySpecLabel(spec string) string {
+	if strings.TrimSpace(spec) == "" {
+		return "all"
+	}
+	return spec
+}
+
+// assertEncoderMatchesBank refuses to run when the query encoder's model id is
+// not the one the bank's vectors were built with.
+//
+// 🔴 Recall compares the model id per record before it compares vectors and
+// falls back to text matching on a mismatch — a safety net for a half-migrated
+// bank, and a silent one. Point the harness at a bank encoded by another model
+// and every record takes that path: the run completes, prints a number, and
+// that number describes text matching. Measured: right after the Granite
+// migration the harness still carried the literal "embeddinggemma-300m" and
+// reported Hit@5 0.0232, which read as a catastrophic regression and was
+// nothing of the kind.
+//
+// The result of a measurement must be a number or an error, never a number
+// about a different system.
+func assertEncoderMatchesBank(t *testing.T, store *Store, emb *embedder.Embedder) {
+	t.Helper()
+
+	probe, err := emb.EmbedDetailed(context.Background(), "model probe")
+	if err != nil {
+		t.Fatalf("probe the encoder: %v", err)
+	}
+
+	counts := map[string]int{}
+	for _, m := range store.ListLightweight(Filters{}) {
+		full, err := store.Get(m.ID)
+		if err != nil || full == nil || len(full.Embedding) == 0 {
+			continue
+		}
+		counts[full.EmbeddingModel]++
+	}
+	if len(counts) == 0 {
+		t.Fatal("no embedded records in the bank copy")
+	}
+
+	dominant, dominantN, total := "", 0, 0
+	for model, n := range counts {
+		total += n
+		if n > dominantN {
+			dominant, dominantN = model, n
+		}
+	}
+	if dominant != probe.ModelID {
+		t.Fatalf("encoder/bank model mismatch — every comparison would silently fall back to text matching.\n"+
+			"  queries would use: %s\n"+
+			"  bank holds:        %s (%d of %d records)\n"+
+			"Set LLAMACPP_EMBEDDING_MODEL to the label the bank was written with, or re-embed the copy.",
+			probe.ModelID, dominant, dominantN, total)
+	}
+	if dominantN < total {
+		t.Logf("note: bank copy is mixed — %d of %d records on %s, the rest answer by text match",
+			dominantN, total, dominant)
+	}
 }

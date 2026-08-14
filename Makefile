@@ -67,10 +67,18 @@ eval-real:
 EVAL_BANK_SRC ?= /opt/homebrew/var/agent-memory-mcp/memory-store/memories.db
 EVAL_BANK_COPY ?= $(EVAL_OUT_DIR)/bank.db
 
+# The harness assembles its scoring and encoder settings from config.LoadFromEnv,
+# so it has to see the environment the service sees. Without this the run picks
+# up code defaults instead of the deployed ones — which is how a post-migration
+# run reported Hit@5 0.0232 while comparing granite queries against a bank the
+# harness thought was embeddinggemma.
+EVAL_SERVICE_CONFIG ?= /opt/homebrew/etc/agent-memory-mcp/config.env
+
 eval-recall:
 	@mkdir -p $(EVAL_OUT_DIR)
 	cp $(EVAL_BANK_SRC) $(EVAL_BANK_COPY)
 	-cp $(EVAL_BANK_SRC)-wal $(EVAL_BANK_COPY)-wal
+	set -a; [ -f $(EVAL_SERVICE_CONFIG) ] && . $(EVAL_SERVICE_CONFIG); set +a; \
 	MCP_EVAL_MEMORY_DB=$(EVAL_BANK_COPY) MCP_EVAL_TASK_ARCHIVE=$(EVAL_TASK_ARCHIVE) \
 	LLAMACPP_BASE_URL=$${LLAMACPP_BASE_URL:-http://127.0.0.1:8090/v1} \
 	go test -tags=eval ./internal/memory/ -count=1 -v -timeout 30m -run TestRecallEval
