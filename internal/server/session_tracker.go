@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -569,139 +568,6 @@ func (st *sessionTracker) buildActivity(name string, args map[string]any) (track
 	}, true
 }
 
-func buildActivityLine(name string, args map[string]any) string {
-	switch name {
-	case "store_decision":
-		return prefixedActivity("Decision", firstNonEmpty(trimArg(args, "decision"), trimArg(args, "title")))
-	case "store_incident":
-		return prefixedActivity("Incident", firstNonEmpty(trimArg(args, "summary"), trimArg(args, "title")))
-	case "store_runbook":
-		return prefixedActivity("Runbook", firstNonEmpty(trimArg(args, "procedure"), trimArg(args, "title")))
-	case "store_postmortem":
-		return prefixedActivity("Postmortem", firstNonEmpty(trimArg(args, "summary"), trimArg(args, "title")))
-	case "store_memory":
-		return buildGenericMemoryActivity(args)
-	case "update_memory":
-		return prefixedActivity("Updated knowledge", firstNonEmpty(trimArg(args, "content"), trimArg(args, "title"), trimArg(args, "id")))
-	case "merge_duplicates":
-		return prefixedActivity("Merged duplicates", firstNonEmpty(trimArg(args, "primary_id"), trimArg(args, "duplicate_ids")))
-	case "mark_outdated":
-		return prefixedActivity("Marked outdated", firstNonEmpty(trimArg(args, "id"), trimArg(args, "reason")))
-	case "promote_to_canonical":
-		return prefixedActivity("Promoted canonical", trimArg(args, "id"))
-	case "search_runbooks":
-		return prefixedActivity("Runbook search", trimArg(args, "query"))
-	case "recall_similar_incidents":
-		return prefixedActivity("Incident investigation", trimArg(args, "query"))
-	case "summarize_project_context":
-		return prefixedActivity("Project context", firstNonEmpty(trimArg(args, "focus"), trimArg(args, "context"), trimArg(args, "service")))
-	case "semantic_search":
-		return prefixedActivity("Document search", trimArg(args, "query"))
-	case "recall_memory":
-		return prefixedActivity("Memory recall", trimArg(args, "query"))
-	case "repo_read":
-		return prefixedActivity("Inspected file", trimArg(args, "path"))
-	case "repo_search":
-		return prefixedActivity("Repo search", firstNonEmpty(trimArg(args, "query"), trimArg(args, "path")))
-	case "repo_list":
-		return prefixedActivity("Listed repo path", trimArg(args, "path"))
-	case "project_bank_view":
-		return prefixedActivity("Project bank review", firstNonEmpty(trimArg(args, "view"), trimArg(args, "context"), trimArg(args, "service")))
-	default:
-		return ""
-	}
-}
-
-func buildGenericMemoryActivity(args map[string]any) string {
-	content := firstNonEmpty(trimArg(args, "content"), trimArg(args, "title"))
-	if content == "" {
-		return ""
-	}
-	entity := ""
-	metadata := getStringMap(args, "metadata")
-	if len(metadata) > 0 {
-		entity = strings.TrimSpace(metadata[memory.MetadataEntity])
-	}
-	if entity == "" {
-		for _, tag := range getStringSlice(args, "tags") {
-			if value, err := memory.ValidateEngineeringType(tag, true); err == nil && value != "" {
-				entity = string(value)
-				break
-			}
-		}
-	}
-	switch entity {
-	case string(memory.EngineeringTypeDecision):
-		return prefixedActivity("Decision", content)
-	case string(memory.EngineeringTypeIncident):
-		return prefixedActivity("Incident", content)
-	case string(memory.EngineeringTypeRunbook), string(memory.EngineeringTypeProcedure):
-		return prefixedActivity("Runbook", content)
-	case string(memory.EngineeringTypeMigrationNote):
-		return prefixedActivity("Migration", content)
-	case string(memory.EngineeringTypeCaveat):
-		return prefixedActivity("Caveat", content)
-	default:
-		return prefixedActivity("Stored memory", content)
-	}
-}
-
-func prefixedActivity(prefix string, body string) string {
-	body = strings.TrimSpace(body)
-	if body == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s: %s", prefix, truncateText(body, 220))
-}
-
-func activityContext(args map[string]any) string {
-	return trimArg(args, "context")
-}
-
-func activityService(args map[string]any) string {
-	return trimArg(args, "service")
-}
-
-func activityTags(name string, args map[string]any) []string {
-	tags := memory.NormalizeTags(getStringSlice(args, "tags"))
-	switch name {
-	case "store_incident", "recall_similar_incidents":
-		tags = append(tags, "mode:incident")
-	case "store_postmortem":
-		tags = append(tags, "mode:incident")
-	case "store_runbook", "search_runbooks":
-		tags = append(tags, "mode:coding")
-	}
-	return memory.NormalizeTags(tags)
-}
-
-func activitySessionMode(name string, args map[string]any) memory.SessionMode {
-	if modeValue := trimArg(args, "mode"); modeValue != "" {
-		if mode, err := memory.ValidateSessionMode(modeValue, ""); err == nil {
-			return mode
-		}
-	}
-	switch name {
-	case "store_incident", "store_postmortem", "recall_similar_incidents":
-		return memory.SessionModeIncident
-	default:
-		return ""
-	}
-}
-
-func sessionToolWrites(args map[string]any) bool {
-	if dryRun, ok := getBool(args, "dry_run"); ok && !dryRun {
-		return true
-	}
-	if saveRaw, ok := getBool(args, "save_raw"); ok && saveRaw {
-		return true
-	}
-	if autoApply, ok := getBool(args, "auto_apply_low_risk"); ok && autoApply {
-		return true
-	}
-	return false
-}
-
 func hasEnoughTrackedMaterial(session *trackedSession, minEvents int) bool {
 	if session == nil || len(session.activities) == 0 {
 		return false
@@ -789,48 +655,6 @@ func (ts *trackedSession) summary(boundary string) memory.SessionSummary {
 	}
 }
 
-func reviewQueueTitle(summary memory.SessionSummary, action sessionclose.CandidateAction) string {
-	base := firstNonEmpty(action.Title, string(action.Kind))
-	parts := []string{"Review queue", base}
-	if summary.Service != "" {
-		parts = append(parts, summary.Service)
-	}
-	return strings.Join(parts, " / ")
-}
-
-func reviewQueueContent(action sessionclose.CandidateAction) string {
-	lines := []string{
-		fmt.Sprintf("Action: %s", action.Kind),
-		fmt.Sprintf("Handling: %s", action.Handling),
-	}
-	if action.TargetTitle != "" {
-		lines = append(lines, fmt.Sprintf("Target: %s", action.TargetTitle))
-	} else if action.TargetMemoryID != "" {
-		lines = append(lines, fmt.Sprintf("Target memory: %s", action.TargetMemoryID))
-	}
-	if action.Rationale != "" {
-		lines = append(lines, fmt.Sprintf("Why: %s", action.Rationale))
-	}
-	if len(action.DecisionTrace) > 0 {
-		lines = append(lines, fmt.Sprintf("Trace: %s", strings.Join(action.DecisionTrace, ", ")))
-	}
-	if action.Candidate != nil && strings.TrimSpace(action.Candidate.Content) != "" {
-		lines = append(lines, fmt.Sprintf("Candidate: %s", truncateText(strings.TrimSpace(action.Candidate.Content), 220)))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func reviewQueueImportance(action sessionclose.CandidateAction) float64 {
-	switch action.Handling {
-	case sessionclose.ActionHandlingHardReview:
-		return 0.55
-	case sessionclose.ActionHandlingSoftReview:
-		return 0.40
-	default:
-		return 0.35
-	}
-}
-
 func normalizeSessionEvent(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	value = strings.ReplaceAll(value, "-", "_")
@@ -849,21 +673,6 @@ func splitNotificationSummary(summary string) []string {
 		out = append(out, truncateText(line, 220))
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func trimArg(args map[string]any, key string) string {
-	value, _ := getString(args, key)
-	return strings.TrimSpace(value)
 }
 
 func (st *sessionTracker) logInfo(msg string, fields ...zap.Field) {
