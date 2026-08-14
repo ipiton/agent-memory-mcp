@@ -305,46 +305,11 @@ func (ds *documentService) removeFrontmatter(content string) string {
 	return content
 }
 
+// splitIntoChunks is the non-Markdown path. T118 folded its body into
+// splitTextByBudget: the two were near-copies by design, which meant the same
+// rune-boundary defect lived in both and would have had to be fixed in both.
 func (ds *documentService) splitIntoChunks(content string) []string {
-	chunkSize := ds.config.ChunkSize
-	overlap := ds.config.ChunkOverlap
-
-	if len(content) <= chunkSize {
-		return []string{content}
-	}
-
-	var chunks []string
-	contentLen := len(content)
-	step := chunkSize - overlap
-
-	for start := 0; start < contentLen; start += step {
-		end := start + chunkSize
-		if end > contentLen {
-			end = contentLen
-		}
-
-		if end < contentLen {
-			breakPoint := end
-			for i := end; i > end-100 && i > start; i-- {
-				if content[i] == ' ' || content[i] == '\n' {
-					breakPoint = i
-					break
-				}
-			}
-			end = breakPoint
-		}
-
-		chunk := strings.TrimSpace(content[start:end])
-		if len(chunk) > 0 {
-			chunks = append(chunks, chunk)
-		}
-
-		if end >= contentLen {
-			break
-		}
-	}
-
-	return chunks
+	return splitTextByBudget(content, ds.config.ChunkSize, ds.config.ChunkOverlap)
 }
 
 func (ds *documentService) getFileModTime(path string) time.Time {

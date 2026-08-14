@@ -10,8 +10,10 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
@@ -84,6 +86,10 @@ type SQLiteStore struct {
 	keywordDocs        map[string]keywordDocStats
 	keywordPostings    map[string]map[string]int
 	totalKeywordTokens int
+	// invalidUTF8Chunks counts chunks sanitized at load because they were cut
+	// mid-rune by the pre-T118 splitter. Reported so the next such share is
+	// found by a number rather than by accident.
+	invalidUTF8Chunks int
 }
 
 // NewSQLiteStore creates a new SQLite-backed vector store with the given embedding dimension.
@@ -141,6 +147,17 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		return nil, fmt.Errorf("failed to load chunks: %w", err)
 	}
 
+	// T118: documents whose chunks were cut mid-rune are queued for re-chunking
+	// before the orphan sweep, so one index pass fixes both.
+	if marked, err := markInvalidUTF8DocumentsForReindexOnce(db); err != nil {
+		logger.Warn("Failed to queue invalid-UTF-8 documents for re-index", zap.Error(err))
+	} else if marked > 0 {
+		logger.Info("Queued documents for re-chunking after the T118 rune fix",
+			zap.Int("documents", marked),
+			zap.Int("invalid_chunks", store.InvalidUTF8Chunks()),
+		)
+	}
+
 	if orphans, err := store.CleanOrphans(); err != nil {
 		logger.Warn("Failed to clean orphan chunks at startup", zap.Error(err))
 	} else if orphans > 0 {
@@ -195,6 +212,7 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 	defer s.mu.Unlock()
 
 	s.chunks = make(map[string]*Chunk)
+	invalid := 0
 	s.keywordDocs = make(map[string]keywordDocStats)
 	s.keywordPostings = make(map[string]map[string]int)
 	s.totalKeywordTokens = 0
@@ -224,11 +242,40 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 		}
 		chunk.Embedding = embedding
 
+		// T118 backstop: a store that has not been re-indexed since the
+		// rune-aware splitter landed still holds mid-rune chunks. Hand search a
+		// readable string, and count them — the 4.3% that were in the live index
+		// went unnoticed because nothing ever reported the number.
+		if !utf8.ValidString(chunk.Content) || !utf8.ValidString(chunk.Title) {
+			chunk.Content = sanitizeUTF8(chunk.Content)
+			chunk.Title = sanitizeUTF8(chunk.Title)
+			invalid++
+		}
+
 		s.chunks[chunk.ID] = &chunk
 		s.indexChunkKeywordsLocked(&chunk)
 	}
+	s.invalidUTF8Chunks = invalid
 
 	return rows.Err()
+}
+
+// sanitizeUTF8 replaces invalid byte sequences with U+FFFD, leaving valid input
+// untouched.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "�")
+}
+
+// InvalidUTF8Chunks reports how many loaded chunks carried invalid UTF-8 and
+// were sanitized for search (T118). Non-zero means the index predates the
+// rune-aware splitter and those documents are queued for re-chunking.
+func (s *SQLiteStore) InvalidUTF8Chunks() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.invalidUTF8Chunks
 }
 
 // Upsert inserts or replaces chunks in the store within a single transaction.
