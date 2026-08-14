@@ -171,6 +171,14 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	}
 
 	const (
+		// minScore is a floor on the weighted score. Its value was never the
+		// problem; the distribution under it was. On raw cosine this corpus
+		// puts unrelated pairs at a median of 0.555, and a sampled 68 025
+		// candidate comparisons cleared 0.05 at a rate of 100.0% — the gate
+		// could not reject anything, which is half of why a limitless sweep
+		// marks the whole bank (T113). Under centered scoring the same sample
+		// clears it at 34.1%, so the threshold starts doing the job it was
+		// written for without being retuned.
 		minScore = 0.05
 
 		// Recall scoring weights: weightedScore = rawScore * (baseW + importance*importanceW + confidence*confidenceW) + freshness*freshnessW
@@ -188,6 +196,21 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	)
 
 	sedimentOn := ms.sedimentEnabled.Load()
+
+	// T76a: centering is per-query work — the two scalars below are constant
+	// across candidates. When the query does not share the mean's dimension
+	// (a mixed-model bank, an unembedded query) centering is skipped for the
+	// whole call rather than per candidate, so one Recall never mixes two
+	// score scales.
+	var (
+		center                  *embeddingCenter
+		qDotMean, qCenteredNorm float64
+		centeringOn             bool
+	)
+	if ms.recallCentered.Load() && len(queryEmbedding) > 0 {
+		center = ms.center.Load()
+		qDotMean, qCenteredNorm, centeringOn = center.queryStats(queryEmbedding)
+	}
 
 	var results []*SearchResult
 	useHeap := limit > 0
@@ -248,7 +271,11 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 
 		var score float64
 		if len(queryEmbedding) > 0 && len(m.Embedding) > 0 && m.EmbeddingModel != "" && m.EmbeddingModel == queryModelID {
-			score = scoring.CosineSimilarity(queryEmbedding, m.Embedding)
+			if centeringOn {
+				score = center.similarity(queryEmbedding, m.Embedding, qDotMean, qCenteredNorm)
+			} else {
+				score = scoring.CosineSimilarity(queryEmbedding, m.Embedding)
+			}
 		} else {
 			if len(queryEmbedding) > 0 && len(m.Embedding) > 0 && m.EmbeddingModel != "" && m.EmbeddingModel != queryModelID {
 				modelMismatchCount++
