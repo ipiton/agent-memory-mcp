@@ -59,8 +59,16 @@ type Config struct {
 	Model string
 	// APIKey is the Bearer token for the provider.
 	APIKey string
-	// Endpoint overrides the default provider endpoint. Used mainly by tests
-	// to point the Jina adapter at an httptest.Server URL.
+	// Endpoint overrides the default provider endpoint. Today it is reachable
+	// only from tests, which point the Jina adapter at an httptest.Server URL —
+	// no env var feeds it and config.RerankConfig has no matching field.
+	//
+	// T98: docs/RERANKER_LOCAL.md Option A assumes this field addresses a local
+	// sidecar, which would make it a production setting. It is not one yet, and
+	// the gap is recorded rather than closed here: turning it into one means
+	// adding MCP_RERANK_ENDPOINT and deciding what an operator pointing the
+	// reranker at an arbitrary host implies (the API key travels there — the
+	// class T100 fixed for the triple extractor).
 	Endpoint string
 	// Timeout is recorded for introspection; actual timeout enforcement
 	// happens via context.WithTimeout at the call site.

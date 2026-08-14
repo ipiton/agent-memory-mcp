@@ -44,7 +44,31 @@ type SearchResponse struct {
 	Results    []SearchResult `json:"results"`
 	TotalFound int            `json:"total_found"`
 	SearchTime int64          `json:"search_time_ms"`
+	Retrieval  *RetrievalPath `json:"retrieval,omitempty"`
 	Debug      *SearchDebug   `json:"debug,omitempty"`
+}
+
+// RetrievalPath records which components actually served a query.
+//
+// T99: "the reranker ran" and "the reranker timed out and we returned the
+// hybrid order" produced identical responses. The reason was already computed
+// (rerankErrorReason has eight categories) but only written into SearchDebug,
+// which exists only when the caller passed debug=true — so the one situation
+// where you most need the signal, an unattended eval run, is the one where it
+// was absent. This is always populated and stays small; the verbose trace
+// remains in SearchDebug.
+type RetrievalPath struct {
+	// EmbeddingProvider is the adapter that embedded the query, and
+	// EmbeddingFallbacks names the providers that failed before it.
+	EmbeddingProvider  string   `json:"embedding_provider,omitempty"`
+	EmbeddingFallbacks []string `json:"embedding_fallbacks,omitempty"`
+	// Reranker is set when reranking actually reordered the results;
+	// RerankSkipped carries the reason when it did not.
+	Reranker      string `json:"reranker,omitempty"`
+	RerankSkipped string `json:"rerank_skipped,omitempty"`
+	// Degraded is true when any part of the path fell back. It is the single
+	// field a caller has to look at to know the answer is not the full one.
+	Degraded bool `json:"degraded"`
 }
 
 // ResultDebug explains how a single result was ranked.
@@ -130,6 +154,14 @@ type vecServiceConfig struct {
 	Reranker      reranker.Reranker
 	RerankTopN    int
 	RerankTimeout time.Duration
+	// RerankerName labels the reranker in RetrievalPath. Taken from the
+	// configured provider rather than the interface, which has one method and
+	// is implemented by a handful of test fakes — widening it for a label
+	// would cost more than it explains.
+	RerankerName string
+	// Strict makes every fallback on this path an error instead. See
+	// config.Config.RetrievalStrict (T99).
+	Strict bool
 }
 
 type document struct {
@@ -251,6 +283,8 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		Reranker:      rerankProv,
 		RerankTopN:    cfg.Rerank.TopN,
 		RerankTimeout: cfg.Rerank.Timeout,
+		RerankerName:  cfg.Rerank.Provider,
+		Strict:        cfg.RetrievalStrict,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {
@@ -333,13 +367,11 @@ func (re *Engine) Search(ctx context.Context, query string, limit int, sourceTyp
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	return &SearchResponse{
-		Query:      result.Query,
-		Results:    result.Results,
-		TotalFound: result.TotalFound,
-		SearchTime: result.SearchTime,
-		Debug:      result.Debug,
-	}, nil
+	// Returned as-is rather than rebuilt field by field. The copy this
+	// replaces dropped RetrievalPath the moment it was added (T99) — it is
+	// already a *SearchResponse from the same package, so the copy bought
+	// nothing and cost a field.
+	return result, nil
 }
 
 // IndexDocuments performs incremental indexing of documents in configured directories.

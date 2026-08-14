@@ -184,6 +184,15 @@ type Store struct {
 	// callers (and tests) keep pre-T68 Recall behaviour until configured.
 	recallDecayLambda atomic.Uint64
 
+	// retrievalStrict makes the read path refuse instead of quietly returning
+	// a lesser answer: an embedding provider that fell through to the next
+	// one, an embedder that failed entirely (Recall drops to text matching),
+	// a multihop query whose graph layer is empty. Set via
+	// SetRetrievalStrict; retrieval reads the atomic without a lock. Default
+	// (false) is the production behaviour and is not being changed — see
+	// config.Config.RetrievalStrict (T99).
+	retrievalStrict atomic.Bool
+
 	// tripleExtractor (T50 slice 2) is an optional LLM-backed component that
 	// turns a stored memory into knowledge-graph (subj, rel, obj) triples
 	// asynchronously. Nil when MCP_TRIPLE_EXTRACTOR_ENABLED is false; the

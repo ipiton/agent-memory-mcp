@@ -67,6 +67,11 @@ func formatMultihopResults(query string, results []*memory.MultiHopResult) strin
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Multihop recall for %q (%d results):\n", query, len(results))
+	// T99: "hops=0" for every result means one of two very different things —
+	// the walk found direct hits, or there was no walk. Say which.
+	if results[0] != nil && results[0].Degraded {
+		b.WriteString("⚠️  Degraded: no triples on the matched memories, so no graph walk ran — these are plain semantic seeds.\n")
+	}
 	for i, r := range results {
 		if r == nil || r.Memory == nil {
 			continue

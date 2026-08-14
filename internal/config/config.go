@@ -42,6 +42,20 @@ type Config struct {
 	// names and the grouped form regardless of this flag. Env: MCP_TOOL_GROUPING.
 	ToolGrouping bool
 
+	// RetrievalStrict turns every silent degradation on the read path into a
+	// failed call: an embedding provider falling through to the next one, a
+	// reranker timing out, a multihop query finding no graph. Env:
+	// MCP_RETRIEVAL_STRICT, default false.
+	//
+	// T99: graceful degradation is the right production behaviour and stays the
+	// default — a worse answer beats no answer. What was missing is the ability
+	// to ask for the opposite. Without it a measurement cannot know it measured
+	// what it meant to: a cold reranker that times out on the first query has
+	// the eval scoring the no-rerank baseline under the reranker's name, and a
+	// half-configured install is indistinguishable from a healthy one because
+	// both return results.
+	RetrievalStrict bool
+
 	Stats           StatsConfig
 	Memory          MemoryConfig
 	RAG             RAGConfig
@@ -352,6 +366,7 @@ type envValues struct {
 	sedimentScheduleInterval         time.Duration
 	recallHalfLifeDays               float64
 	toolGrouping                     bool
+	retrievalStrict                  bool
 }
 
 // loadEnv loads dotenv files and reads all configuration from environment variables.
@@ -447,6 +462,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		sedimentScheduleInterval:         s.Duration("MCP_SEDIMENT_SCHEDULE_INTERVAL", 0),
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
+		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
 	}
 	if err := s.err(); err != nil {
 		return envValues{}, err
@@ -524,6 +540,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		DataPath:         dataPath,
 		LogPath:          logPath,
 		ToolGrouping:     ev.toolGrouping,
+		RetrievalStrict:  ev.retrievalStrict,
 
 		Stats: StatsConfig{
 			Enabled:    ev.statsEnabled,

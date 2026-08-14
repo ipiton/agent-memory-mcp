@@ -11,8 +11,14 @@ run:
 test:
 	go test ./...
 
+# `go vet ./...` does not see files behind a build tag, which is how the eval
+# harness sat broken for four months (T112): the config struct was reshaped, the
+# tagged file kept naming the old fields, and build, vet and test all skipped it.
+# Every tag in use has to be vetted explicitly or it rots the same way again.
 vet:
 	go vet ./...
+	go vet -tags=eval ./...
+	go vet -tags=corpus ./...
 
 local-smoke:
 	./scripts/local-smoke.sh

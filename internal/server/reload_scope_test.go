@@ -27,6 +27,7 @@ func TestRestartRequiredChangesNamesUnappliedSettings(t *testing.T) {
 		{"db path", func(c *config.Config) { c.Memory.DBPath = "/tmp/other.db" }, "MCP_MEMORY_DB_PATH"},
 		{"root path", func(c *config.Config) { c.RootPath = "/tmp/other" }, "MCP_ROOT (path guard)"},
 		{"tool grouping", func(c *config.Config) { c.ToolGrouping = true }, "MCP_TOOL_GROUPING"},
+		{"strict retrieval", func(c *config.Config) { c.RetrievalStrict = true }, "MCP_RETRIEVAL_STRICT"},
 		{"review-queue suppression", func(c *config.Config) { c.Session.SuppressReviewQueueWrites = true }, "SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES"},
 	}
 

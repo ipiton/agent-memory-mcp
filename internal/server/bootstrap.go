@@ -116,6 +116,9 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 	// T68: configure exponential age decay for recall scoring.
 	memoryStore.SetRecallHalfLife(cfg.Sediment.RecallHalfLifeDays)
 
+	// T99: refuse degraded reads instead of serving them quietly, when asked.
+	memoryStore.SetRetrievalStrict(cfg.RetrievalStrict)
+
 	// T50 slice 2: optional knowledge-graph triple extractor.
 	// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If
 	// configuration is incomplete we log a warning and proceed
