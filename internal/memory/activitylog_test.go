@@ -35,7 +35,14 @@ func TestIsActivityLogOnly(t *testing.T) {
 			"- Stored memory: Task PERF-001 complete. Refactored 12 sequential SQL into 2 queries.",
 			false,
 		},
-		{"incident investigation stays", "- Incident investigation: root cause was X, fixed by Y", false},
+		{
+			// Stays out of the write verdict: T85's caution about a hand-written
+			// root-cause bullet is right, and refusing a write is irreversible.
+			// It is excluded from *selection* instead — see the test below.
+			"incident investigation stays writable",
+			"- Incident investigation: ratchet порог поднят метрика quality gate регрессия",
+			false,
+		},
 		{"prose with colon", "Fixed the search: it now works", false},
 		{"empty", "", false},
 		{"whitespace", "  \n\t\n", false},
@@ -104,5 +111,65 @@ func TestRecallSkipsActivityJournal(t *testing.T) {
 	}
 	if !found {
 		t.Error("journal record disappeared from List — exclusion must apply to selection only")
+	}
+}
+
+// The write verdict and the selection verdict are different questions with
+// different costs, and "incident investigation" is the label that forced them
+// apart: refusing the write could destroy a real root-cause report, while
+// skipping it in ranking costs nothing — the record stays in the bank and in
+// List. Auto-capture puts the search *query* on that line, so its vector is
+// built from the question and out-ranks the answer (the T84 mechanism).
+func TestIncidentInvestigationIsSelectionOnly(t *testing.T) {
+	const autoCaptured = "- Incident investigation: ratchet порог поднят метрика quality gate регрессия"
+
+	if IsActivityLogOnly(autoCaptured) {
+		t.Error("the write boundary must still accept it — T85's caution stands")
+	}
+	if !IsActivityLogForSelection(autoCaptured) {
+		t.Error("semantic selection must skip it — this is the record that out-ranked the answer")
+	}
+
+	// One line of real content and it competes again, on both verdicts.
+	withFinding := autoCaptured + "\nПервопричина: порог снапнут по ложному улучшению метрики."
+	if IsActivityLogForSelection(withFinding) {
+		t.Error("a bullet next to a finding must stay in selection")
+	}
+}
+
+func TestRecallSkipsAutoCapturedIncidentQuery(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	log := &Memory{
+		Title:      "Session close",
+		Content:    "- Incident investigation: провенанс гейт промоушена канон",
+		Type:       TypeEpisodic,
+		Importance: 0.9,
+	}
+	if err := store.Store(ctx, log); err != nil {
+		t.Fatalf("store log: %v", err)
+	}
+	answer := &Memory{
+		Title:      "Гейт промоушена",
+		Content:    "Промоушен в канон требует доверенного провенанса, иначе запись уходит в review.",
+		Type:       TypeSemantic,
+		Importance: 0.2,
+	}
+	if err := store.Store(ctx, answer); err != nil {
+		t.Fatalf("store answer: %v", err)
+	}
+
+	results, err := store.Recall(ctx, "провенанс гейт промоушена канон", Filters{}, 10)
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	for _, r := range results {
+		if r.Memory.ID == log.ID {
+			t.Fatal("the auto-captured incident query surfaced in semantic recall")
+		}
+	}
+	if len(results) == 0 {
+		t.Fatal("the answer must still be reachable")
 	}
 }

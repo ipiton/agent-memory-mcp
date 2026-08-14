@@ -156,8 +156,9 @@ type cachedMemory struct {
 	SupersededBy        string
 	SedimentLayer       SedimentLayer // T48 — layer-aware retrieval priority
 	// ActivityLog marks a body that is nothing but "- Action: pointer" bullets
-	// (T122). Precomputed here rather than in the recall loop: the check splits
-	// the whole body, and recall runs it against every candidate.
+	// (T122), by the wider selection-side rule — see IsActivityLogForSelection.
+	// Precomputed here rather than in the recall loop: the check splits the
+	// whole body, and recall runs it against every candidate.
 	ActivityLog bool
 }
 
@@ -471,7 +472,7 @@ func toCachedMemory(m *Memory) *cachedMemory {
 // deriveCachedFields computes Lifecycle, KnowledgeLayer, Owner and the T122
 // activity-log flag from the row already copied into cm.
 func deriveCachedFields(cm *cachedMemory, metadata map[string]string, memType Type) {
-	cm.ActivityLog = IsActivityLogOnly(cm.Content)
+	cm.ActivityLog = IsActivityLogForSelection(cm.Content)
 	cm.Lifecycle = LifecycleStatusOf(&Memory{Type: memType, Metadata: metadata})
 	cm.KnowledgeLayer = strings.ToLower(strings.TrimSpace(metadata[MetadataKnowledgeLayer]))
 	cm.Owner = strings.TrimSpace(metadata[MetadataOwner])

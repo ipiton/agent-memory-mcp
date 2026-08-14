@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-08-14
+
+### Fixed
+
+- **Auto-captured incident queries still out-ranked their own answers (T122)** — verifying 0.12.0 on a live bank showed the top hits for a knowledge query were session records whose entire body was `- Incident investigation: <the search query>`. T85 had deliberately kept that label out of the guard, reasoning that a hand-written `- Incident investigation: root cause was X, fixed by Y` is a real report. That reasoning is about the shape of the text; what auto-capture actually writes on that line is `trimArg(args, "query")` — the question, not a finding — so the record's vector is built from the query and out-ranks the answer to it, which is the mechanism T84 named.
+
+  Both things are true, so the verdict splits in two. Refusing a write is irreversible and keeps T85's caution unchanged; skipping a record in semantic ranking costs nothing, because it stays in the bank, in `List`, and in the unprocessed-summary queue. The label is therefore excluded from selection only. All 26 summaries in the bank built solely from this bullet carry queries, not writeups; excluded records go from 80 to 117 (1.75% → 2.56% of the bank).
+
 ## [0.12.0] - 2026-08-14
 
 Four defects that shared a shape: something was wrong with what sat in the

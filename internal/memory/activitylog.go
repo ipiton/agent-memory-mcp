@@ -17,10 +17,13 @@ import "strings"
 // over-matched real task reports 12:1 on live data, 117 chore logs against 1362
 // genuine closure reports (T85).
 //
-// Two labels are deliberately absent, and both absences cost something:
+// "incident investigation" is absent here and present in
+// selectionOnlyActivityLabels below. The two decisions are not the same
+// decision, and conflating them is what made this take two rounds — see that
+// list for the argument.
 //
-//   - "incident investigation" — a human bullet "- Incident investigation: root
-//     cause was X, fixed by Y" reads as real knowledge (T85).
+// Deliberately absent from both:
+//
 //   - "stored memory" / "updated knowledge" — the value is the first 220
 //     characters of another record's content (buildActivityLine, see
 //     internal/server/session_activity.go). Measured on the live bank: 1019 of
@@ -41,10 +44,43 @@ var activityLogLabels = map[string]struct{}{
 	"listed repo path":    {}, // value is a path
 }
 
+// selectionOnlyActivityLabels are labels that make a body unfit to *rank*, but
+// not unfit to *keep*. The two questions have different costs and therefore
+// different answers: refusing a write destroys whatever the record held,
+// while skipping it in semantic selection costs nothing — the record stays in
+// the bank, in List, and in the unprocessed-summary queue.
+//
+// "incident investigation" is the case that forced the split. T85 kept it out
+// of the write guard because a hand-written "- Incident investigation: root
+// cause was the missing DB index; added it and latency recovered" is a real
+// report, and that caution is right and stays. But the line auto-capture
+// produces is trimArg(args, "query") — the search query, not a finding — and
+// its vector is therefore built from the question, which is exactly the
+// mechanism T84 named: the log out-ranks the answer to it. All 26 summaries in
+// the bank built solely from this bullet carry queries ("ratchet порог поднят
+// метрика quality gate регрессия"); none is a writeup. They were the records
+// still sitting above the answer after T122 shipped.
+var selectionOnlyActivityLabels = map[string]struct{}{
+	"incident investigation": {},
+}
+
 // IsActivityLogOnly reports whether body consists solely of activity bullets
-// whose labels are all in activityLogLabels. Blank lines are ignored; a single
-// unrecognised line makes the body real content and returns false.
+// that carry no knowledge — the verdict the write boundary refuses on.
 func IsActivityLogOnly(body string) bool {
+	return allBulletsWithin(body, activityLogLabels)
+}
+
+// IsActivityLogForSelection is the same verdict widened by
+// selectionOnlyActivityLabels: bodies that must not compete in semantic
+// ranking, but must still be stored and listed.
+func IsActivityLogForSelection(body string) bool {
+	return allBulletsWithin(body, activityLogLabels, selectionOnlyActivityLabels)
+}
+
+// allBulletsWithin reports whether every non-blank line of body is a labelled
+// activity bullet whose label appears in one of the given sets. Blank lines are
+// ignored; a single unrecognised line makes the body real content.
+func allBulletsWithin(body string, sets ...map[string]struct{}) bool {
 	sawBullet := false
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
@@ -55,7 +91,14 @@ func IsActivityLogOnly(body string) bool {
 		if !ok {
 			return false
 		}
-		if _, known := activityLogLabels[label]; !known {
+		known := false
+		for _, set := range sets {
+			if _, in := set[label]; in {
+				known = true
+				break
+			}
+		}
+		if !known {
 			return false
 		}
 		sawBullet = true
