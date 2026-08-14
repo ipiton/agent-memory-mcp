@@ -29,6 +29,19 @@ Best when you want a full restore including RAG index state.
 tar czf agent-memory-backup.tgz .agent-memory
 ```
 
+🔴 **Copy the whole directory, not the `.db` files.** Both stores run in WAL
+mode, so recent commits can still be sitting in `<name>.db-wal` when you copy.
+`cp memories.db backup/` produces a valid database — from an earlier point in
+time, silently. It happened during the T74 migration: an index copied that way
+came back 16 minutes stale and flagged `dirty`, which cost a full rebuild.
+
+If you must copy a single database while the service is stopped, use SQLite's
+own backup so the WAL is folded in:
+
+```bash
+sqlite3 memories.db ".backup 'backup/memories.db'"
+```
+
 ### Option 2. Memory-only export
 
 Best when you want a portable JSON snapshot of memories.
