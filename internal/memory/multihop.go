@@ -20,10 +20,10 @@ import (
 // the result set tight and the walk cheap.
 type MultiHopRequest struct {
 	Query   string
-	Limit   int      // max memories to return (default 10, capped at 100)
-	MaxHops int      // BFS depth limit (default 2, capped at 4)
-	SeedK   int      // how many memories drive seed entity selection (default 5, capped at 20)
-	Filters Filters  // applied to the seed Recall step (e.g., context filter)
+	Limit   int     // max memories to return (default 10, capped at 100)
+	MaxHops int     // BFS depth limit (default 2, capped at 4)
+	SeedK   int     // how many memories drive seed entity selection (default 5, capped at 20)
+	Filters Filters // applied to the seed Recall step (e.g., context filter)
 }
 
 // MultiHopResult is one memory surfaced by RecallMultihop.

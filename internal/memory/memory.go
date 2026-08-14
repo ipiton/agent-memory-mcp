@@ -43,7 +43,15 @@ type Memory struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	UpdatedAt      time.Time         `json:"updated_at"`
 	AccessedAt     time.Time         `json:"accessed_at"`  // Last retrieval time
-	AccessCount    int               `json:"access_count"` // How many times retrieved
+	AccessCount    int               `json:"access_count"` // Times returned by any recall, sweeps included
+
+	// TargetedAccessCount counts only retrievals with a result budget — a
+	// question that asked for the top N and got this entry among them. T113:
+	// AccessCount conflates that with full sweeps (Recall with limit <= 0
+	// marks everything above minScore), which on the live bank drove it to a
+	// median of 110 and turned it into a function of age rather than of use.
+	// This is the counter the sediment gate reads.
+	TargetedAccessCount int `json:"targeted_access_count"`
 
 	// Temporal fields — when this knowledge was valid and supersession chain.
 	ValidFrom    *time.Time `json:"valid_from,omitempty"`    // when this knowledge became true
@@ -125,27 +133,28 @@ func (m *Memory) Validate() error {
 // 100k memories that is ~30 MB, an acceptable trade for keeping steward
 // and other metadata-readers fully cache-resident.
 type cachedMemory struct {
-	ID             string
-	Content        string
-	Type           Type
-	Title          string
-	Tags           []string
-	Context        string
-	Lifecycle      LifecycleStatus
-	KnowledgeLayer string
-	Owner          string
-	Importance     float64
-	Metadata       map[string]string
-	Embedding      []float32
-	EmbeddingModel string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	AccessedAt     time.Time
-	AccessCount    int
-	ValidFrom      *time.Time
-	ValidUntil     *time.Time
-	SupersededBy   string
-	SedimentLayer  SedimentLayer // T48 — layer-aware retrieval priority
+	ID                  string
+	Content             string
+	Type                Type
+	Title               string
+	Tags                []string
+	Context             string
+	Lifecycle           LifecycleStatus
+	KnowledgeLayer      string
+	Owner               string
+	Importance          float64
+	Metadata            map[string]string
+	Embedding           []float32
+	EmbeddingModel      string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	AccessedAt          time.Time
+	AccessCount         int
+	TargetedAccessCount int
+	ValidFrom           *time.Time
+	ValidUntil          *time.Time
+	SupersededBy        string
+	SedimentLayer       SedimentLayer // T48 — layer-aware retrieval priority
 }
 
 // Store provides persistent memory storage backed by SQLite with in-memory vector search.
@@ -157,9 +166,9 @@ type Store struct {
 	db       *sql.DB
 	logger   *zap.Logger
 	embedder embedder.Service
-	writeMu  sync.Mutex    // serializes write operations (Store, Update, Delete, Merge, Promote)
-	mu       sync.RWMutex  // protects in-memory cache (memories, contextIndex)
-	accessCh chan []string // batched access stats updates
+	writeMu  sync.Mutex       // serializes write operations (Store, Update, Delete, Merge, Promote)
+	mu       sync.RWMutex     // protects in-memory cache (memories, contextIndex)
+	accessCh chan accessEvent // batched access stats updates
 	accessWG sync.WaitGroup
 	// In-memory cache for fast search (minimal fields)
 	memories     map[string]*cachedMemory
@@ -276,6 +285,7 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		updated_at DATETIME NOT NULL,
 		accessed_at DATETIME NOT NULL,
 		access_count INTEGER DEFAULT 0,
+		targeted_access_count INTEGER NOT NULL DEFAULT 0,
 		sediment_layer TEXT NOT NULL DEFAULT 'surface'
 	);
 	CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
@@ -307,7 +317,7 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		db:           db,
 		logger:       logger,
 		embedder:     embedder,
-		accessCh:     make(chan []string, 64),
+		accessCh:     make(chan accessEvent, 64),
 		memories:     make(map[string]*cachedMemory),
 		contextIndex: make(map[string]map[string]*cachedMemory),
 		now:          time.Now,
@@ -398,24 +408,25 @@ func toCachedMemory(m *Memory) *cachedMemory {
 		layer = DefaultSedimentLayer
 	}
 	cm := &cachedMemory{
-		ID:             m.ID,
-		Content:        m.Content,
-		Type:           m.Type,
-		Title:          m.Title,
-		Tags:           m.Tags,
-		Context:        m.Context,
-		Importance:     m.Importance,
-		Metadata:       copyMetadata(m.Metadata),
-		Embedding:      m.Embedding,
-		EmbeddingModel: m.EmbeddingModel,
-		CreatedAt:      m.CreatedAt,
-		UpdatedAt:      m.UpdatedAt,
-		AccessedAt:     m.AccessedAt,
-		AccessCount:    m.AccessCount,
-		ValidFrom:      m.ValidFrom,
-		ValidUntil:     m.ValidUntil,
-		SupersededBy:   m.SupersededBy,
-		SedimentLayer:  layer,
+		ID:                  m.ID,
+		Content:             m.Content,
+		Type:                m.Type,
+		Title:               m.Title,
+		Tags:                m.Tags,
+		Context:             m.Context,
+		Importance:          m.Importance,
+		Metadata:            copyMetadata(m.Metadata),
+		Embedding:           m.Embedding,
+		EmbeddingModel:      m.EmbeddingModel,
+		CreatedAt:           m.CreatedAt,
+		UpdatedAt:           m.UpdatedAt,
+		AccessedAt:          m.AccessedAt,
+		AccessCount:         m.AccessCount,
+		TargetedAccessCount: m.TargetedAccessCount,
+		ValidFrom:           m.ValidFrom,
+		ValidUntil:          m.ValidUntil,
+		SupersededBy:        m.SupersededBy,
+		SedimentLayer:       layer,
 	}
 	deriveCachedFields(cm, m.Metadata, m.Type)
 	return cm
@@ -628,6 +639,21 @@ func ensureMemorySchema(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by)`); err != nil {
 		return err
+	}
+
+	// T113 targeted-access counter. Deliberately NOT backfilled from
+	// access_count: the existing values are the defect (sweeps inflated them
+	// to a median of 110 on the live bank), so copying them over would carry
+	// the defect into the honest counter. Everyone starts at zero and earns
+	// the count back through bounded retrievals.
+	hasTargetedAccess, err := memoryColumnExists(db, "targeted_access_count")
+	if err != nil {
+		return err
+	}
+	if !hasTargetedAccess {
+		if _, err := db.Exec(`ALTER TABLE memories ADD COLUMN targeted_access_count INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
 	}
 
 	// T48 sedimentation column + index. Idempotent: ADD COLUMN only if absent;

@@ -120,6 +120,14 @@ type RecountReferencesResult struct {
 // Edges explicitly NOT counted (documented as known limitations):
 //   - memories.replaces column (inverse of superseded_by, would double-count)
 //   - any other free-form cross-references in content/metadata
+//   - [[wikilink]] notation in content. T114 settled this by measurement rather
+//     than by preference: 120 occurrences across 83 distinct targets, of which
+//     15 come within reach of a memory title and 68 do not, while the rest are
+//     not links at all (a uuid fragment, a bare prose phrase, shell snippets
+//     the pattern happens to match). The slugs are Sema's canonical pattern
+//     names — an identifier space belonging to another system, not to this
+//     store. A resolver here would be a graph over a naming convention we do
+//     not own, so the notation is decorative here and stays uncounted.
 func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountReferencesResult, error) {
 	// Phase 1: build tally without taking writeMu (SELECT only).
 	rows, err := ms.db.QueryContext(ctx,

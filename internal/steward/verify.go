@@ -13,9 +13,9 @@ import (
 type VerificationMethod string
 
 const (
-	VerifyManual       VerificationMethod = "manual"
-	VerifySourceCheck  VerificationMethod = "source_check"
-	VerifyRepoScan     VerificationMethod = "repo_scan"
+	VerifyManual        VerificationMethod = "manual"
+	VerifySourceCheck   VerificationMethod = "source_check"
+	VerifyRepoScan      VerificationMethod = "repo_scan"
 	VerifyAgentVerified VerificationMethod = "agent_verified"
 )
 
@@ -23,10 +23,10 @@ const (
 type VerificationStatus string
 
 const (
-	StatusVerified          VerificationStatus = "verified"
+	StatusVerified           VerificationStatus = "verified"
 	StatusVerificationFailed VerificationStatus = "verification_failed"
-	StatusNeedsUpdate       VerificationStatus = "needs_update"
-	StatusUnverified        VerificationStatus = "unverified"
+	StatusNeedsUpdate        VerificationStatus = "needs_update"
+	StatusUnverified         VerificationStatus = "unverified"
 )
 
 // VerifyParams holds parameters for verify_entry.
@@ -68,15 +68,15 @@ const (
 
 // VerificationCandidate is a memory that needs verification.
 type VerificationCandidate struct {
-	MemoryID       string    `json:"memory_id"`
-	Title          string    `json:"title"`
-	Type           string    `json:"type"`
-	Entity         string    `json:"entity,omitempty"`
-	LastVerifiedAt time.Time `json:"last_verified_at"`
-	AgeDays        int       `json:"age_days"`
-	Reason         string    `json:"reason"`
-	Urgency        Urgency   `json:"urgency"`
-	SuggestedAction string  `json:"suggested_action"`
+	MemoryID        string    `json:"memory_id"`
+	Title           string    `json:"title"`
+	Type            string    `json:"type"`
+	Entity          string    `json:"entity,omitempty"`
+	LastVerifiedAt  time.Time `json:"last_verified_at"`
+	AgeDays         int       `json:"age_days"`
+	Reason          string    `json:"reason"`
+	Urgency         Urgency   `json:"urgency"`
+	SuggestedAction string    `json:"suggested_action"`
 }
 
 // VerificationCandidatesParams configures the verification candidates query.

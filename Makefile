@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet local-smoke eval eval-update eval-rerank
+.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/agent-memory-mcp
@@ -15,10 +15,18 @@ test:
 # harness sat broken for four months (T112): the config struct was reshaped, the
 # tagged file kept naming the old fields, and build, vet and test all skipped it.
 # Every tag in use has to be vetted explicitly or it rots the same way again.
-vet:
+vet: fmt-check
 	go vet ./...
 	go vet -tags=eval ./...
 	go vet -tags=corpus ./...
+
+# Nothing checked formatting, so six files had drifted out of gofmt shape on
+# main — invisible until an unrelated `gofmt -w` pulled them into a diff.
+fmt-check:
+	@unformatted="$$(gofmt -l ./cmd ./internal)"; \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
+	fi
 
 local-smoke:
 	./scripts/local-smoke.sh

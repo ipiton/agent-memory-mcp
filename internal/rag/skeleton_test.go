@@ -220,10 +220,10 @@ func TestIsNoisyTitle(t *testing.T) {
 		"Overview",
 		"Architecture",
 		"Rollback procedure",
-		"Reference implementation",   // contains "Reference" but not equal to "References"
-		"Indexes (k8s pattern)",      // contains "Index" but not equal
-		"Change tracking algorithm",  // contains "Change" but not "Changelog"
-		"Release strategy",           // contains "Release" but not "Release Notes"
+		"Reference implementation",  // contains "Reference" but not equal to "References"
+		"Indexes (k8s pattern)",     // contains "Index" but not equal
+		"Change tracking algorithm", // contains "Change" but not "Changelog"
+		"Release strategy",          // contains "Release" but not "Release Notes"
 	}
 	for _, title := range clean {
 		if isNoisyTitle(title) {

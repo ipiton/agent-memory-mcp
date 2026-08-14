@@ -59,7 +59,7 @@ func TestCacheUpdatesDoNotRaceWithLockFreeReaders(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range rounds {
-			store.flushAccessStats(ids)
+			store.flushAccessStats(ids, true)
 		}
 	}()
 

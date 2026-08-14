@@ -56,7 +56,7 @@ func seedNonDeadEnd(t *testing.T, store *Store, title string) {
 
 func TestStaleDeadEnds_FiltersByAgeThreshold(t *testing.T) {
 	store := newTestStore(t)
-	old := seedDeadEndAge(t, store, "old-deadend", 14*30*24*time.Hour) // 14 months
+	old := seedDeadEndAge(t, store, "old-deadend", 14*30*24*time.Hour)  // 14 months
 	young := seedDeadEndAge(t, store, "young-deadend", 30*24*time.Hour) // 1 month
 	seedNonDeadEnd(t, store, "decision")
 

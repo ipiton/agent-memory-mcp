@@ -54,11 +54,11 @@ func fixedPolicy(now time.Time) SedimentPolicy {
 func TestDecide_SurfaceToEpisodic_ByAge(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:             "m1",
-		Type:           TypeWorking,
-		SedimentLayer:  string(LayerSurface),
-		CreatedAt:      now.Add(-8 * 24 * time.Hour), // 8 days old
-		AccessCount:    1,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       string(LayerSurface),
+		CreatedAt:           now.Add(-8 * 24 * time.Hour), // 8 days old
+		TargetedAccessCount: 1,
 	}
 	tr := Decide(m, fixedPolicy(now))
 	if tr == nil {
@@ -78,25 +78,25 @@ func TestDecide_SurfaceToEpisodic_ByAge(t *testing.T) {
 func TestDecide_SurfaceToEpisodic_NoAccess(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeWorking,
-		SedimentLayer: string(LayerSurface),
-		CreatedAt:     now.Add(-8 * 24 * time.Hour),
-		AccessCount:   0,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       string(LayerSurface),
+		CreatedAt:           now.Add(-8 * 24 * time.Hour),
+		TargetedAccessCount: 0,
 	}
 	if tr := Decide(m, fixedPolicy(now)); tr != nil {
-		t.Errorf("expected nil (access_count=0), got %+v", tr)
+		t.Errorf("expected nil (targeted_access_count=0), got %+v", tr)
 	}
 }
 
 func TestDecide_SurfaceToEpisodic_TooFresh(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeWorking,
-		SedimentLayer: string(LayerSurface),
-		CreatedAt:     now.Add(-3 * 24 * time.Hour), // 3 days old, threshold 7
-		AccessCount:   10,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       string(LayerSurface),
+		CreatedAt:           now.Add(-3 * 24 * time.Hour), // 3 days old, threshold 7
+		TargetedAccessCount: 10,
 	}
 	if tr := Decide(m, fixedPolicy(now)); tr != nil {
 		t.Errorf("expected nil (too fresh), got %+v", tr)
@@ -106,11 +106,11 @@ func TestDecide_SurfaceToEpisodic_TooFresh(t *testing.T) {
 func TestDecide_EpisodicToSemantic_ByAge(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeEpisodic,
-		SedimentLayer: string(LayerEpisodic),
-		CreatedAt:     now.Add(-31 * 24 * time.Hour),
-		AccessCount:   3,
+		ID:                  "m1",
+		Type:                TypeEpisodic,
+		SedimentLayer:       string(LayerEpisodic),
+		CreatedAt:           now.Add(-31 * 24 * time.Hour),
+		TargetedAccessCount: 3,
 	}
 	tr := Decide(m, fixedPolicy(now))
 	if tr == nil {
@@ -130,11 +130,11 @@ func TestDecide_EpisodicToSemantic_ByAge(t *testing.T) {
 func TestDecide_EpisodicToSemantic_NotEnoughAccess(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeEpisodic,
-		SedimentLayer: string(LayerEpisodic),
-		CreatedAt:     now.Add(-31 * 24 * time.Hour),
-		AccessCount:   2, // min is 3
+		ID:                  "m1",
+		Type:                TypeEpisodic,
+		SedimentLayer:       string(LayerEpisodic),
+		CreatedAt:           now.Add(-31 * 24 * time.Hour),
+		TargetedAccessCount: 2, // min is 3
 	}
 	if tr := Decide(m, fixedPolicy(now)); tr != nil {
 		t.Errorf("expected nil, got %+v", tr)
@@ -240,11 +240,11 @@ func TestDecide_CharacterStays_RecentAccess(t *testing.T) {
 func TestDecide_NoTransition_FreshSurface(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeWorking,
-		SedimentLayer: string(LayerSurface),
-		CreatedAt:     now.Add(-1 * time.Hour),
-		AccessCount:   5,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       string(LayerSurface),
+		CreatedAt:           now.Add(-1 * time.Hour),
+		TargetedAccessCount: 5,
 	}
 	if tr := Decide(m, fixedPolicy(now)); tr != nil {
 		t.Errorf("expected nil, got %+v", tr)
@@ -254,11 +254,11 @@ func TestDecide_NoTransition_FreshSurface(t *testing.T) {
 func TestDecide_SkipsReviewQueueItem(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeWorking,
-		SedimentLayer: string(LayerSurface),
-		CreatedAt:     now.Add(-30 * 24 * time.Hour),
-		AccessCount:   10,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       string(LayerSurface),
+		CreatedAt:           now.Add(-30 * 24 * time.Hour),
+		TargetedAccessCount: 10,
 		Metadata: map[string]string{
 			MetadataRecordKind: RecordKindReviewQueueItem,
 		},
@@ -271,11 +271,11 @@ func TestDecide_SkipsReviewQueueItem(t *testing.T) {
 func TestDecide_EmptyLayer_TreatedAsSurface(t *testing.T) {
 	now := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
 	m := &Memory{
-		ID:            "m1",
-		Type:          TypeWorking,
-		SedimentLayer: "", // pre-T48 row that missed backfill
-		CreatedAt:     now.Add(-8 * 24 * time.Hour),
-		AccessCount:   1,
+		ID:                  "m1",
+		Type:                TypeWorking,
+		SedimentLayer:       "", // pre-T48 row that missed backfill
+		CreatedAt:           now.Add(-8 * 24 * time.Hour),
+		TargetedAccessCount: 1,
 	}
 	tr := Decide(m, fixedPolicy(now))
 	if tr == nil {

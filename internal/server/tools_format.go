@@ -419,7 +419,11 @@ func (s *MCPServer) formatMemoryResults(query string, results []*memory.SearchRe
 		}
 
 		fmt.Fprintf(&buf, "   Content: %s\n", s.previewText(m.Content, 300))
-		fmt.Fprintf(&buf, "   Importance: %.1f | Access count: %d\n\n", m.Importance, m.AccessCount)
+		// T113: both numbers, because they answer different questions —
+		// "returned by any recall, sweeps included" vs "returned to a bounded
+		// query". The second is the one that means the entry was wanted.
+		fmt.Fprintf(&buf, "   Importance: %.1f | Access count: %d (targeted: %d)\n\n",
+			m.Importance, m.AccessCount, m.TargetedAccessCount)
 	}
 
 	for _, sg := range activeSuggestions {

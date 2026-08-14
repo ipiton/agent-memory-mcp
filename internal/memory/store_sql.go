@@ -82,12 +82,14 @@ func insertMemoryRow(exec sqlExecutor, m *Memory) error {
 	res, err := exec.Exec(`
 		INSERT INTO memories (id, content, type, title, tags, context, importance, metadata,
 		                      embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
+		                      targeted_access_count,
 		                      valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.ID, m.Content, m.Type, m.Title, tagsJSON, m.Context,
 		m.Importance, metadataJSON, m.EmbeddingModel, embeddingBlob,
 		m.CreatedAt, m.UpdatedAt, m.AccessedAt, m.AccessCount,
+		m.TargetedAccessCount,
 		nullTime(m.ValidFrom), nullTime(m.ValidUntil), nullStr(m.SupersededBy), nullStr(m.Replaces), nullTime(m.ObservedAt),
 		sedimentLayerValue(m.SedimentLayer),
 	)
@@ -122,6 +124,11 @@ func verifyMemoryPersisted(db *sql.DB, id string) error {
 	return nil
 }
 
+// updateMemoryRow deliberately leaves targeted_access_count out of the SET
+// list (T113). The counter is owned by flushAccessStats, which increments it
+// in SQL; writing it back from an in-memory struct would let a content edit
+// that started before a concurrent recall silently roll the count back — and
+// the one thing this counter has to be is trustworthy.
 func updateMemoryRow(exec sqlExecutor, m *Memory) error {
 	tagsJSON, metadataJSON, embeddingBlob, err := marshalMemoryFields(m)
 	if err != nil {
