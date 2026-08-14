@@ -429,6 +429,17 @@ func (s *MCPServer) ReloadConfig(newCfg config.Config) {
 	s.ragMu.Lock()
 	defer s.ragMu.Unlock()
 
+	// T91 L12: name what the reload cannot apply. The scope is deliberately
+	// narrow (see reloadAppliedNote), but an operator who edits config.env and
+	// reads "config reloaded" has no way to tell that their new session timeout
+	// or sweep interval is still the old one.
+	if restart := restartRequiredChanges(s.config, newCfg); len(restart) > 0 && s.fileLogger != nil {
+		s.fileLogger.Warn("Config reload: some changes require a restart to take effect",
+			zap.Strings("requires_restart", restart),
+			zap.String("applied_by_reload", reloadAppliedNote),
+		)
+	}
+
 	s.config = newCfg
 
 	if s.ragEngine != nil {

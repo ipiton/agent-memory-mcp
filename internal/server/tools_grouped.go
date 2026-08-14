@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -198,29 +200,108 @@ func buildGroupedTool(g toolGroupSpec, members []tool, actions []groupAction) to
 			"description": actionDescription(actions, members),
 		},
 	}
+
 	// Merge each member's properties. First writer wins on name collisions; no
 	// grouped member uses `action` (guarded by TestGroupedSchemaIntegrity), so
 	// the discriminator above is never shadowed.
-	for _, m := range members {
+	//
+	// T91 M8: first-writer-wins is lossy when two actions declare the same
+	// argument differently — `type` carries a different enum for store than for
+	// list, `limit` a different maximum for one search mode than another. The
+	// merged schema then states one action's constraint as if it held for all,
+	// which is worse than saying nothing: the model has no reason to doubt it.
+	// The collision is recorded and surfaced in the property's description
+	// rather than silently resolved.
+	variants := map[string][]propertyVariant{}
+	for i, m := range members {
 		mp, _ := m.InputSchema["properties"].(map[string]any)
 		for k, v := range mp {
 			if k == "action" {
 				continue
 			}
+			recordPropertyVariant(variants, k, actions[i].Action, v)
 			if _, exists := props[k]; !exists {
 				props[k] = v
 			}
 		}
 	}
+	description := g.Description
+	if divergent := divergentPropertyNames(variants); len(divergent) > 0 {
+		description += " Varies by action: " + strings.Join(divergent, ", ") + "."
+	}
+
 	return tool{
 		Name:        g.Name,
-		Description: g.Description,
+		Description: description,
 		InputSchema: map[string]any{
 			"type":       "object",
 			"properties": props,
 			"required":   []string{"action"},
 		},
 	}
+}
+
+// propertyVariant is one distinct shape a property takes, with the actions that
+// declare it.
+type propertyVariant struct {
+	schema  any
+	actions []string
+}
+
+func recordPropertyVariant(variants map[string][]propertyVariant, name, action string, schema any) {
+	key := constraintsOf(schema)
+	list := variants[name]
+	for i := range list {
+		if reflect.DeepEqual(constraintsOf(list[i].schema), key) {
+			list[i].actions = append(list[i].actions, action)
+			variants[name] = list
+			return
+		}
+	}
+	variants[name] = append(list, propertyVariant{schema: schema, actions: []string{action}})
+}
+
+// constraintsOf strips the prose from a property schema, leaving what actually
+// binds a caller: type, enum, bounds, item shape.
+//
+// Comparing whole schemas flagged almost every shared argument, because two
+// actions naturally word the same `context` or `limit` differently. That volume
+// of warning carries no signal — it says "trust nothing". What matters is a
+// genuine constraint conflict: `type` carrying a different enum for one action,
+// `limit` a different maximum. Those are rare and worth naming.
+func constraintsOf(schema any) any {
+	m, ok := schema.(map[string]any)
+	if !ok {
+		return schema
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		switch k {
+		case "description", "default", "examples", "title":
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// divergentPropertyNames returns, sorted, the properties whose declared shape
+// is not the same for every action that accepts them.
+//
+// The warning is aggregated into the tool description rather than repeated on
+// each property: the grouped surface exists to cut the discovery payload, and a
+// per-property note costs about seven times more than this one sentence for the
+// same information. Naming the properties is what matters — it tells the model
+// which arguments it cannot take at face value.
+func divergentPropertyNames(variants map[string][]propertyVariant) []string {
+	var names []string
+	for name, list := range variants {
+		if len(list) > 1 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func actionEnum(actions []groupAction) []string {
@@ -239,8 +320,36 @@ func actionDescription(actions []groupAction, members []tool) string {
 	for i, a := range actions {
 		desc := strings.TrimSpace(members[i].Description)
 		fmt.Fprintf(&b, "\n- %s: %s", a.Action, desc)
+		// T91 M8: the grouped schema can only require `action` — JSON Schema
+		// has no way to express "content is required, but only when action is
+		// store" without oneOf/if-then, which many clients handle poorly. The
+		// per-action requirements were therefore simply dropped, and the model
+		// was left to guess which arguments each action needs. They are stated
+		// here instead, where the model is already reading to pick an action.
+		if req := requiredFieldsOf(members[i]); len(req) > 0 {
+			fmt.Fprintf(&b, " [req: %s]", strings.Join(req, ", "))
+		}
 	}
 	return b.String()
+}
+
+// requiredFieldsOf reads a member tool's own required list, tolerating both
+// []string and the []any shape a JSON round-trip produces.
+func requiredFieldsOf(t tool) []string {
+	switch req := t.InputSchema["required"].(type) {
+	case []string:
+		return req
+	case []any:
+		out := make([]string, 0, len(req))
+		for _, v := range req {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // resolveGroupedToolCall translates a grouped meta-tool call into its legacy
