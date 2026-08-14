@@ -105,3 +105,26 @@ the difference is not marginal: measured on the same corpus, Granite R2 scored
 0.2870 Hit@5 on raw cosine and 0.9101 centered, while the model it replaced
 scored 0.6232 and 0.7217. A model comparison run on raw cosine can invert the
 ranking of the models themselves.
+
+## The measurement has to name the model too
+
+The scoring configuration is not the only thing that has to match. `Recall`
+compares each record's embedding model id against the query's *before* it
+compares vectors, so a harness carrying a stale model label finds no match on
+any record, falls through to text matching, and reports a number for that
+instead. The first acceptance run after this migration returned Hit@5 0.0232 —
+not a regression, a measurement of a different retrieval path.
+
+`make eval-recall` now sources the service's `config.env` and refuses to run
+when the encoder's model id is not the bank's dominant one, naming both. If you
+build your own harness, copy that guard before you copy anything else.
+
+## What this migration actually produced
+
+| | Hit@5 | MRR |
+|---|---|---|
+| embeddinggemma-300M + centering | 0.7217 | 0.5739 |
+| **granite-embedding-311M-r2 + centering** | **0.9130** | **0.7847** |
+
+345 machine-labelled queries, live bank, production scoring. The pre-migration
+estimate on a copy was 0.9101 / 0.7762.
