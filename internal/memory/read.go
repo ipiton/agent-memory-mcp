@@ -276,6 +276,18 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
+		// T122: the same argument for a different shape. A body that is nothing
+		// but "- Promoted canonical: <uuid>" bullets matches a query about
+		// promotion honestly and answers none of it — the record is a journal of
+		// what was done, not knowledge about it. 80 such records were already in
+		// the bank when the write boundary learned to refuse them (the guard
+		// existed since T85 but sat only on the checkpoint path), and they stay:
+		// they are the raw material of the unprocessed-summary queue, which reads
+		// them through List. Only semantic selection skips them.
+		if m.ActivityLog {
+			continue
+		}
+
 		// Superseded entries (temporal replacement, e.g. after a merge or
 		// MarkOutdated) are invisible to semantic recall — the successor
 		// carries the current knowledge, while the old vector is unchanged and

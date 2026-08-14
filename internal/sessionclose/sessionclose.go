@@ -2,10 +2,12 @@ package sessionclose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
 
@@ -191,6 +193,11 @@ func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalysisRes
 	return result, nil
 }
 
+// ErrNoKnowledge reports that a session summary was refused by the write
+// boundary because its body carries no reusable content (T80/T85 shapes). It is
+// a policy decision, not a failure: callers report the skip and continue.
+var ErrNoKnowledge = errors.New("session summary carries no knowledge")
+
 func (s *Service) SaveRawSummary(ctx context.Context, summary memory.SessionSummary) (string, error) {
 	return s.SaveRawSummaryWithOptions(ctx, summary, RawSaveOptions{})
 }
@@ -203,6 +210,18 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 	summary, err := normalizeSummary(summary, s.now())
 	if err != nil {
 		return "", err
+	}
+
+	// T122: the no-knowledge guard belongs at the write boundary, not at the
+	// entry points. hooks.Check carried it, but only the two session-checkpoint
+	// callers invoked Check — this function, which writes every terminal session
+	// summary, did not. The live bank showed the gap directly: 75 chore-log-only
+	// summaries against 0 chore-log-only checkpoints, still arriving daily.
+	// Checkpoint callers reach this line only after Check already passed, so the
+	// second evaluation is a no-op for them.
+	if reason := hooks.NoiseReason(summary.Summary); reason != "" {
+		s.store.IncrementDedupSkipped(reason)
+		return "", fmt.Errorf("%w: %s", ErrNoKnowledge, reason)
 	}
 
 	recordKind := strings.TrimSpace(opts.RecordKind)

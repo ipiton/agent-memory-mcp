@@ -104,6 +104,20 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 
 	if *rawOnly {
 		rawID, err := serviceLayer.SaveRawSummary(context.Background(), sessionSummary)
+		// T122: the write boundary refuses bodies with no knowledge. Report it as
+		// a skip with the reason, the way the checkpoint path already does — an
+		// exit code would read as "the store is broken".
+		if errors.Is(err, sessionclose.ErrNoKnowledge) {
+			if *jsonOut {
+				return printJSON(map[string]any{
+					"raw_only": true,
+					"skipped":  "no_knowledge",
+					"mode":     modeValue,
+				})
+			}
+			fmt.Println("Raw session summary skipped: body is an activity log, not knowledge")
+			return nil
+		}
 		if err != nil {
 			return err
 		}

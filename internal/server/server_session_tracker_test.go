@@ -13,6 +13,60 @@ import (
 func TestBackgroundSessionTrackerFlushesOnIdle(t *testing.T) {
 	s := newAutoSessionTestServer(t, 20*time.Millisecond, 0, 1)
 
+	// T122: the activity has to be one that carries knowledge. This test used
+	// project_bank_view, whose whole session body is "- Project bank review:
+	// canonical_overview" — a chore-log line that the write boundary now
+	// refuses, so the test was asserting that a no-content record gets stored.
+	// "Incident investigation" is deliberately outside the chore whitelist (a
+	// human writes real root-cause prose under it), which makes it the right
+	// read-only stand-in here.
+	params, _ := json.Marshal(map[string]any{
+		"name": "recall_similar_incidents",
+		"arguments": map[string]any{
+			"query":   "latency spike on the payments api",
+			"context": "payments",
+			"service": "api",
+		},
+	})
+	if _, rErr := s.handleToolsCall(params); rErr != nil {
+		t.Fatalf("handleToolsCall returned error: %+v", rErr)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+
+	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 10)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	// The incident-recall activity also queues a review item, so pick the
+	// summary out rather than asserting on the whole context.
+	var summary *memory.Memory
+	for _, m := range memories {
+		if memory.IsSessionSummaryMemory(m) {
+			if summary != nil {
+				t.Fatalf("two session summaries for one flush")
+			}
+			summary = m
+		}
+	}
+	if summary == nil {
+		t.Fatalf("no session summary among %d memories", len(memories))
+	}
+	if summary.Metadata[memory.MetadataSessionBoundary] != "idle_timeout" {
+		t.Fatalf("session_boundary = %q, want idle_timeout", summary.Metadata[memory.MetadataSessionBoundary])
+	}
+	if summary.Metadata[memory.MetadataSessionOrigin] != autoSessionOrigin {
+		t.Fatalf("session_origin = %q, want %q", summary.Metadata[memory.MetadataSessionOrigin], autoSessionOrigin)
+	}
+}
+
+// T122: the auto-capture idle flush goes Analyze → executeActions →
+// SaveRawSummary and never touched hooks.Check, so a session that only ran
+// maintenance views persisted a body of pure activity bullets. On the live bank
+// that produced 75 such records against 0 on the guarded checkpoint path.
+func TestBackgroundSessionTrackerSkipsChoreOnlySession(t *testing.T) {
+	s := newAutoSessionTestServer(t, 20*time.Millisecond, 0, 1)
+
 	params, _ := json.Marshal(map[string]any{
 		"name": "project_bank_view",
 		"arguments": map[string]any{
@@ -31,17 +85,10 @@ func TestBackgroundSessionTrackerFlushesOnIdle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(memories) != 1 {
-		t.Fatalf("len(memories) = %d, want 1", len(memories))
-	}
-	if !memory.IsSessionSummaryMemory(memories[0]) {
-		t.Fatalf("expected session summary memory, got %#v", memories[0].Metadata)
-	}
-	if memories[0].Metadata[memory.MetadataSessionBoundary] != "idle_timeout" {
-		t.Fatalf("session_boundary = %q, want idle_timeout", memories[0].Metadata[memory.MetadataSessionBoundary])
-	}
-	if memories[0].Metadata[memory.MetadataSessionOrigin] != autoSessionOrigin {
-		t.Fatalf("session_origin = %q, want %q", memories[0].Metadata[memory.MetadataSessionOrigin], autoSessionOrigin)
+	for _, m := range memories {
+		if memory.IsSessionSummaryMemory(m) {
+			t.Fatalf("a chore-only session was persisted as a summary: %q", m.Content)
+		}
 	}
 }
 

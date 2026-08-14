@@ -2,6 +2,7 @@ package sessionclose
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,14 @@ func (s *Service) executeActions(ctx context.Context, result *AnalysisResult, re
 		if action.Kind == ActionRawOnly {
 			if req.SaveRaw {
 				rawID, err := s.SaveRawSummary(ctx, result.Summary)
+				// T122: a body with no knowledge is refused by policy, not by
+				// failure. Aborting the whole close would lose the other actions
+				// of a session that merely ran searches.
+				if errors.Is(err, ErrNoKnowledge) {
+					action.State = ActionStateSkipped
+					action.ExecutionNote = "raw summary carries no knowledge"
+					continue
+				}
 				if err != nil {
 					return err
 				}
