@@ -40,6 +40,32 @@ brews:
     license: "MIT"
     install: |
       bin.install "agent-memory-mcp"
+      # T101: the service is launched through a wrapper so secrets can come
+      # from SOPS on machines that use it, without forcing sops on anyone
+      # else. No secrets file → the wrapper execs the binary directly, which
+      # is exactly what the service did before.
+      (libexec/"service-wrapper").write <<~SH
+        #!/bin/bash
+        set -euo pipefail
+
+        BIN="#{opt_bin}/agent-memory-mcp"
+        CONFIG="#{etc}/agent-memory-mcp/config.env"
+        SECRETS="#{etc}/agent-memory-mcp/secrets.sops.env"
+
+        if [ -f "$SECRETS" ] && command -v sops >/dev/null 2>&1; then
+          # launchd gives a minimal environment, so the age key has to be named
+          # explicitly — sops does not find it otherwise (verified 2026-08-14).
+          : "${SOPS_AGE_KEY_FILE:=$HOME/.config/sops/age/keys.txt}"
+          export SOPS_AGE_KEY_FILE
+          # --same-process makes sops exec the service in place instead of
+          # forking it. Without it launchd would supervise sops rather than the
+          # service, and `brew services stop` would change meaning.
+          exec sops exec-env --same-process "$SECRETS" "$BIN serve --config $CONFIG"
+        fi
+
+        exec "$BIN" serve --config "$CONFIG"
+      SH
+      chmod 0755, libexec/"service-wrapper"
     post_install: |
       (etc/"agent-memory-mcp").mkpath
       config_file = etc/"agent-memory-mcp/config.env"
@@ -79,7 +105,7 @@ brews:
       (var/"agent-memory-mcp/rag-index").mkpath
       (var/"log/agent-memory-mcp").mkpath
     service: |
-      run [opt_bin/"agent-memory-mcp", "serve", "--config", etc/"agent-memory-mcp/config.env"]
+      run [opt_libexec/"service-wrapper"]
       keep_alive true
       log_path var/"log/agent-memory-mcp/service.log"
       error_log_path var/"log/agent-memory-mcp/service.err.log"
