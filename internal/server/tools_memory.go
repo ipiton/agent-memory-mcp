@@ -251,6 +251,12 @@ func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {
 		}
 		updates.Importance = &normalizedImportance
 	}
+	// T96: metadata had no surface on this tool at all — not to set, not to
+	// remove. The store has merged-with-empty-value-removes semantics already
+	// (updateLocked), so this is the missing edge, not new policy.
+	if metadata := metadataPatchFromArgs(args); len(metadata) > 0 {
+		updates.Metadata = metadata
+	}
 
 	err = s.memoryStore.Update(context.Background(), p.ID, updates)
 	if err != nil {
@@ -587,4 +593,46 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 
 	filtered := filterCanonicalSearchResults(results, service, requiredTags, limit)
 	return toolResultText(s.formatCanonicalKnowledgeRecall(query, filtered, memContext, service)), nil
+}
+
+// metadataPatchFromArgs reads a metadata patch, keeping empty values.
+//
+// T96: the shared getStringMap drops empty values, which is right for the
+// arguments it was written for and exactly wrong here — an empty value is how
+// updateLocked is told to REMOVE a key, and dropping it turns a removal into a
+// silent no-op. That is the second place the same trap sat: NormalizeMetadata
+// drops empties on the way into the store, and updateLocked deletes before it
+// calls that. Keys are trimmed; a blank key is still ignored.
+func metadataPatchFromArgs(args map[string]any) map[string]string {
+	raw, ok := args["metadata"]
+	if !ok {
+		return nil
+	}
+	patch := make(map[string]string)
+	switch typed := raw.(type) {
+	case map[string]string:
+		for k, v := range typed {
+			if k = strings.TrimSpace(k); k != "" {
+				patch[k] = strings.TrimSpace(v)
+			}
+		}
+	case map[string]any:
+		for k, v := range typed {
+			k = strings.TrimSpace(k)
+			if k == "" {
+				continue
+			}
+			if v == nil {
+				patch[k] = ""
+				continue
+			}
+			patch[k] = strings.TrimSpace(fmt.Sprintf("%v", v))
+		}
+	default:
+		return nil
+	}
+	if len(patch) == 0 {
+		return nil
+	}
+	return patch
 }

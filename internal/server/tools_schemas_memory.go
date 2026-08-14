@@ -107,6 +107,14 @@ func memoryToolDefs() []tool {
 						"maximum":     1,
 						"description": "New importance",
 					},
+					"metadata": map[string]any{
+						"type":                 "object",
+						"additionalProperties": map[string]any{"type": "string"},
+						"description": "Metadata keys to set. Merged into the existing metadata; " +
+							"an empty string REMOVES the key. Removal had no surface at all before " +
+							"T96 — the store supported it, no tool exposed it — which left canonical " +
+							"records stamped as verified by their own promotion with no way to correct them.",
+					},
 				},
 				"required": []string{"id"},
 			},
