@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // defaultJinaRerankURL is the production Jina rerank endpoint. Config.Endpoint
@@ -166,8 +168,5 @@ func formatDocument(c Candidate) string {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
+	return textfmt.TruncateSuffix(s, max, "...")
 }

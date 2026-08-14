@@ -3,6 +3,8 @@ package memory
 import (
 	"strings"
 	"unicode/utf8"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // sanitizeUTF8 replaces invalid UTF-8 byte sequences with the Unicode
@@ -16,13 +18,10 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "�")
 }
 
-// truncateRunesSuffix truncates s to at most maxRunes runes on a rune boundary
-// (never splitting a multibyte character) and appends suffix when truncation
-// occurred. Unlike a byte slice (s[:n]), this cannot produce invalid UTF-8 —
-// the root-cause fix for corrupted Cyrillic/CJK content (T87).
+// truncateRunesSuffix is retained as the package-local spelling of
+// textfmt.TruncateSuffix. T90 D6: the implementation moved to textfmt so the
+// dozen call sites across packages share one tested version instead of each
+// package growing its own (and several regressing to a byte slice).
 func truncateRunesSuffix(s string, maxRunes int, suffix string) string {
-	if maxRunes < 0 || utf8.RuneCountInString(s) <= maxRunes {
-		return s
-	}
-	return string([]rune(s)[:maxRunes]) + suffix
+	return textfmt.TruncateSuffix(s, maxRunes, suffix)
 }

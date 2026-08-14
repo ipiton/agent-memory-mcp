@@ -251,13 +251,28 @@ func LifecycleStatusOf(m *Memory) LifecycleStatus {
 }
 
 func RequiresReview(m *Memory) bool {
-	if m == nil || len(m.Metadata) == 0 {
+	if m == nil {
 		return false
 	}
-	if metadataBool(m.Metadata, MetadataReviewRequired) {
-		return true
+	return requiresReview(m.Metadata, m.Tags)
+}
+
+// requiresReview is the single answer to "is this entry flagged for review",
+// shared by the full-row and cache-backed trust derivations (T90 D5). It is the
+// union of the signals those two used separately: the engineering metadata flag
+// and status, plus the review:required tag. Before this, an entry tagged for
+// review scored as reviewed on the full path, and an entry flagged in metadata
+// scored as reviewed on the cached path.
+func requiresReview(metadata map[string]string, tags []string) bool {
+	if len(metadata) > 0 {
+		if metadataBool(metadata, MetadataReviewRequired) {
+			return true
+		}
+		if normalizeStatus(metadata[MetadataStatus]) == "review_required" {
+			return true
+		}
 	}
-	return normalizeStatus(m.Metadata[MetadataStatus]) == "review_required"
+	return hasTag(tags, "review:required")
 }
 
 func IsSessionSummaryMemory(m *Memory) bool {

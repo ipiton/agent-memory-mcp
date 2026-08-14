@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 const maxErrorLength = 200
@@ -102,8 +104,5 @@ func (s *Logger) Close() error {
 
 func trimError(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= maxErrorLength {
-		return value
-	}
-	return value[:maxErrorLength] + "..."
+	return textfmt.TruncateSuffix(value, maxErrorLength, "...")
 }

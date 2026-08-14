@@ -4,7 +4,6 @@ package memory
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -326,12 +325,8 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 }
 
 func (ms *Store) loadMemoriesToCache() error {
-	rows, err := ms.db.Query(`
-		SELECT id, content, type, title, tags, context, importance, metadata,
-		       embedding_model, embedding, created_at, updated_at, accessed_at, access_count,
-		       valid_from, valid_until, superseded_by, sediment_layer
-		FROM memories
-	`)
+	// T90 D4: the same column list and the same parser as every other reader.
+	rows, err := ms.db.Query("SELECT " + memoryColumns + " FROM memories")
 	if err != nil {
 		return err
 	}
@@ -345,20 +340,7 @@ func (ms *Store) loadMemoriesToCache() error {
 	ms.loadErrors = 0
 
 	for rows.Next() {
-		var m cachedMemory
-		var tagsJSON, metadataJSON, embeddingModel sql.NullString
-		var embeddingBlob []byte
-		var createdAt, updatedAt, accessedAt sql.NullTime
-		var validFrom, validUntil sql.NullTime
-		var supersededBy sql.NullString
-		var sedimentLayer sql.NullString
-
-		err := rows.Scan(
-			&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
-			&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
-			&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
-			&validFrom, &validUntil, &supersededBy, &sedimentLayer,
-		)
+		m, err := scanMemoryRowCounting(rows, &ms.loadErrors)
 		if err != nil {
 			ms.logger.Warn("Failed to scan memory", zap.Error(err))
 			ms.loadErrors++
@@ -375,60 +357,7 @@ func (ms *Store) loadMemoriesToCache() error {
 			ms.loadErrors++
 		}
 
-		// Parse tags
-		if tagsJSON.Valid && tagsJSON.String != "" {
-			if err := json.Unmarshal([]byte(tagsJSON.String), &m.Tags); err != nil {
-				ms.logger.Warn("Failed to unmarshal tags", zap.String("id", m.ID), zap.Error(err))
-				ms.loadErrors++
-			}
-		}
-
-		// Cache metadata + derived fields for fast cache-resident lookup.
-		metadata, _ := parseMetadataJSON(metadataJSON)
-		m.Metadata = metadata
-		deriveCachedFields(&m, metadata, m.Type)
-
-		// Parse embedding (binary format)
-		if len(embeddingBlob) > 0 {
-			parsed, err := unmarshalEmbeddingBinary(embeddingBlob)
-			if err != nil {
-				ms.logger.Warn("Failed to unmarshal embedding", zap.String("id", m.ID), zap.Error(err))
-				ms.loadErrors++
-			} else {
-				m.Embedding = parsed
-			}
-		}
-		if embeddingModel.Valid {
-			m.EmbeddingModel = embeddingModel.String
-		}
-
-		// Parse timestamps
-		if createdAt.Valid {
-			m.CreatedAt = createdAt.Time
-		}
-		if updatedAt.Valid {
-			m.UpdatedAt = updatedAt.Time
-		}
-		if accessedAt.Valid {
-			m.AccessedAt = accessedAt.Time
-		}
-		if validFrom.Valid {
-			m.ValidFrom = &validFrom.Time
-		}
-		if validUntil.Valid {
-			m.ValidUntil = &validUntil.Time
-		}
-		if supersededBy.Valid {
-			m.SupersededBy = supersededBy.String
-		}
-		if sedimentLayer.Valid {
-			m.SedimentLayer = NormalizeSedimentLayer(sedimentLayer.String)
-		}
-		if m.SedimentLayer == "" {
-			m.SedimentLayer = DefaultSedimentLayer
-		}
-
-		ms.cacheSetLocked(&m)
+		ms.cacheSetLocked(toCachedMemory(m))
 	}
 
 	return rows.Err()

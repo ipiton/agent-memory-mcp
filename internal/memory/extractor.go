@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // TripleExtractor turns a stored memory into a small set of knowledge-graph
@@ -306,8 +308,5 @@ func buildExtractorUserMessage(mem *Memory) string {
 
 func truncateError(s string) string {
 	const maxLen = 200
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return textfmt.TruncateSuffix(s, maxLen, "...")
 }

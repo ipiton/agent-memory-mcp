@@ -6,10 +6,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // sourceBoostSecondary is the retrieval boost applied to secondary knowledge
@@ -279,8 +282,8 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 
 		fullContent := candidate.chunk.Content
 		snippet := fullContent
-		if len(snippet) > 200 {
-			snippet = snippet[:200] + "..."
+		if utf8.RuneCountInString(snippet) > 200 {
+			snippet = textfmt.TruncateSuffix(snippet, 200, "...")
 		}
 
 		// Surface the structure-aware chunking breadcrumb (T49 slice 4)

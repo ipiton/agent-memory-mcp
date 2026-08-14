@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -144,8 +146,8 @@ func formatProjectBankCLIView(result *memory.ProjectBankViewResult) string {
 				fmt.Fprintf(&buf, "   Last verified: %s\n", item.LastVerifiedAt.UTC().Format(time.RFC3339))
 			}
 			summary := strings.TrimSpace(item.Summary)
-			if len(summary) > 220 {
-				summary = summary[:220] + "..."
+			if utf8.RuneCountInString(summary) > 220 {
+				summary = textfmt.TruncateSuffix(summary, 220, "...")
 			}
 			if summary != "" {
 				fmt.Fprintf(&buf, "   %s\n", summary)

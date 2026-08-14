@@ -112,6 +112,7 @@ type InboxQuery struct {
 	Status string // "pending", "resolved", "deferred", "all"
 	Kind   string // filter by kind
 	Limit  int
+	Offset int    // for paging through large result sets (T90 M5)
 	SortBy string // "urgency", "created_at", "confidence"
 }
 
@@ -148,9 +149,9 @@ func ListInboxItems(db *sql.DB, q InboxQuery) ([]InboxItem, error) {
 
 	query := fmt.Sprintf(`
 		SELECT id, source_run_id, kind, state, title, evidence, confidence, urgency, recommended_action, target_ids, created_at, resolved_at, resolved_by, resolution, resolution_note
-		FROM steward_inbox %s ORDER BY %s LIMIT ?
+		FROM steward_inbox %s ORDER BY %s LIMIT ? OFFSET ?
 	`, where, orderBy)
-	args = append(args, q.Limit)
+	args = append(args, q.Limit, q.Offset)
 
 	rows, err := db.Query(query, args...)
 	if err != nil {
