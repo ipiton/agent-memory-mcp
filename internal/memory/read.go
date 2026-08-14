@@ -152,8 +152,19 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	if ms.embedder != nil {
 		result, err := ms.embedder.EmbedQueryDetailed(ctx, query)
 		if err != nil {
+			// The whole semantic leg is gone here and the caller still gets a
+			// result list — scored by text matching alone. Strict mode exists
+			// for the reader who would rather know (T99).
 			ms.logger.Warn("Failed to embed query, falling back to text search", zap.Error(err))
+			if ms.retrievalStrict.Load() {
+				return nil, StrictRetrievalError("embedding", "query embedding failed, recall would fall back to text matching: "+err.Error())
+			}
 		} else {
+			if len(result.Fallbacks) > 0 && ms.retrievalStrict.Load() {
+				return nil, StrictRetrievalError("embedding", fmt.Sprintf(
+					"provider(s) %s failed and the query was embedded by %s instead",
+					strings.Join(result.Fallbacks, ", "), result.Provider))
+			}
 			queryEmbedding = result.Embedding
 			queryModelID = result.ModelID
 		}

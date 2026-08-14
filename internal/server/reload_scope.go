@@ -66,6 +66,10 @@ func restartRequiredChanges(old, next config.Config) []string {
 	// The tool list is answered from the flag captured at initialize time.
 	add("MCP_TOOL_GROUPING", old.ToolGrouping != next.ToolGrouping)
 
+	// Strict retrieval is pushed into the store and the vector service at
+	// construction (T99).
+	add("MCP_RETRIEVAL_STRICT", old.RetrievalStrict != next.RetrievalStrict)
+
 	// Hook dedup settings are baked into the session tracker's dedup config.
 	add("MCP_CHECKPOINT_DEDUP_DISABLED", old.HooksDedup.Disabled != next.HooksDedup.Disabled)
 	add("MCP_CHECKPOINT_DEDUP_THRESHOLD", old.HooksDedup.Threshold != next.HooksDedup.Threshold)

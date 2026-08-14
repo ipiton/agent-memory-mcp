@@ -75,19 +75,35 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 
 	indexDir := t.TempDir()
 
+	// T112: this literal used to be flat (RAGIndexPath, OllamaBaseURL, …). The
+	// fields moved into nested structs and this file — invisible to
+	// `go build ./...` behind its build tag — kept naming the old ones, so the
+	// harness stopped compiling and nobody found out for four months. The
+	// `-tags=eval,corpus` vet in `make vet` and CI is what closes that gap;
+	// keeping the shape close to config.LoadFromEnv's output is what keeps the
+	// harness measuring the same pipeline production runs.
 	ragCfg := config.Config{
-		RootPath:           corpusAbs,
-		RAGIndexPath:       indexDir,
-		RAGEnabled:         true,
-		RAGMaxResults:      50,
-		IndexDirs:          []string{corpusAbs},
-		ChunkSize:          2000,
-		ChunkOverlap:       200,
-		OllamaBaseURL:      srv.URL,
-		EmbeddingDimension: dim,
-		EmbeddingMode:      "local-only",
-		AutoIndex:          false,
-		FileWatcher:        false,
+		RootPath: corpusAbs,
+		// T99: a measurement that quietly falls back is not a measurement. A
+		// cold reranker missing its first deadline would have the opening
+		// question of the QA set scoring the no-rerank baseline under the
+		// reranker's name, and the aggregate would never show it.
+		RetrievalStrict: true,
+		RAG: config.RAGConfig{
+			Enabled:      true,
+			IndexPath:    indexDir,
+			MaxResults:   50,
+			IndexDirs:    []string{corpusAbs},
+			ChunkSize:    2000,
+			ChunkOverlap: 200,
+			AutoIndex:    false,
+			FileWatcher:  false,
+		},
+		Embeddings: config.EmbeddingsConfig{
+			OllamaBaseURL: srv.URL,
+			Dimension:     dim,
+			Mode:          "local-only",
+		},
 	}
 
 	engine := rag.NewEngine(ragCfg, nil)

@@ -48,11 +48,24 @@ type Config struct {
 type EmbeddingResult struct {
 	Embedding []float32
 	ModelID   string
+	// Provider is the name of the adapter that produced the embedding, and
+	// Fallbacks names every provider that was tried and failed before it.
+	//
+	// T99: the chain silently walks past a failing provider, so a healthy
+	// install and one running on its second choice are indistinguishable from
+	// the outside — the only error is when *all* of them fail. That is fine as
+	// production behaviour and wrong as the only available signal: a retrieval
+	// eval cannot tell whether it measured the model it meant to. The chain is
+	// unchanged; it just reports what it did.
+	Provider  string
+	Fallbacks []string
 }
 
 type BatchEmbeddingResult struct {
 	Embeddings [][]float32
 	ModelID    string
+	Provider   string
+	Fallbacks  []string
 }
 
 type providerAdapter interface {
@@ -195,6 +208,7 @@ func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task 
 		return nil, err
 	}
 
+	var fallbacks []string
 	for _, candidate := range e.candidates(task) {
 		embedding, err := candidate.provider.embed(ctx, text, task)
 		if err != nil {
@@ -202,12 +216,14 @@ func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task 
 			if candidate.onFailure != nil {
 				candidate.onFailure(err)
 			}
+			fallbacks = append(fallbacks, candidate.provider.name())
 			continue
 		}
 		if !e.validateEmbedding(candidate.provider.name(), embedding) {
 			if candidate.onFailure != nil {
 				candidate.onFailure(fmt.Errorf("dimension mismatch"))
 			}
+			fallbacks = append(fallbacks, candidate.provider.name())
 			continue
 		}
 		if candidate.onSuccess != nil {
@@ -215,7 +231,12 @@ func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task 
 		}
 		modelID := candidate.provider.modelID()
 		e.recordModel(modelID)
-		return &EmbeddingResult{Embedding: embedding, ModelID: modelID}, nil
+		return &EmbeddingResult{
+			Embedding: embedding,
+			ModelID:   modelID,
+			Provider:  candidate.provider.name(),
+			Fallbacks: fallbacks,
+		}, nil
 	}
 
 	if e.localOnlyMode() {
@@ -255,6 +276,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 		return nil, err
 	}
 
+	var fallbacks []string
 	for _, candidate := range e.candidates(task) {
 		embeddings, err := candidate.provider.batchEmbed(ctx, texts, task)
 		if err != nil {
@@ -262,6 +284,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 			if candidate.onFailure != nil {
 				candidate.onFailure(err)
 			}
+			fallbacks = append(fallbacks, candidate.provider.name())
 			continue
 		}
 		if err := e.validateBatchEmbeddings(candidate.provider.name(), embeddings, len(texts)); err != nil {
@@ -269,6 +292,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 			if candidate.onFailure != nil {
 				candidate.onFailure(err)
 			}
+			fallbacks = append(fallbacks, candidate.provider.name())
 			continue
 		}
 		if candidate.onSuccess != nil {
@@ -276,7 +300,12 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 		}
 		modelID := candidate.provider.modelID()
 		e.recordModel(modelID)
-		return &BatchEmbeddingResult{Embeddings: embeddings, ModelID: modelID}, nil
+		return &BatchEmbeddingResult{
+			Embeddings: embeddings,
+			ModelID:    modelID,
+			Provider:   candidate.provider.name(),
+			Fallbacks:  fallbacks,
+		}, nil
 	}
 
 	if e.localOnlyMode() {

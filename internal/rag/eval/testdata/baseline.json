@@ -1,7 +1,7 @@
 {
   "total_queries": 25,
   "hit_rate_at_5": 1,
-  "mrr": 0.9179999999999999,
+  "mrr": 0.968,
   "per_type": {
     "conditional": {
       "count": 7,
@@ -16,12 +16,12 @@
     "set": {
       "count": 5,
       "hit_rate_at_5": 1,
-      "mrr": 0.74
+      "mrr": 0.8400000000000001
     },
     "simple": {
       "count": 8,
       "hit_rate_at_5": 1,
-      "mrr": 0.90625
+      "mrr": 1
     }
   }
 }

@@ -49,6 +49,19 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
+	path := &RetrievalPath{
+		EmbeddingProvider:  queryResult.Provider,
+		EmbeddingFallbacks: queryResult.Fallbacks,
+	}
+	if len(queryResult.Fallbacks) > 0 {
+		path.Degraded = true
+		if vs.config.Strict {
+			return nil, StrictModeError("embedding", fmt.Sprintf(
+				"provider(s) %s failed and the query was embedded by %s instead",
+				strings.Join(queryResult.Fallbacks, ", "), queryResult.Provider))
+		}
+	}
+
 	storedModel, err := vs.store.GetMetadata("embedding_model")
 	if err == nil && storedModel != "" && storedModel != queryResult.ModelID {
 		return nil, fmt.Errorf("embedding model mismatch: index was built with %s but current query model is %s. Run index_documents to rebuild the index", storedModel, queryResult.ModelID)
@@ -69,10 +82,24 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 
 	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
 
-	// Neural reranker pass — strictly opt-in. Any error or timeout falls
-	// back to hybrid ordering without bubbling an error to the caller.
+	// Neural reranker pass — strictly opt-in. Any error or timeout falls back
+	// to hybrid ordering without bubbling an error to the caller, unless strict
+	// mode asked for the opposite.
 	if vs.config.Reranker != nil && len(searchResults) > 1 {
-		searchResults = vs.applyReranker(ctx, query.Query, searchResults, contents, debugInfo)
+		reranked, rerankErr := vs.applyReranker(ctx, query.Query, searchResults, contents, debugInfo)
+		if rerankErr != nil {
+			path.Degraded = true
+			path.RerankSkipped = rerankErrorReason(rerankErr)
+			if vs.config.Strict {
+				return nil, StrictModeError("rerank", rerankErr.Error())
+			}
+		} else {
+			path.Reranker = vs.config.RerankerName
+			if path.Reranker == "" {
+				path.Reranker = "configured"
+			}
+			searchResults = reranked
+		}
 	}
 
 	return &SearchResponse{
@@ -80,6 +107,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		Results:    searchResults,
 		TotalFound: len(searchResults),
 		SearchTime: time.Since(startTime).Milliseconds(),
+		Retrieval:  path,
 		Debug:      debugInfo,
 	}, nil
 }
@@ -101,7 +129,10 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 // contents[i] is the full chunk text for results[i] — we pass the full
 // content (not the 200-char display snippet) to the reranker so the
 // cross-encoder's ~8k token window is actually used.
-func (vs *vectorService) applyReranker(ctx context.Context, query string, results []SearchResult, contents []string, debugInfo *SearchDebug) []SearchResult {
+// The returned error is the reranker's own failure, not a search failure: the
+// caller decides whether to fall back to the hybrid ordering (the default) or
+// surface it (strict mode). The reordered slice is only valid when err is nil.
+func (vs *vectorService) applyReranker(ctx context.Context, query string, results []SearchResult, contents []string, debugInfo *SearchDebug) ([]SearchResult, error) {
 	topN := vs.config.RerankTopN
 	if topN <= 0 {
 		topN = 40
@@ -150,14 +181,14 @@ func (vs *vectorService) applyReranker(ctx context.Context, query string, result
 		if debugInfo != nil {
 			debugInfo.RankingSignals = append(debugInfo.RankingSignals, "rerank_failed:"+rerankErrorReason(err))
 		}
-		return results
+		return results, err
 	}
 
 	reordered := applyRerankScores(results, scored, topN, elapsed)
 	if debugInfo != nil {
 		debugInfo.RankingSignals = append(debugInfo.RankingSignals, "+ neural_reranker")
 	}
-	return reordered
+	return reordered, nil
 }
 
 // rerankErrorReason compresses an error into a short, lowercase token that

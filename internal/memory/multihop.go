@@ -41,6 +41,17 @@ type MultiHopResult struct {
 	Score  float64  `json:"score"`
 	Hops   int      `json:"hops"`
 	Path   []Triple `json:"path,omitempty"`
+	// Degraded marks a result that no graph walk produced: the seeds matched
+	// but their corner of the corpus has no triples, so these are the seed
+	// memories themselves.
+	//
+	// T99: the caller could not tell this apart from a genuine zero-hop hit,
+	// which makes "the graph layer is empty here" read as "the graph found
+	// your answer immediately". The flag lives on the result rather than in a
+	// response envelope because resultsFromSeeds is an early return — every
+	// result of such a call is degraded, and a new envelope would rewrite one
+	// production caller and eight test sites to carry one boolean.
+	Degraded bool `json:"degraded,omitempty"`
 }
 
 // pprDamping is the per-hop weight decay: each additional graph step
@@ -153,6 +164,10 @@ func (ms *Store) RecallMultihop(ctx context.Context, req MultiHopRequest) ([]*Mu
 		// Seed memories exist but have no triples — graph layer is empty
 		// for this corner of the corpus. Return seed memories as-is so
 		// the caller still gets something useful.
+		if ms.retrievalStrict.Load() {
+			return nil, StrictRetrievalError("multihop", fmt.Sprintf(
+				"%d seed memories matched but none carry triples, so no graph walk ran", len(seedHits)))
+		}
 		return resultsFromSeeds(seedHits, req.Limit), nil
 	}
 
@@ -361,7 +376,7 @@ func resultsFromSeeds(seedHits []*SearchResult, limit int) []*MultiHopResult {
 		if hit == nil || hit.Memory == nil {
 			continue
 		}
-		out = append(out, &MultiHopResult{Memory: hit.Memory, Score: hit.Score, Hops: 0})
+		out = append(out, &MultiHopResult{Memory: hit.Memory, Score: hit.Score, Hops: 0, Degraded: true})
 		if len(out) >= limit {
 			break
 		}

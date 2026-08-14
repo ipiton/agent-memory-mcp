@@ -188,7 +188,31 @@ Example response (debug mode, abridged):
 }
 ```
 
-Reindexes per `MCP_INDEX_DIRS`. Returns counts of added/updated/removed chunks and the embedding model used.
+Reindexes per `MCP_INDEX_DIRS` and answers with what the corpus now contains:
+
+```
+Indexed 4650 files / 60766 chunks.
+  tasks/archive — 3923 files, 36477 chunks
+  docs — 678 files, 22967 chunks
+  memory-bank — 49 files, 1322 chunks
+  ⚠️  runbooks — configured but contributed nothing
+```
+
+### What defines the corpus
+
+`MCP_INDEX_DIRS` — a comma-separated list of directories and individual files,
+resolved relative to `MCP_ROOT` unless absolute. The code default is `docs`;
+nothing outside that list is searchable via `semantic_search`, whatever a
+consumer's own documentation may promise about it.
+
+The last line above is the one to read. `semantic_search` has no error state: a
+query against a corpus that never included the material returns "no results",
+which is indistinguishable from "there is nothing like that". A root that is
+configured and contributes zero files is therefore reported by name (T97) —
+omitting it would make it look like a root nobody had configured. Common
+causes: the path does not exist under `MCP_ROOT`, it holds no supported file
+types, or `MCP_INDEX_EXCLUDE_DIRS` / `MCP_INDEX_EXCLUDE_GLOBS` filtered
+everything out.
 
 ## Engineering workflow tools
 

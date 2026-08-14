@@ -24,8 +24,16 @@ jobs:
       - name: Build
         run: go build -v ./cmd/agent-memory-mcp
 
+      # `make vet` also vets the build-tagged packages. Plain `go vet ./...`
+      # skips them, which is how the eval harness stayed broken for four
+      # months without a single red build (T112).
       - name: Vet
-        run: go vet ./...
+        run: make vet
 
       - name: Test
         run: go test -v -race ./...
+
+      # The retrieval eval is the acceptance instrument for reranker and
+      # ranking work; it only counts if it runs.
+      - name: Retrieval eval
+        run: make eval

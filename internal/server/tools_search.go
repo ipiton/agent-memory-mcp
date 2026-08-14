@@ -50,7 +50,8 @@ func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
 		return nil, err
 	}
 
-	err := s.getRagEngine().IndexDocuments(context.Background())
+	engine := s.getRagEngine()
+	err := engine.IndexDocuments(context.Background())
 	if err != nil {
 		if s.fileLogger != nil {
 			s.fileLogger.Error("document indexing failed", zap.Error(err))
@@ -58,7 +59,19 @@ func (s *MCPServer) callIndexDocuments(_ map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "document indexing failed", Data: err.Error()}
 	}
 
-	return toolResultText("Documents indexed successfully."), nil
+	// T97: "Documents indexed successfully." was the whole answer, so the one
+	// question worth asking after indexing — what is actually in the corpus —
+	// had no answer short of reading a background process's log. The breakdown
+	// below is that answer, and a configured root that contributed nothing is
+	// called out by name.
+	report, covErr := engine.Coverage()
+	if covErr != nil {
+		if s.fileLogger != nil {
+			s.fileLogger.Warn("coverage report unavailable after indexing", zap.Error(covErr))
+		}
+		return toolResultText("Documents indexed successfully. (Coverage report unavailable: " + covErr.Error() + ")"), nil
+	}
+	return toolResultText(rag.FormatCoverage(report)), nil
 }
 
 // Result formatting
@@ -67,6 +80,12 @@ func (s *MCPServer) formatSearchResults(results *rag.SearchResponse) string {
 	if len(results.Results) == 0 {
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "No results found for '%s'.", results.Query)
+		// An empty result set is exactly where a degraded path is most likely
+		// to be misread as "there is nothing to find" (the class T97 named).
+		if note := formatDegradedNote(results.Retrieval); note != "" {
+			buf.WriteString("\n")
+			buf.WriteString(note)
+		}
 		if results.Debug != nil {
 			buf.WriteString("\n")
 			buf.WriteString(s.formatSearchDebug(results.Debug))
@@ -76,6 +95,12 @@ func (s *MCPServer) formatSearchResults(results *rag.SearchResponse) string {
 
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "Found %d results for '%s':\n\n", len(results.Results), results.Query)
+	// Printed only when something fell back: a line on every healthy search
+	// would be noise, and noise is how a real warning stops being read.
+	if note := formatDegradedNote(results.Retrieval); note != "" {
+		buf.WriteString(note)
+		buf.WriteString("\n\n")
+	}
 	if results.Debug != nil {
 		buf.WriteString(s.formatSearchDebug(results.Debug))
 		buf.WriteString("\n\n")
@@ -134,4 +159,26 @@ func (s *MCPServer) formatSearchDebug(debug *rag.SearchDebug) string {
 	)
 
 	return buf.String()
+}
+
+// formatDegradedNote renders the one-line warning for a retrieval path that
+// fell back, and the empty string for one that did not. T99: the JSON response
+// always carries the full RetrievalPath; the text surface stays silent unless
+// there is something to say.
+func formatDegradedNote(path *rag.RetrievalPath) string {
+	if path == nil || !path.Degraded {
+		return ""
+	}
+	var parts []string
+	if len(path.EmbeddingFallbacks) > 0 {
+		parts = append(parts, fmt.Sprintf("embedding provider(s) %s failed, served by %s",
+			strings.Join(path.EmbeddingFallbacks, ", "), path.EmbeddingProvider))
+	}
+	if path.RerankSkipped != "" {
+		parts = append(parts, "reranking skipped ("+path.RerankSkipped+") — results are in hybrid order")
+	}
+	if len(parts) == 0 {
+		return "⚠️  Degraded retrieval path."
+	}
+	return "⚠️  Degraded retrieval: " + strings.Join(parts, "; ") + "."
 }
