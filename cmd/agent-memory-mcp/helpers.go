@@ -31,8 +31,12 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
-	// T68: match server-side recall scoring (exponential age decay).
+	// T68/T76a/T121: match server-side recall scoring exactly — decay rate,
+	// which types decay, and the centered score. A CLI that ranks differently
+	// from the service is a second opinion nobody asked for.
 	store.SetRecallHalfLife(cfg.Sediment.RecallHalfLifeDays)
+	store.SetRecallDecayTypes(memory.TypesFromStrings(cfg.Sediment.RecallDecayTypes))
+	store.SetRecallCentered(cfg.RecallCentered)
 
 	cleanup := func() { _ = store.Close() }
 	return store, cleanup, nil

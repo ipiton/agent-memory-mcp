@@ -119,6 +119,7 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 	// T99: refuse degraded reads instead of serving them quietly, when asked.
 	memoryStore.SetRetrievalStrict(cfg.RetrievalStrict)
 	memoryStore.SetRecallCentered(cfg.RecallCentered)
+	memoryStore.SetRecallDecayTypes(memory.TypesFromStrings(cfg.Sediment.RecallDecayTypes))
 
 	// T50 slice 2: optional knowledge-graph triple extractor.
 	// Only wired when MCP_TRIPLE_EXTRACTOR_ENABLED=true. If

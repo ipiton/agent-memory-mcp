@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-08-14
+
+One change, measured. Recall no longer applies calendar age decay by default,
+because the default it shipped with was costing roughly three quarters of the
+answers.
+
+### Changed
+
+- **Age decay is off by default, and narrowed to `working` when enabled (T121)** — `MCP_RECALL_HALFLIFE_DAYS` moves from 30 to 0, and a new `MCP_RECALL_DECAY_TYPES` (default `working`) limits which types age at all.
+
+  Measured on 345 machine-labelled queries against a live bank, through the production scoring path. Hit@5 by half-life with every type decaying: **off 0.7217, 365d 0.6087, 180d 0.4609, 90d 0.2870, 30d 0.1942** — monotone, and the last figure was the shipped default.
+
+  The per-query-age breakdown existed to give decay a chance to prove itself where it was supposed to help. It did not: the freshest quarter scored 0.5778 with decay off against 0.5222 at 30 days, flat to slightly worse across the whole grid, while the three quarters in between fell from 0.7725 to 0.0784.
+
+  🔴 **The type axis dominates the rate axis.** At the same 30-day half-life, decaying every type scored 0.1942 and decaying only `working` scored 0.7043. The old default was aging patterns and facts — the knowledge the bank exists to accumulate — on the same clock as session scratch state. Exactly one configuration beat decay-off anywhere (working+episodic at 30d, 0.6333 on fresh queries) and it paid half the middle bucket for that, which the totals do not survive.
+
+  Preferring the current version of a fact is already handled semantically, twice: superseded entries are excluded from recall outright, and lifecycle marks the outdated ones. A calendar multiplier on top of those cannot tell "written a while ago" from "no longer true".
+
+### Fixed
+
+- **The CLI ranked differently from the service** — `agent-memory-mcp recall` applied the configured half-life but never the decay-type policy or centered scoring, so its answers could differ from the same query through MCP. All three settings now come from one place.
+
+### Notes
+
+- The evaluation harness (T119) had been building its store without age decay while the service ran it at 30 days, which is how 0.10.0's centering numbers were measured against a configuration production never had. The harness now assembles production's scoring configuration, and prints it alongside every result.
+
 ## [0.10.0] - 2026-08-14
 
 A minor bump rather than a patch, for one reason: recall now scores over

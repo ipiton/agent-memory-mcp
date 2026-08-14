@@ -278,7 +278,28 @@ type SedimentConfig struct {
 	// RecallHalfLifeDays controls T68 exponential age decay in recall scoring:
 	// a memory one half-life old scores at half its undecayed weight. 0 (or
 	// negative) disables decay. Evergreen entries never decay regardless.
-	RecallHalfLifeDays float64 // MCP_RECALL_HALFLIFE_DAYS (default: 30; 0 = off)
+	//
+	// T121 changed the default from 30 to 0 on a measurement. Over 345
+	// machine-labelled queries, Hit@5 by half-life was: off 0.7217, 365d
+	// 0.6087, 180d 0.4609, 90d 0.2870, 30d 0.1942 — monotone, with no bucket
+	// of queries where decay paid for itself, including the freshest quarter
+	// it was supposed to serve. The intent behind decay — prefer the current
+	// version of a fact — is already covered semantically by supersession
+	// (superseded entries are excluded from recall outright) and by lifecycle
+	// status. A calendar multiplier on top of those cannot tell "written a
+	// while ago" from "no longer true".
+	RecallHalfLifeDays float64 // MCP_RECALL_HALFLIFE_DAYS (default: 0 = off)
+
+	// RecallDecayTypes limits decay to the listed memory types when it is
+	// enabled at all. Empty means every type decays.
+	//
+	// T121: the type axis turned out to matter more than the rate. At the
+	// same 30-day half-life, decaying every type scored Hit@5 0.1942 while
+	// decaying only `working` scored 0.7043 — the old default was aging
+	// patterns and facts, which is the knowledge the bank exists to
+	// accumulate. The default list is therefore the one class that is
+	// ephemeral by definition.
+	RecallDecayTypes []string // MCP_RECALL_DECAY_TYPES (default: working)
 }
 
 // explicitConfigPath is set via SetExplicitConfigPath before Load()/LoadFromEnv().
@@ -378,6 +399,7 @@ type envValues struct {
 	sedimentEnabled                  bool
 	sedimentScheduleInterval         time.Duration
 	recallHalfLifeDays               float64
+	recallDecayTypes                 string
 	toolGrouping                     bool
 	retrievalStrict                  bool
 	recallCentered                   bool
@@ -474,7 +496,8 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		rerankTopN:                       s.Int("MCP_RERANK_TOP_N", 40),
 		sedimentEnabled:                  s.Bool("MCP_SEDIMENT_ENABLED", false),
 		sedimentScheduleInterval:         s.Duration("MCP_SEDIMENT_SCHEDULE_INTERVAL", 0),
-		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 30),
+		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 0),
+		recallDecayTypes:                 s.String("MCP_RECALL_DECAY_TYPES", "working"),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
 		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
 		recallCentered:                   s.Bool("MCP_RECALL_CENTERED", true),
@@ -660,6 +683,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			Enabled:            ev.sedimentEnabled,
 			ScheduleInterval:   ev.sedimentScheduleInterval,
 			RecallHalfLifeDays: ev.recallHalfLifeDays,
+			RecallDecayTypes:   splitAllowlist(ev.recallDecayTypes),
 		},
 	}
 	if slugPattern := strings.TrimSpace(ev.taskSlugPattern); slugPattern != "" {
