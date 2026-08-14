@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
@@ -15,6 +16,7 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	_ "modernc.org/sqlite"
 )
 
@@ -108,8 +110,8 @@ func runContextInject(args []string) error {
 					fmt.Printf("Tags: %s\n", strings.Join(tags, ", "))
 				}
 				content := strings.TrimSpace(r.Content)
-				if len(content) > 500 {
-					content = content[:500] + "..."
+				if utf8.RuneCountInString(content) > 500 {
+					content = textfmt.TruncateSuffix(content, 500, "...")
 				}
 				fmt.Println(content)
 				fmt.Println()
@@ -140,8 +142,8 @@ func runContextInject(args []string) error {
 					fmt.Printf("Context: %s\n", r.Context)
 				}
 				content := strings.TrimSpace(r.Content)
-				if len(content) > 1000 {
-					content = content[:1000] + "..."
+				if utf8.RuneCountInString(content) > 1000 {
+					content = textfmt.TruncateSuffix(content, 1000, "...")
 				}
 				fmt.Println(content)
 				fmt.Println()
@@ -286,16 +288,7 @@ func runAutoCapture(args []string) error {
 		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
 	} else if dedup.Skip {
 		store.IncrementDedupSkipped(dedup.Reason)
-		switch dedup.Reason {
-		case hooks.ReasonSimilar:
-			fmt.Printf("Auto-capture skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
-		case hooks.ReasonEmpty:
-			fmt.Println("Auto-capture skipped: content too short")
-		case hooks.ReasonHookNoise:
-			fmt.Println("Auto-capture skipped: no session content (hook metadata only)")
-		default:
-			fmt.Println("Auto-capture skipped")
-		}
+		fmt.Println(dedupSkipMessage("Auto-capture", dedup))
 		return nil
 	}
 
@@ -368,14 +361,7 @@ func runCheckpoint(args []string) error {
 		fmt.Fprintf(os.Stderr, "dedup check failed: %v (saving anyway)\n", err)
 	} else if dedup.Skip {
 		store.IncrementDedupSkipped(dedup.Reason)
-		switch dedup.Reason {
-		case hooks.ReasonSimilar:
-			fmt.Printf("Checkpoint skipped: similar to %s (jaccard=%.2f)\n", dedup.SimilarID, dedup.Similarity)
-		case hooks.ReasonEmpty:
-			fmt.Println("Checkpoint skipped: content too short")
-		default:
-			fmt.Println("Checkpoint skipped")
-		}
+		fmt.Println(dedupSkipMessage("Checkpoint", dedup))
 		return nil
 	}
 
@@ -393,4 +379,23 @@ func runCheckpoint(args []string) error {
 
 	fmt.Printf("Checkpoint saved as memory %s (boundary: %s)\n", rawID, boundaryValue)
 	return nil
+}
+
+// dedupSkipMessage explains why a write was skipped.
+//
+// T90 D7: the auto-capture and checkpoint paths each carried their own copy of
+// this switch, and they had already drifted — the checkpoint copy never learned
+// about ReasonHookNoise (T80), so a hook-metadata-only checkpoint reported the
+// bare "Checkpoint skipped" and gave the operator nothing to act on.
+func dedupSkipMessage(action string, dedup hooks.DedupResult) string {
+	switch dedup.Reason {
+	case hooks.ReasonSimilar:
+		return fmt.Sprintf("%s skipped: similar to %s (jaccard=%.2f)", action, dedup.SimilarID, dedup.Similarity)
+	case hooks.ReasonEmpty:
+		return action + " skipped: content too short"
+	case hooks.ReasonHookNoise:
+		return action + " skipped: no session content (hook metadata only)"
+	default:
+		return action + " skipped"
+	}
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // callRecallMultihop is the MCP-tool entry point for T50 graph-walk recall.
@@ -97,8 +99,5 @@ func formatMultihopMemoryHeader(r *memory.MultiHopResult) string {
 // context. Single-line view, trims internal whitespace runs.
 func truncateSnippet(content string, maxLen int) string {
 	cleaned := strings.Join(strings.Fields(content), " ")
-	if len(cleaned) <= maxLen {
-		return cleaned
-	}
-	return cleaned[:maxLen] + "…"
+	return textfmt.TruncateSuffix(cleaned, maxLen, "…")
 }

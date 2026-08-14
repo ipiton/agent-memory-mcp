@@ -4,7 +4,29 @@
 // historically reinvented.
 package textfmt
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// TruncateSuffix shortens s to at most maxRunes Unicode code points and appends
+// suffix when content was cut. The suffix is added beyond the budget, not
+// inside it — use Truncate when the ellipsis must fit within maxRunes.
+//
+// This is the rune-aware replacement for the `if len(s) > n { s = s[:n] + "…" }`
+// idiom, which is wrong twice over for non-ASCII text: `len` counts bytes, so a
+// Cyrillic string is cut at roughly half the intended length, and the cut lands
+// mid-codepoint, producing invalid UTF-8. That is the mechanism which left 69
+// unreadable rows in the store (T87); the idiom then came back in a dozen
+// places (T90 D6), so it lives here where it can be tested once.
+//
+// A negative maxRunes returns s unchanged.
+func TruncateSuffix(s string, maxRunes int, suffix string) string {
+	if maxRunes < 0 || utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	return string([]rune(s)[:maxRunes]) + suffix
+}
 
 // Truncate returns s trimmed of leading/trailing whitespace and shortened
 // to at most maxRunes Unicode code points, appending "..." when content

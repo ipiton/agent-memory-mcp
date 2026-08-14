@@ -14,26 +14,22 @@ import (
 
 // Store saves a new memory, generating an ID and embedding if not provided.
 func (ms *Store) Store(ctx context.Context, m *Memory) error {
-	ms.writeMu.Lock()
-	defer ms.writeMu.Unlock()
-
 	if err := m.Validate(); err != nil {
 		return err
 	}
 
-	if m.ID == "" {
-		m.ID = uuid.New().String()
-	}
-
-	now := ms.now()
-	m.CreatedAt = now
-	m.UpdatedAt = now
-	m.AccessedAt = now
-
-	// T84: review-queue items are service pointers excluded from semantic recall,
-	// so embedding them is pure waste — a vector built from the target's query
-	// text that only ever added kNN noise. Skip it; the ProjectBank review view
-	// is List-based and needs no vector.
+	// T90 M1: the embedding is computed BEFORE writeMu is taken. It is a
+	// network call to the embedding provider — hundreds of milliseconds, more
+	// when the provider is remote or retrying — and holding the store's single
+	// write lock across it made every other writer wait behind it, so write
+	// throughput was capped by embedder latency rather than by the database.
+	// The input is m.Content, which the caller already owns, so nothing about
+	// the computation needs the lock.
+	//
+	// T84: review-queue items are service pointers excluded from semantic
+	// recall, so embedding them is pure waste — a vector built from the
+	// target's query text that only ever added kNN noise. Skip it; the
+	// ProjectBank review view is List-based and needs no vector.
 	if ms.embedder != nil && len(m.Embedding) == 0 && !IsReviewQueueMemory(m) {
 		result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
 		if err != nil {
@@ -43,6 +39,18 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 			m.EmbeddingModel = result.ModelID
 		}
 	}
+
+	ms.writeMu.Lock()
+	defer ms.writeMu.Unlock()
+
+	if m.ID == "" {
+		m.ID = uuid.New().String()
+	}
+
+	now := ms.now()
+	m.CreatedAt = now
+	m.UpdatedAt = now
+	m.AccessedAt = now
 
 	if err := insertMemoryRow(ms.db, m); err != nil {
 		return err
@@ -73,16 +81,39 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 
 // Update modifies an existing memory identified by id with the provided field updates.
 func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
+	// T90 M1: re-embed before taking the write lock — see Store. The new
+	// content comes from the caller, so the provider call needs no lock, and
+	// holding one across it stalled every other writer.
+	var embedded *embeddedContent
+	if content := strings.TrimSpace(updates.Content); content != "" && ms.embedder != nil {
+		result, err := ms.embedder.EmbedDetailed(ctx, content)
+		if err != nil {
+			ms.logger.Warn("Failed to re-generate embedding for updated memory", zap.String("id", id), zap.Error(err))
+			embedded = &embeddedContent{content: content}
+		} else {
+			embedded = &embeddedContent{content: content, embedding: result.Embedding, model: result.ModelID}
+		}
+	}
+
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
-	return ms.updateLocked(ctx, id, updates)
+	return ms.updateLocked(ctx, id, updates, embedded)
+}
+
+// embeddedContent carries an embedding computed outside the write lock. A nil
+// embedding with a non-empty content means the provider failed and the update
+// proceeds without a vector, matching the previous fail-open behaviour.
+type embeddedContent struct {
+	content   string
+	embedding []float32
+	model     string
 }
 
 // updateLocked performs the update assuming the caller already holds writeMu.
 // Compound operations (MarkOutdated, PromoteToCanonical) hold the lock across
 // their whole read-modify-write so a concurrent writer cannot slip in between
 // their Get and this call — T89 H2.
-func (ms *Store) updateLocked(ctx context.Context, id string, updates Update) error {
+func (ms *Store) updateLocked(ctx context.Context, id string, updates Update, embedded *embeddedContent) error {
 	current, err := ms.Get(id)
 	if err != nil {
 		return err
@@ -94,14 +125,9 @@ func (ms *Store) updateLocked(ctx context.Context, id string, updates Update) er
 		m.Content = strings.TrimSpace(updates.Content)
 		m.Embedding = nil
 		m.EmbeddingModel = ""
-		if ms.embedder != nil {
-			result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
-			if err == nil {
-				m.Embedding = result.Embedding
-				m.EmbeddingModel = result.ModelID
-			} else {
-				ms.logger.Warn("Failed to re-generate embedding for updated memory", zap.String("id", id), zap.Error(err))
-			}
+		if embedded != nil && embedded.content == m.Content {
+			m.Embedding = embedded.embedding
+			m.EmbeddingModel = embedded.model
 		}
 	}
 	if updates.Title != "" {

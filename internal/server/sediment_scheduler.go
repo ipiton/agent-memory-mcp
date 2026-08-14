@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/logger"
@@ -10,23 +9,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// sedimentScheduler runs RunSedimentCycle on a fixed interval in a single
-// long-running goroutine. Start() is a no-op if the feature flag is off or
-// the interval is zero, so production defaults (SedimentEnabled=false,
-// SedimentScheduleInterval=0) leave this component dormant.
+// sedimentScheduler runs RunSedimentCycle on a fixed interval. The lifecycle
+// (start/stop/bounded shutdown) lives in intervalScheduler — T90 D1; this type
+// is the job plus its logging.
 //
-// Not a new public API: the parent MCPServer holds it and wires Start()
-// into its serve path and Close() into Shutdown().
+// Not a new public API: the parent MCPServer holds it and wires Start() into
+// its serve path and Close() into Shutdown().
 type sedimentScheduler struct {
-	store      *memory.Store
-	fileLogger *logger.FileLogger
-	interval   time.Duration
-
-	mu      sync.Mutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	running bool
-	done    chan struct{}
+	*intervalScheduler
+	store *memory.Store
 }
 
 // newSedimentScheduler returns a scheduler if both flags are set, else nil.
@@ -35,79 +26,37 @@ func newSedimentScheduler(store *memory.Store, fileLogger *logger.FileLogger, en
 	if store == nil || !enabled || interval <= 0 {
 		return nil
 	}
-	return &sedimentScheduler{
-		store:      store,
-		fileLogger: fileLogger,
+	s := &sedimentScheduler{store: store}
+	s.intervalScheduler = &intervalScheduler{
+		name:       "sediment cycle",
 		interval:   interval,
+		fileLogger: fileLogger,
+		run:        s.runOnce,
 	}
+	return s
 }
 
-// Start kicks off the background loop. Safe to call multiple times —
-// subsequent calls after the first are no-ops.
+// Start and Close are declared explicitly rather than promoted from the
+// embedded lifecycle: the constructor returns a typed nil for "feature
+// disabled", and a promoted method would dereference that nil to reach the
+// embedded pointer before its own nil check could run.
 func (s *sedimentScheduler) Start() {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.running {
-		return
-	}
-	s.ctx, s.cancel = context.WithCancel(context.Background())
-	s.done = make(chan struct{})
-	s.running = true
-
-	s.logInfo("sediment cycle scheduler started", zap.Duration("interval", s.interval))
-	go s.loop()
+	s.intervalScheduler.Start()
 }
 
-// Close cancels the loop and waits briefly for it to exit. Idempotent.
 func (s *sedimentScheduler) Close() {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	if !s.running {
-		s.mu.Unlock()
-		return
-	}
-	s.running = false
-	cancel := s.cancel
-	done := s.done
-	s.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			// Loop blocked on RunSedimentCycle; give up after a bounded wait
-			// so shutdown doesn't hang indefinitely.
-		}
-	}
+	s.intervalScheduler.Close()
 }
 
-func (s *sedimentScheduler) loop() {
-	defer close(s.done)
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			s.logInfo("sediment cycle scheduler stopped")
-			return
-		case <-ticker.C:
-			s.runOnce()
-		}
-	}
-}
-
-func (s *sedimentScheduler) runOnce() {
+func (s *sedimentScheduler) runOnce(ctx context.Context) {
 	start := time.Now()
-	result, err := s.store.RunSedimentCycle(s.ctx, memory.SedimentCycleConfig{})
+	result, err := s.store.RunSedimentCycle(ctx, memory.SedimentCycleConfig{})
 	elapsed := time.Since(start)
 	if err != nil {
 		s.logWarn("sediment cycle failed",
@@ -125,18 +74,4 @@ func (s *sedimentScheduler) runOnce() {
 		zap.Int("errors", len(result.Errors)),
 		zap.Duration("elapsed", elapsed),
 	)
-}
-
-func (s *sedimentScheduler) logInfo(msg string, fields ...zap.Field) {
-	if s == nil || s.fileLogger == nil {
-		return
-	}
-	s.fileLogger.Info(msg, fields...)
-}
-
-func (s *sedimentScheduler) logWarn(msg string, fields ...zap.Field) {
-	if s == nil || s.fileLogger == nil {
-		return
-	}
-	s.fileLogger.Warn(msg, fields...)
 }

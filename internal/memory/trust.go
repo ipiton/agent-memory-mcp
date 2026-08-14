@@ -8,66 +8,94 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/trust"
 )
 
-func deriveTrustMetadata(m *Memory, now time.Time) *trust.Metadata {
-	sourceType := memoryEntity(m)
-	owner := ""
-	layer := ""
-	lifecycle := LifecycleStatusOf(m)
-	reviewRequired := RequiresReview(m)
-	lastVerifiedAt := m.UpdatedAt
+// trustInput is what both derivation paths reduce to. T90 D5: they used to be
+// two hand-written copies whose answers had drifted apart, so the same entry
+// got a different confidence depending on whether it was served from the cache
+// or from a full row. Two concrete divergences:
+//
+//   - The cached path tested `Lifecycle == "review_required"`, which is dead
+//     code: LifecycleStatus only ever holds draft/active/outdated/superseded/
+//     canonical. Its review detection therefore came down to the tag alone,
+//     while the full path looked only at metadata and ignored the tag.
+//   - The cached path never read last_verified_at, so it scored freshness off
+//     UpdatedAt even for entries carrying an explicit verification stamp.
+//     Metadata has been cache-resident since T52, so there was nothing left to
+//     justify the difference.
+type trustInput struct {
+	sourceType string
+	metadata   map[string]string
+	tags       []string
+	lifecycle  LifecycleStatus
+	owner      string
+	layer      string
+	updatedAt  time.Time
+	createdAt  time.Time
+}
 
-	if len(m.Metadata) > 0 {
-		owner = strings.TrimSpace(m.Metadata[MetadataOwner])
-		layer = strings.ToLower(strings.TrimSpace(m.Metadata[MetadataKnowledgeLayer]))
-		if verified := parseMetadataTime(m.Metadata[MetadataLastVerifiedAt]); !verified.IsZero() {
+func deriveTrust(in trustInput, now time.Time) *trust.Metadata {
+	owner := strings.TrimSpace(in.owner)
+	layer := strings.ToLower(strings.TrimSpace(in.layer))
+	lastVerifiedAt := in.updatedAt
+
+	if len(in.metadata) > 0 {
+		if owner == "" {
+			owner = strings.TrimSpace(in.metadata[MetadataOwner])
+		}
+		if layer == "" {
+			layer = strings.ToLower(strings.TrimSpace(in.metadata[MetadataKnowledgeLayer]))
+		}
+		if verified := parseMetadataTime(in.metadata[MetadataLastVerifiedAt]); !verified.IsZero() {
 			lastVerifiedAt = verified
 		}
 	}
 
 	if lastVerifiedAt.IsZero() {
-		lastVerifiedAt = m.CreatedAt
+		lastVerifiedAt = in.createdAt
 	}
-
 	if owner == "" {
-		owner = defaultOwnerForMemorySource(sourceType)
+		owner = defaultOwnerForMemorySource(in.sourceType)
 	}
-	if layer == "" && lifecycle == LifecycleCanonical {
+	if layer == "" && in.lifecycle == LifecycleCanonical {
 		layer = "canonical"
 	}
 	if layer == "" {
 		layer = "raw"
 	}
 
+	reviewRequired := requiresReview(in.metadata, in.tags)
+
 	return &trust.Metadata{
 		KnowledgeLayer: layer,
-		SourceType:     sourceType,
-		Confidence:     confidenceForMemory(sourceType, lifecycle, owner, layer, reviewRequired),
+		SourceType:     in.sourceType,
+		Confidence:     confidenceForMemory(in.sourceType, in.lifecycle, owner, layer, reviewRequired),
 		LastVerifiedAt: lastVerifiedAt,
 		Owner:          owner,
 		FreshnessScore: scoring.FreshnessScore(lastVerifiedAt, now),
 	}
 }
 
+func deriveTrustMetadata(m *Memory, now time.Time) *trust.Metadata {
+	return deriveTrust(trustInput{
+		sourceType: memoryEntity(m),
+		metadata:   m.Metadata,
+		tags:       m.Tags,
+		lifecycle:  LifecycleStatusOf(m),
+		updatedAt:  m.UpdatedAt,
+		createdAt:  m.CreatedAt,
+	}, now)
+}
+
 func deriveTrustMetadataFromCached(m *cachedMemory, now time.Time) *trust.Metadata {
-	sourceType := cachedMemoryEntity(m)
-	owner := m.Owner
-	layer := m.KnowledgeLayer
-	lifecycle := m.Lifecycle
-	reviewRequired := m.Lifecycle == "review_required" || hasTag(m.Tags, "review:required")
-
-	lastVerifiedAt := m.UpdatedAt
-	if lastVerifiedAt.IsZero() {
-		lastVerifiedAt = m.CreatedAt
-	}
-
-	return &trust.Metadata{
-		KnowledgeLayer: layer,
-		SourceType:     sourceType,
-		Confidence:     confidenceForMemory(sourceType, lifecycle, owner, layer, reviewRequired),
-		LastVerifiedAt: lastVerifiedAt,
-		Owner:          owner,
-		FreshnessScore: scoring.FreshnessScore(lastVerifiedAt, now),
-	}
+	return deriveTrust(trustInput{
+		sourceType: cachedMemoryEntity(m),
+		metadata:   m.Metadata,
+		tags:       m.Tags,
+		lifecycle:  m.Lifecycle,
+		owner:      m.Owner,
+		layer:      m.KnowledgeLayer,
+		updatedAt:  m.UpdatedAt,
+		createdAt:  m.CreatedAt,
+	}, now)
 }
 
 func hasTag(tags []string, target string) bool {

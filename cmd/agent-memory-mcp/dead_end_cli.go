@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
 
@@ -73,8 +75,8 @@ func runMarkDeadEnd(args []string) error {
 	resolvedTitle := strings.TrimSpace(*title)
 	if resolvedTitle == "" {
 		resolvedTitle = strings.TrimSpace(*attempted)
-		if len(resolvedTitle) > 80 {
-			resolvedTitle = resolvedTitle[:80] + "..."
+		if utf8.RuneCountInString(resolvedTitle) > 80 {
+			resolvedTitle = textfmt.TruncateSuffix(resolvedTitle, 80, "...")
 		}
 	}
 

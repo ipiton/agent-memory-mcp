@@ -457,25 +457,54 @@ func (s *MCPServer) callPromoteToCanonical(args map[string]any) (any, *rpcError)
 	)), nil
 }
 
+// filterArgs is the argument set shared by conflicts_report,
+// list_canonical_knowledge and recall_canonical_knowledge: a bounded limit, the
+// context/service/tags narrowing, and the memory.Filters built from `type`.
+//
+// T90 D3/M10: the same fourteen lines were pasted into all three handlers, so
+// the enum validation, the "all" escape hatch and the limit ceiling had three
+// places to drift apart in.
+type filterArgs struct {
+	limit   int
+	context string
+	service string
+	tags    []string
+	filters memory.Filters
+}
+
+func parseFilterArgs(args map[string]any) (filterArgs, *rpcError) {
+	memContext, _ := getString(args, "context")
+	service, _ := getString(args, "service")
+
+	q := filterArgs{
+		limit:   boundedLimit(args, 10, 50),
+		context: memContext,
+		service: service,
+		tags:    getStringSlice(args, "tags"),
+		filters: memory.Filters{Context: memContext},
+	}
+
+	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
+		parsedType, err := userio.ParseMemoryType(memType, "", true)
+		if err != nil {
+			return filterArgs{}, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+		}
+		q.filters.Type = parsedType
+	}
+	return q, nil
+}
+
 func (s *MCPServer) callConflictsReport(args map[string]any) (any, *rpcError) {
 	if err := s.requireMemoryStore(); err != nil {
 		return nil, err
 	}
 
 	ctx := context.Background()
-	limit := boundedLimit(args, 10, 50)
-	memContext, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	requiredTags := getStringSlice(args, "tags")
-
-	filters := memory.Filters{Context: memContext}
-	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
-		parsedType, err := userio.ParseMemoryType(memType, "", true)
-		if err != nil {
-			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
-		}
-		filters.Type = parsedType
+	q, qErr := parseFilterArgs(args)
+	if qErr != nil {
+		return nil, qErr
 	}
+	limit, memContext, service, requiredTags, filters := q.limit, q.context, q.service, q.tags, q.filters
 
 	report, err := s.memoryStore.ConflictsReport(ctx, filters, limit*3)
 	if err != nil {
@@ -505,19 +534,11 @@ func (s *MCPServer) callListCanonicalKnowledge(args map[string]any) (any, *rpcEr
 	}
 
 	ctx := context.Background()
-	limit := boundedLimit(args, 10, 50)
-	memContext, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	requiredTags := getStringSlice(args, "tags")
-
-	filters := memory.Filters{Context: memContext}
-	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
-		parsedType, err := userio.ParseMemoryType(memType, "", true)
-		if err != nil {
-			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
-		}
-		filters.Type = parsedType
+	q, qErr := parseFilterArgs(args)
+	if qErr != nil {
+		return nil, qErr
 	}
+	limit, memContext, service, requiredTags, filters := q.limit, q.context, q.service, q.tags, q.filters
 
 	entries, err := s.memoryStore.ListCanonical(ctx, filters, limit*3)
 	if err != nil {
@@ -542,19 +563,11 @@ func (s *MCPServer) callRecallCanonicalKnowledge(args map[string]any) (any, *rpc
 	if err := userio.ValidateQuery(query); err != nil {
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
-	limit := boundedLimit(args, 10, 50)
-	memContext, _ := getString(args, "context")
-	service, _ := getString(args, "service")
-	requiredTags := getStringSlice(args, "tags")
-
-	filters := memory.Filters{Context: memContext}
-	if memType, ok := getString(args, "type"); ok && memType != "" && memType != "all" {
-		parsedType, err := userio.ParseMemoryType(memType, "", true)
-		if err != nil {
-			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
-		}
-		filters.Type = parsedType
+	q, qErr := parseFilterArgs(args)
+	if qErr != nil {
+		return nil, qErr
 	}
+	limit, memContext, service, requiredTags, filters := q.limit, q.context, q.service, q.tags, q.filters
 
 	results, err := s.memoryStore.RecallCanonical(ctx, query, filters, limit*3)
 	if err != nil {

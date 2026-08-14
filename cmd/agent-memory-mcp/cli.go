@@ -10,10 +10,12 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"github.com/ipiton/agent-memory-mcp/internal/trust"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
@@ -552,8 +554,8 @@ func printMemoryLine(n int, m *memory.Memory, score float64, tm *trust.Metadata)
 	}
 	// Show truncated content
 	content := m.Content
-	if len(content) > 120 {
-		content = content[:120] + "..."
+	if utf8.RuneCountInString(content) > 120 {
+		content = textfmt.TruncateSuffix(content, 120, "...")
 	}
 	content = strings.ReplaceAll(content, "\n", " ")
 	fmt.Printf("   %s\n\n", content)

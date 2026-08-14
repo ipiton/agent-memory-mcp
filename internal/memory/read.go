@@ -220,8 +220,12 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		// T48 layer-aware filtering: when the flag is on, surface memories
 		// are invisible outside their originating Context. This prevents
 		// session scratch state from leaking into unrelated recall calls.
+		// T90 L3: normalized once per candidate. The layer was normalized here
+		// and again for the boost switch below — two allocations-free but
+		// non-trivial calls per candidate on the hottest loop in recall.
+		layer := DefaultSedimentLayer
 		if sedimentOn {
-			layer := NormalizeSedimentLayer(string(m.SedimentLayer))
+			layer = NormalizeSedimentLayer(string(m.SedimentLayer))
 			if layer == LayerSurface {
 				if filters.Context == "" || filters.Context != m.Context {
 					continue
@@ -257,7 +261,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		// (surface already got the context-gate above).
 		isCharacter := false
 		if sedimentOn {
-			switch NormalizeSedimentLayer(string(m.SedimentLayer)) {
+			switch layer {
 			case LayerCharacter:
 				weightedScore += layerCharacterBoost
 				isCharacter = true
@@ -557,6 +561,26 @@ type rowScanner interface {
 // getBatch previously duplicated and which had already started drifting
 // (Round 3 H18: loader missed replaces/observed_at).
 func scanMemoryRow(scanner rowScanner) (*Memory, error) {
+	return scanMemoryRowCounting(scanner, nil)
+}
+
+// scanMemoryRowCounting is scanMemoryRow with an optional counter for
+// non-fatal decode problems — a tags blob that will not unmarshal, an
+// embedding that will not decode. Those are swallowed for ad-hoc readers
+// (nil counter) but the cache loader passes one, because memory_stats reports
+// it and a silently degraded row is precisely what went unnoticed in T87.
+//
+// T90 D4: the cache loader used to carry its own SELECT list and its own copy
+// of this parsing, over a narrower column set. The two had already drifted
+// once, and the drift is invisible — the cache simply lacks a field nobody
+// notices until a consumer reads zero. One column list, one parser.
+func scanMemoryRowCounting(scanner rowScanner, softErrors *int) (*Memory, error) {
+	countSoft := func() {
+		if softErrors != nil {
+			*softErrors++
+		}
+	}
+
 	var m Memory
 	var tagsJSON, metadataJSON, embeddingModel sql.NullString
 	var embeddingBlob []byte
@@ -575,11 +599,18 @@ func scanMemoryRow(scanner rowScanner) (*Memory, error) {
 	}
 
 	if tagsJSON.Valid && tagsJSON.String != "" {
-		_ = json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
+		if err := json.Unmarshal([]byte(tagsJSON.String), &m.Tags); err != nil {
+			countSoft()
+		}
 	}
 	m.Metadata, _ = parseMetadataJSON(metadataJSON)
 	if len(embeddingBlob) > 0 {
-		m.Embedding, _ = unmarshalEmbeddingBinary(embeddingBlob)
+		parsed, err := unmarshalEmbeddingBinary(embeddingBlob)
+		if err != nil {
+			countSoft()
+		} else {
+			m.Embedding = parsed
+		}
 	}
 	if embeddingModel.Valid {
 		m.EmbeddingModel = embeddingModel.String

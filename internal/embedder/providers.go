@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 const jinaEmbeddingsURL = "https://api.jina.ai/v1/embeddings"
@@ -99,8 +102,8 @@ func float64SliceToFloat32(values []float64) []float32 {
 func sanitizeErrorBody(body []byte) string {
 	const maxLen = 200
 	s := strings.TrimSpace(string(body))
-	if len(s) > maxLen {
-		return s[:maxLen] + "... (truncated)"
+	if utf8.RuneCountInString(s) > maxLen {
+		return textfmt.TruncateSuffix(s, maxLen, "... (truncated)")
 	}
 	return s
 }

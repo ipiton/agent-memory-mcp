@@ -10,6 +10,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"go.uber.org/zap"
 )
 
@@ -210,8 +211,5 @@ func buildIndexTriplesExtractor(cfg config.Config) (memory.TripleExtractor, erro
 
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return textfmt.TruncateSuffix(s, n, "...")
 }

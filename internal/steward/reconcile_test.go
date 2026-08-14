@@ -2,6 +2,7 @@ package steward
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -68,5 +69,60 @@ func TestReconcileInboxKeepsLiveTargets(t *testing.T) {
 	pending, _ := svc.ListInbox(InboxQuery{Status: "pending"})
 	if len(pending) != 1 {
 		t.Fatalf("expected item still pending, got %d", len(pending))
+	}
+}
+
+// getCountingStore wraps a store and counts Get calls.
+type getCountingStore struct {
+	storeAPI
+	gets atomic.Int32
+}
+
+func (g *getCountingStore) Get(id string) (*memory.Memory, error) {
+	g.gets.Add(1)
+	return g.storeAPI.Get(id)
+}
+
+// T90 M5. reconcileInbox used to call store.Get once per target id of every
+// pending item — a full SQL row, embedding blob included, to answer a question
+// about lifecycle. On the measured store that was ~1770 queries per run. The
+// live set now comes from one cache-resident pass.
+func TestReconcileInboxDoesNotQueryPerTarget(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	var ids []string
+	for range 12 {
+		m := &memory.Memory{Content: "target of a pending inbox item", Type: memory.TypeSemantic}
+		if err := store.Store(ctx, m); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+		ids = append(ids, m.ID)
+	}
+
+	counting := &getCountingStore{storeAPI: store}
+	svc, err := NewService(counting, nil)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	for i := range ids {
+		item := &InboxItem{
+			Kind:      InboxStaleEntry,
+			Title:     "pending item",
+			TargetIDs: []string{ids[i]},
+		}
+		if err := CreateInboxItem(svc.db, item); err != nil {
+			t.Fatalf("CreateInboxItem: %v", err)
+		}
+	}
+
+	counting.gets.Store(0)
+	if _, err := svc.reconcileInbox(); err != nil {
+		t.Fatalf("reconcileInbox: %v", err)
+	}
+
+	if got := counting.gets.Load(); got != 0 {
+		t.Fatalf("store.Get called %d times during reconcile, want 0 — the per-target N+1 is back", got)
 	}
 }

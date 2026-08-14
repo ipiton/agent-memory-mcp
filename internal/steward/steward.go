@@ -328,11 +328,43 @@ func (s *Service) applyAction(ctx context.Context, a *Action, runID string) erro
 // with no target_ids are left untouched (nothing to reconcile against). Returns
 // the number of items resolved.
 func (s *Service) reconcileInbox() (int, error) {
-	items, err := ListInboxItems(s.db, InboxQuery{Status: string(InboxPending), Limit: 100000})
-	if err != nil {
-		return 0, err
+	// T90 M5: one cache-resident pass instead of a SQL round-trip per target.
+	// This used to call store.Get for every target id of every pending item —
+	// on the measured store that was ~1770 queries, each pulling a full row
+	// including its embedding blob, to answer a question about lifecycle. The
+	// live set comes from the cache in a single pass; an id absent from it has
+	// been deleted, which is exactly what "gone" means here.
+	live := make(map[string]memory.LifecycleStatus)
+	for _, m := range s.store.ListLightweight(memory.Filters{}) {
+		if m != nil {
+			live[m.ID] = memory.LifecycleStatusOf(m)
+		}
 	}
 
+	reconciled := 0
+	// T90 M5: paged rather than one Limit:100000 query.
+	const page = 500
+	for offset := 0; ; offset += page {
+		items, err := ListInboxItems(s.db, InboxQuery{Status: string(InboxPending), Limit: page, Offset: offset})
+		if err != nil {
+			return reconciled, err
+		}
+		if len(items) == 0 {
+			break
+		}
+		n, err := s.reconcileInboxPage(items, live)
+		reconciled += n
+		if err != nil {
+			return reconciled, err
+		}
+		if len(items) < page {
+			break
+		}
+	}
+	return reconciled, nil
+}
+
+func (s *Service) reconcileInboxPage(items []InboxItem, live map[string]memory.LifecycleStatus) (int, error) {
 	reconciled := 0
 	for i := range items {
 		item := &items[i]
@@ -341,7 +373,7 @@ func (s *Service) reconcileInbox() (int, error) {
 		}
 		allGone := true
 		for _, tid := range item.TargetIDs {
-			if !s.targetGone(tid) {
+			if !targetGoneIn(live, tid) {
 				allGone = false
 				break
 			}
@@ -358,14 +390,15 @@ func (s *Service) reconcileInbox() (int, error) {
 	return reconciled, nil
 }
 
-// targetGone reports whether a memory target no longer warrants review: it was
-// deleted (not found) or its lifecycle is superseded/outdated (merged/archived).
-func (s *Service) targetGone(id string) bool {
-	mem, err := s.store.Get(strings.TrimSpace(id))
-	if err != nil || mem == nil {
+// targetGoneIn reports whether a memory target no longer warrants review: it is
+// absent from the live set (deleted) or its lifecycle is superseded/outdated
+// (merged/archived).
+func targetGoneIn(live map[string]memory.LifecycleStatus, id string) bool {
+	status, ok := live[strings.TrimSpace(id)]
+	if !ok {
 		return true
 	}
-	switch memory.LifecycleStatusOf(mem) {
+	switch status {
 	case memory.LifecycleSuperseded, memory.LifecycleOutdated:
 		return true
 	default:
