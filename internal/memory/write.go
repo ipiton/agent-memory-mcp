@@ -31,12 +31,13 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	// target's query text that only ever added kNN noise. Skip it; the
 	// ProjectBank review view is List-based and needs no vector.
 	if ms.embedder != nil && len(m.Embedding) == 0 && !IsReviewQueueMemory(m) {
-		result, err := ms.embedder.EmbedDetailed(ctx, m.Content)
-		if err != nil {
-			ms.logger.Warn("Failed to generate embedding for memory", zap.String("id", m.ID), zap.Error(err))
-		} else {
+		result, truncated, err := ms.embedForWrite(ctx, m.ID, m.Content)
+		if err == nil {
 			m.Embedding = result.Embedding
 			m.EmbeddingModel = result.ModelID
+			if truncated {
+				markEmbeddingTruncated(m)
+			}
 		}
 	}
 
@@ -86,12 +87,11 @@ func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
 	// holding one across it stalled every other writer.
 	var embedded *embeddedContent
 	if content := strings.TrimSpace(updates.Content); content != "" && ms.embedder != nil {
-		result, err := ms.embedder.EmbedDetailed(ctx, content)
+		result, truncated, err := ms.embedForWrite(ctx, id, content)
 		if err != nil {
-			ms.logger.Warn("Failed to re-generate embedding for updated memory", zap.String("id", id), zap.Error(err))
 			embedded = &embeddedContent{content: content}
 		} else {
-			embedded = &embeddedContent{content: content, embedding: result.Embedding, model: result.ModelID}
+			embedded = &embeddedContent{content: content, embedding: result.Embedding, model: result.ModelID, truncated: truncated}
 		}
 	}
 
@@ -107,6 +107,9 @@ type embeddedContent struct {
 	content   string
 	embedding []float32
 	model     string
+	// truncated marks a vector built from the opening of content only, because
+	// the encoder refused the whole body (T120).
+	truncated bool
 }
 
 // updateLocked performs the update assuming the caller already holds writeMu.
@@ -128,6 +131,11 @@ func (ms *Store) updateLocked(ctx context.Context, id string, updates Update, em
 		if embedded != nil && embedded.content == m.Content {
 			m.Embedding = embedded.embedding
 			m.EmbeddingModel = embedded.model
+			if embedded.truncated {
+				markEmbeddingTruncated(m)
+			} else {
+				delete(m.Metadata, MetadataEmbeddingTruncated)
+			}
 		}
 	}
 	if updates.Title != "" {

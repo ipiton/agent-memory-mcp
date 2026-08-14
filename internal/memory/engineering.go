@@ -8,17 +8,20 @@ import (
 )
 
 const (
-	MetadataEntity             = "entity"
-	MetadataService            = "service"
-	MetadataSeverity           = "severity"
-	MetadataStatus             = "status"
-	MetadataLifecycleStatus    = "lifecycle_status"
-	MetadataKnowledgeLayer     = "knowledge_layer"
-	MetadataOwner              = "owner"
-	MetadataLastVerifiedAt     = "last_verified_at"
-	MetadataReviewRequired     = "review_required"
-	MetadataReviewReason       = "review_reason"
-	MetadataRecordKind         = "record_kind"
+	MetadataEntity          = "entity"
+	MetadataService         = "service"
+	MetadataSeverity        = "severity"
+	MetadataStatus          = "status"
+	MetadataLifecycleStatus = "lifecycle_status"
+	MetadataKnowledgeLayer  = "knowledge_layer"
+	MetadataOwner           = "owner"
+	MetadataLastVerifiedAt  = "last_verified_at"
+	MetadataReviewRequired  = "review_required"
+	MetadataReviewReason    = "review_reason"
+	MetadataRecordKind      = "record_kind"
+	// MetadataEmbeddingTruncated marks a record whose vector covers only the
+	// opening of its body, because the encoder refused the whole thing (T120).
+	MetadataEmbeddingTruncated = "embedding_truncated"
 	MetadataSessionMode        = "session_mode"
 	MetadataDerivedFrom        = "derived_from"
 	MetadataSessionBoundary    = "session_boundary"

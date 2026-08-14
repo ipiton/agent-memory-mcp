@@ -3,6 +3,8 @@ package rag
 import (
 	"regexp"
 	"strings"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // Skeleton-aware chunking for Markdown documents (T49 slice 1).
@@ -322,11 +324,19 @@ func formatBreadcrumb(path []string) string {
 	return "[" + strings.Join(cleaned, breadcrumbSeparator) + "]"
 }
 
-// splitTextByBudget reproduces the naive splitter's behaviour but operates on
-// an arbitrary budget. It is intentionally a near-copy of splitIntoChunks so
-// per-section splitting matches the tested non-Markdown path. When body fits
-// in budget, the original body is returned as a single chunk (no whitespace
-// reflow), which matches the original splitIntoChunks contract.
+// splitTextByBudget splits body into overlapping windows of at most budget
+// bytes, preferring to break on whitespace. It is the single splitter: the
+// non-Markdown path (documentService.splitIntoChunks) delegates here, so the
+// two used to be near-copies and T118's rune defect had to be fixed twice.
+// When body fits in budget the original is returned as one chunk with no
+// whitespace reflow.
+//
+// T118: the window offsets are arithmetic, so on Cyrillic text they land
+// mid-codepoint — 2622 chunks (4.3% of the index) began mid-rune, every one of
+// them at the first byte after the breadcrumb prefix, which is where `start`
+// lands. Both ends are aligned to rune boundaries. `end` is usually already
+// safe because the whitespace back-scan finds an ASCII byte, but not when the
+// scan window holds no whitespace.
 func splitTextByBudget(body string, budget, overlap int) []string {
 	if budget <= 0 {
 		return []string{body}
@@ -341,7 +351,8 @@ func splitTextByBudget(body string, budget, overlap int) []string {
 
 	var chunks []string
 	bodyLen := len(body)
-	for start := 0; start < bodyLen; start += step {
+	for offset := 0; offset < bodyLen; offset += step {
+		start := textfmt.AlignRuneStart(body, offset)
 		end := start + budget
 		if end > bodyLen {
 			end = bodyLen
@@ -354,7 +365,10 @@ func splitTextByBudget(body string, budget, overlap int) []string {
 					break
 				}
 			}
-			end = breakPoint
+			end = textfmt.AlignRuneStart(body, breakPoint)
+		}
+		if end <= start {
+			break
 		}
 		chunk := strings.TrimSpace(body[start:end])
 		if chunk != "" {

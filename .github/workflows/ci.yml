@@ -37,3 +37,18 @@ jobs:
       # ranking work; it only counts if it runs.
       - name: Retrieval eval
         run: make eval
+
+      # T117: `goreleaser check` exits non-zero on a deprecated key, and one is
+      # deprecated on purpose (see the note at `brews:` in .goreleaser.yaml), so
+      # a plain check step could only ever be red. Gate on the *set* of
+      # deprecations instead: the known one passes, a new one fails. Without
+      # this the next deprecation is found the way this one was — by accident,
+      # while preparing an unrelated task.
+      - name: Release config deprecations
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+        continue-on-error: true
+      - name: Fail on an unexpected release-config deprecation
+        run: ./scripts/check-goreleaser-deprecations.sh

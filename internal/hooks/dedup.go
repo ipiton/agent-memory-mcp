@@ -8,6 +8,13 @@
 // behaviour while fixing the observed flood (30-60 duplicate
 // session-checkpoint records per 2h coding session) at every entry that
 // produces them.
+//
+// T122: "session-checkpoint" above is literal, and that was the bug. The
+// terminal session-*summary* write goes through sessionclose, which never
+// called Check — so the no-content shapes this package rejects on one path
+// accumulated freely on the other (75 chore-log-only summaries against 0
+// chore-log-only checkpoints on the live bank). The shape verdict is now
+// exported as NoiseReason and applied at the sessionclose write boundary too.
 package hooks
 
 import (
@@ -82,71 +89,35 @@ func isHookMetadataOnly(summary string) bool {
 	return true
 }
 
-// choreLogPrefixes are the action-label prefixes of maintenance-log bullet
-// lines that record what the agent did (searches, merges, inspections) but
-// carry no reusable knowledge. Whitelist by design (T85): a summary whose every
-// line is one of these is skipped, and anything not listed is preserved. A
-// blacklist ("content lacks the word Stored") over-matched real task reports
-// 12:1 on live data — 117 chore logs vs 1362 genuine closure reports.
-//
-// Every label here has a value that is a query / path / uuid / view-name — never
-// a standalone knowledge statement, even when the underlying action really ran.
-// "incident investigation" was deliberately EXCLUDED: unlike the others, a human
-// bullet "- Incident investigation: root cause was X, fixed by Y" reads as real
-// knowledge, so whitelisting it risked silently dropping a genuine writeup
-// (loss-aversion is this guard's whole point). A session that only ran
-// recall_similar_incidents therefore leaks one small record — acceptable noise
-// versus losing a real root-cause report.
-var choreLogPrefixes = map[string]struct{}{
-	"document search":     {},
-	"memory recall":       {},
-	"repo search":         {},
-	"inspected file":      {},
-	"merged duplicates":   {},
-	"marked outdated":     {},
-	"project bank review": {},
-}
-
-// isChoreLogOnly reports whether summary consists solely of maintenance-action
-// bullet lines whose labels are all in choreLogPrefixes (T85). Whitespace-only
-// lines are ignored; a single unrecognised line (e.g. "- Stored memory: …")
-// makes the summary real content and returns false.
+// isChoreLogOnly reports whether summary is an activity journal: every line a
+// "- Action: pointer" bullet with no knowledge between them (T85, extended by
+// T122). The label whitelist and the parsing live in package memory, because
+// recall needs the same verdict on records already in the bank and memory
+// cannot import hooks. See internal/memory/activitylog.go for why individual
+// labels are in or out.
 func isChoreLogOnly(summary string) bool {
-	sawBullet := false
-	for _, line := range strings.Split(summary, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		label, ok := choreBulletLabel(line)
-		if !ok {
-			return false
-		}
-		if _, chore := choreLogPrefixes[label]; !chore {
-			return false
-		}
-		sawBullet = true
-	}
-	return sawBullet
+	return memory.IsActivityLogOnly(summary)
 }
 
-// choreBulletLabel extracts the lowercased label of a "- Label: value" bullet
-// line. It requires a list-bullet marker ("- " or "* ") so a prose sentence
-// containing a colon ("Fixed the search: it now works") is not treated as a
-// labelled bullet. Returns ok=false when the line is not such a bullet.
-func choreBulletLabel(line string) (string, bool) {
-	rest, ok := strings.CutPrefix(line, "- ")
-	if !ok {
-		rest, ok = strings.CutPrefix(line, "* ")
+// NoiseReason reports why summary must not be persisted as knowledge, or ""
+// when it carries content. It covers the two *shape* verdicts — a raw hook JSON
+// payload (T80) and a chore-log-only body (T85) — and deliberately not the
+// similarity or minimum-length gates, which depend on caller configuration and
+// on what else is in the store.
+//
+// T122: it is exported because the shape verdict is a property of the record,
+// not of the entry point, and the store had 75 chore-log-only session summaries
+// proving the difference. Check() guarded only the two session-*checkpoint*
+// paths (see the package comment); the terminal session-*summary* write went
+// through sessionclose.SaveRawSummaryWithOptions, which never consulted it. On
+// the guarded path the same predicate matched 0 of 63 records, on the unguarded
+// one 75 of 2296 — the guard was correct and simply not installed there.
+func NoiseReason(summary string) string {
+	trimmed := strings.TrimSpace(summary)
+	if isHookMetadataOnly(trimmed) || isChoreLogOnly(trimmed) {
+		return ReasonHookNoise
 	}
-	if !ok {
-		return "", false
-	}
-	idx := strings.IndexByte(rest, ':')
-	if idx <= 0 {
-		return "", false
-	}
-	return strings.ToLower(strings.TrimSpace(rest[:idx])), true
+	return ""
 }
 
 // DedupResult describes the decision made by Check.
@@ -215,18 +186,11 @@ func Check(ctx context.Context, store *memory.Store, summary memory.SessionSumma
 	if cfg.MinContentChars > 0 && len(trimmed) < cfg.MinContentChars {
 		return DedupResult{Skip: true, Reason: ReasonEmpty}, nil
 	}
-	// T80: a raw session-hook JSON payload (session_id/hook_event_name/reason,
-	// no real content) passes the length check but must not be persisted — it
-	// would create a no-content episodic stub. Applies regardless of the
-	// similarity gate below.
-	if isHookMetadataOnly(trimmed) {
-		return DedupResult{Skip: true, Reason: ReasonHookNoise}, nil
-	}
-	// T85: a chore log whose every line is a maintenance-action bullet
-	// ("- Document search: …", "- Merged duplicates: …") carries no knowledge
-	// and self-poisons kNN. Whitelist match, also independent of the gate below.
-	if isChoreLogOnly(trimmed) {
-		return DedupResult{Skip: true, Reason: ReasonHookNoise}, nil
+	// T80/T85: shapes that carry no reusable knowledge (raw hook JSON payload,
+	// chore-log-only bullets). Independent of the similarity gate below, and of
+	// the caller — see NoiseReason.
+	if reason := NoiseReason(trimmed); reason != "" {
+		return DedupResult{Skip: true, Reason: reason}, nil
 	}
 
 	if cfg.Threshold <= 0 {

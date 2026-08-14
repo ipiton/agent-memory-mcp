@@ -358,6 +358,17 @@ func (s *MCPServer) callMemoryStats(_ map[string]any) (any, *rpcError) {
 		count := byType[memType]
 		fmt.Fprintf(&buf, "- %s: %d\n", name, count)
 	}
+	// T120: records with no vector at all used to appear as an "(none)" row in
+	// the model breakdown, where they read as one more model rather than as
+	// records that no semantic query can reach. Say what it means, above the
+	// breakdown, and only when there are any.
+	if noVector := s.memoryStore.CountWithoutEmbedding(); noVector > 0 {
+		fmt.Fprintf(&buf, "\n⚠️ Without an embedding: **%d** — invisible to semantic recall, reachable only by text match. "+
+			"Usually a body the encoder refused; see the log for the id and size.\n", noVector)
+	}
+	if truncated := s.memoryStore.CountTruncatedEmbedding(); truncated > 0 {
+		fmt.Fprintf(&buf, "\nEmbedded from the opening only: **%d** (body too large for the encoder in one pass)\n", truncated)
+	}
 	if len(byEmbeddingModel) > 0 {
 		buf.WriteString("\nBy embedding model:\n")
 		for modelID, count := range byEmbeddingModel {
