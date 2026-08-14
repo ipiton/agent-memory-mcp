@@ -173,3 +173,45 @@ func TestRecallSkipsAutoCapturedIncidentQuery(t *testing.T) {
 		t.Fatal("the answer must still be reachable")
 	}
 }
+
+// T96: removing a metadata key. The store has supported it since the merge loop
+// was written — an empty value deletes — but nothing exposed it, so canonical
+// records stamped last_verified_at by their own promotion could not be
+// corrected. Pinning the semantics here so the edge is not lost again.
+func TestUpdateRemovesMetadataKeyOnEmptyValue(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	m := &Memory{
+		Title:   "Канонический паттерн",
+		Content: "Промоушен требует доверенного провенанса.",
+		Type:    TypeSemantic,
+		Metadata: map[string]string{
+			MetadataLastVerifiedAt: "2026-07-08T13:54:44Z",
+			MetadataOwner:          "engineering",
+		},
+	}
+	if err := store.Store(ctx, m); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+
+	err := store.Update(ctx, m.ID, Update{Metadata: map[string]string{
+		MetadataLastVerifiedAt: "", // removal
+		MetadataOwner:          "forge-platform",
+	}})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, err := store.Get(m.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if v, ok := got.Metadata[MetadataLastVerifiedAt]; ok {
+		t.Errorf("%s survived removal as %q", MetadataLastVerifiedAt, v)
+	}
+	if got.Metadata[MetadataOwner] != "forge-platform" {
+		t.Errorf("owner = %q, want forge-platform — the rest of the patch must still apply",
+			got.Metadata[MetadataOwner])
+	}
+}
