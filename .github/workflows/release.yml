@@ -49,6 +49,12 @@ jobs:
           VERSION="${GITHUB_REF#refs/tags/v}"
           jq --arg v "$VERSION" '.version = $v' server.json > server.tmp && mv server.tmp server.json
 
+      # Validate before login, not after: `publish` validates too, but by then
+      # the job has already authenticated and a malformed server.json fails
+      # halfway through a release instead of before it starts (T107 item 4).
+      - name: Validate server.json
+        run: ./mcp-publisher validate
+
       - name: Authenticate to MCP Registry
         run: ./mcp-publisher login github-oidc
 
