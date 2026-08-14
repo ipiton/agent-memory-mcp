@@ -38,19 +38,30 @@ func marshalEmbeddingBinary(embedding []float32) []byte {
 	return buf
 }
 
-// unmarshalEmbeddingBinary decodes little-endian binary back to []float32.
-// Falls back to JSON unmarshal for legacy data that starts with '['.
+// unmarshalEmbeddingBinary decodes little-endian binary back to []float32,
+// falling back to the legacy JSON array format.
+//
+// T109: the format used to be decided by one byte — data[0] == '[' meant JSON.
+// A binary blob is 4 bytes per dimension of arbitrary float bits, so roughly one
+// in 256 of them begins with 0x5B and was handed to the JSON parser, which
+// failed. The record still loaded (the caller counts this as a soft error) but
+// arrived in the cache with **no embedding**, silently dropping out of semantic
+// recall. On the live bank that was 21 of 4536 blobs against 17.7 expected by
+// chance — which is what identified the mechanism.
+//
+// The prefix is now a hint, not a verdict: JSON has to actually parse, and a
+// blob that merely starts like it falls through to the binary path it belonged
+// to all along. Nothing about the stored format changes, so the affected
+// records recover on the next load without a re-embed.
 func unmarshalEmbeddingBinary(data []byte) ([]float32, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	// Legacy JSON format: starts with '['
 	if data[0] == '[' {
 		var embedding []float32
-		if err := json.Unmarshal(data, &embedding); err != nil {
-			return nil, err
+		if err := json.Unmarshal(data, &embedding); err == nil {
+			return embedding, nil
 		}
-		return embedding, nil
 	}
 	if len(data)%4 != 0 {
 		return nil, fmt.Errorf("invalid embedding blob size %d (must be multiple of 4)", len(data))

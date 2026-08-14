@@ -529,7 +529,14 @@ func TestSweep_AutoPromote_ConversationalGatedToReview(t *testing.T) {
 }
 
 // TestSweep_AutoPromote_DryRunDoesNotWrite (T62) verifies AutoPromote+DryRun
-// still emits zero writes and reports the count under the Promoted bucket.
+// emits zero writes and reports the count the live run would report.
+//
+// T92 corrected the expected counter. Written for T62, this test predates the
+// T77 provenance gate and asserted `Promoted: 1` for a conversational-origin
+// record — which is what a live run refuses to promote. It was therefore
+// pinning the forecast defect itself: the record is a promotion *candidate*,
+// routed to review. The no-write assertion below is the part that was always
+// about T62, and it is unchanged.
 func TestSweep_AutoPromote_DryRunDoesNotWrite(t *testing.T) {
 	store := newTestStore(t)
 	root := seedTempArchive(t, "task-autopromo-dry")
@@ -545,8 +552,11 @@ func TestSweep_AutoPromote_DryRunDoesNotWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SweepArchive: %v", err)
 	}
-	if result.TotalPromoted != 1 {
-		t.Fatalf("dry-run expected to count 1 promoted, got %d", result.TotalPromoted)
+	if result.TotalPromoted != 0 {
+		t.Fatalf("dry-run promoted %d, want 0 — a conversational record does not clear the T77 gate", result.TotalPromoted)
+	}
+	if result.TotalPromotionCand != 1 {
+		t.Fatalf("dry-run promotion candidates = %d, want 1 (gated to review)", result.TotalPromotionCand)
 	}
 	updated, err := store.Get(target.ID)
 	if err != nil {

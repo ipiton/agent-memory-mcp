@@ -502,12 +502,6 @@ func scanCanonicalHealth(memories []*memory.Memory, policy Policy, now time.Time
 	return health
 }
 
-var contradictionKeywords = []string{
-	"replaced by", "superseded", "deprecated", "no longer",
-	"instead of", "migrated to", "switched to", "removed",
-	"was changed to", "previously", "old approach",
-}
-
 // --- helpers ---
 
 // groupKey builds a composite key for grouping memories by entity, service, context, and subject.

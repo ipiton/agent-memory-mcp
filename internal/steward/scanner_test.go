@@ -82,7 +82,13 @@ func TestHasContradictionSignals_DualEncoding(t *testing.T) {
 		t.Fatal("active vs outdated on same subject must be a contradiction")
 	}
 
-	// Same-layer content disagreement (both live) is still flagged via keywords.
+	// T105: a keyword in the prose of one record is no longer a signal. This
+	// pair reads like a real disagreement and used to be flagged on the word
+	// "switched to" — but the same rule flagged 13 of 13 false positives on the
+	// live bank, because a corpus of fix descriptions uses that vocabulary
+	// constantly. Both records here are live, neither carries SupersededBy, and
+	// nothing in their explicit fields says one invalidates the other; that is
+	// now the honest answer.
 	superseding := &memory.Memory{
 		ID:      "transport-grpc",
 		Title:   "Switched to gRPC",
@@ -97,8 +103,17 @@ func TestHasContradictionSignals_DualEncoding(t *testing.T) {
 		Type:    memory.TypeSemantic,
 		Context: "transport",
 	}
-	if !hasContradictionSignals(superseding, other) {
-		t.Fatal("content disagreement keyword (switched to) must still flag a contradiction")
+	if hasContradictionSignals(superseding, other) {
+		t.Fatal("prose keywords must no longer flag a contradiction (T105)")
+	}
+
+	// The same pair once one side is explicitly retired: MarkOutdated writes
+	// the field the surviving signal reads, so a genuine supersession still
+	// surfaces.
+	retired := *other
+	retired.Metadata = map[string]string{"lifecycle_status": "outdated"}
+	if !hasContradictionSignals(superseding, &retired) {
+		t.Fatal("explicit invalidation must still flag a contradiction")
 	}
 }
 
@@ -151,10 +166,14 @@ func countContradictions(res *ScanResult) int {
 }
 
 // TestHasContradictionSignals_SuppressesTerminalPair asserts the T72 fix: a
-// legacy "Task complete: X" ↔ "Session close / X" pair is suppressed even when
-// its content carries a contradiction keyword ("removed", "switched to"), which
-// the T60 fix alone would not catch because those keywords trip the content
-// signal. A non-terminal pair with the same keyword still flags.
+// legacy "Task complete: X" ↔ "Session close / X" pair is not a contradiction.
+//
+// The T72 guard mattered because prose keywords ("removed", "switched to") used
+// to trip a content signal that T60 alone did not catch. T105 removed that
+// signal, so this pair would now be suppressed twice over — the guard is kept
+// because it is the correct answer for the class regardless of which layer
+// would otherwise have fired, and because it fires one gate earlier than the
+// lifecycle check.
 func TestHasContradictionSignals_SuppressesTerminalPair(t *testing.T) {
 	taskComplete := &memory.Memory{
 		ID:      "tc-1",
@@ -175,8 +194,8 @@ func TestHasContradictionSignals_SuppressesTerminalPair(t *testing.T) {
 		t.Fatal("terminal Task complete ↔ Session close pair must NOT be flagged as a contradiction (T72)")
 	}
 
-	// Sanity: the same contradiction keyword between two non-terminal memories
-	// still flags, so the guard is scoped to the terminal dual-write class.
+	// Sanity: the guard is scoped to the terminal dual-write class, so a
+	// non-terminal pair carrying a real invalidation still flags.
 	liveNote := &memory.Memory{
 		ID:      "note-live",
 		Title:   "Cache uses Redis",
@@ -185,14 +204,15 @@ func TestHasContradictionSignals_SuppressesTerminalPair(t *testing.T) {
 		Context: "cache-refactor",
 	}
 	changedNote := &memory.Memory{
-		ID:      "note-changed",
-		Title:   "Cache store",
-		Content: "The cache switched to an in-memory store instead of Redis.",
-		Type:    memory.TypeSemantic,
-		Context: "cache-refactor",
+		ID:       "note-changed",
+		Title:    "Cache store",
+		Content:  "The cache switched to an in-memory store instead of Redis.",
+		Type:     memory.TypeSemantic,
+		Context:  "cache-refactor",
+		Metadata: map[string]string{"lifecycle_status": "outdated"},
 	}
 	if !hasContradictionSignals(liveNote, changedNote) {
-		t.Fatal("non-terminal pair with a contradiction keyword must still flag")
+		t.Fatal("non-terminal pair with an explicit invalidation must still flag")
 	}
 }
 

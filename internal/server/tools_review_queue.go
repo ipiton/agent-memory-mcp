@@ -135,13 +135,27 @@ func (s *MCPServer) callResolveReviewQueue(args map[string]any) (any, *rpcError)
 // ids win. Otherwise it selects from the review-queue view, optionally narrowing
 // by record kind and by creation date (T81: `created_before` lets bulk cleanup
 // of a monthly backlog run through the tool instead of hand-writing SQL).
+//
+// T110: the two groups of filters used to run against different populations.
+// `context`/`service`/`tags` are applied inside ProjectBankView, which then
+// truncates each section to Limit; `kind` and `created_before` were applied to
+// the truncated page. With 885 pending items and a limit of 100, the date cutoff
+// was filtering the 100 most recent — so `tags` alone matched 100, the cutoff
+// alone matched 5, and together they matched 0. A date cutoff that behaves that
+// way is useless as the safety rail on a bulk operation, which is the one job it
+// has. The view is now read unbounded, every filter runs over the same set, and
+// Limit truncates last — so it means "act on at most N matching items".
 func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memory.ProjectBankOptions, createdBefore time.Time, kind string) ([]string, error) {
 	normalizedIDs := normalizeIDs(ids)
 	if len(normalizedIDs) > 0 {
 		return normalizedIDs, nil
 	}
 
-	view, err := store.ProjectBankView(context.Background(), memory.ProjectBankViewReviewQueue, options)
+	limit := options.Limit
+	viewOptions := options
+	viewOptions.Limit = unlimitedProjectBankLimit
+
+	view, err := store.ProjectBankView(context.Background(), memory.ProjectBankViewReviewQueue, viewOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -167,8 +181,18 @@ func resolveReviewQueueTargetIDs(store *memory.Store, ids []string, options memo
 			targets = append(targets, item.ID)
 		}
 	}
-	return normalizeIDs(targets), nil
+	targets = normalizeIDs(targets)
+	if limit > 0 && len(targets) > limit {
+		targets = targets[:limit]
+	}
+	return targets, nil
 }
+
+// unlimitedProjectBankLimit asks ProjectBankView for every matching item. The
+// options type has no "no limit" value — zero is normalized to 10 — and the
+// view is built from the in-memory cache, so a large bound costs a slice
+// capacity rather than a query.
+const unlimitedProjectBankLimit = 1 << 30
 
 func normalizeIDs(values []string) []string {
 	if len(values) == 0 {

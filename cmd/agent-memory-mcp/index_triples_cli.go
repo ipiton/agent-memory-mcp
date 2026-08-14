@@ -193,13 +193,9 @@ func buildIndexTriplesExtractor(cfg config.Config) (memory.TripleExtractor, erro
 	if !cfg.TripleExtractor.Enabled {
 		return nil, fmt.Errorf("MCP_TRIPLE_EXTRACTOR_ENABLED is false")
 	}
-	apiKey := cfg.TripleExtractor.APIKey
-	if apiKey == "" {
-		apiKey = cfg.Embeddings.OpenAIAPIKey
-	}
-	baseURL := cfg.TripleExtractor.BaseURL
-	if baseURL == "" {
-		baseURL = cfg.Embeddings.OpenAIBaseURL
+	baseURL, apiKey, err := cfg.TripleExtractorCredentials()
+	if err != nil {
+		return nil, err
 	}
 	return memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
 		BaseURL: baseURL,

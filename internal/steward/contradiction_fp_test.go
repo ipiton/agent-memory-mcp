@@ -71,8 +71,19 @@ func TestHasContradictionSignals_SuppressesFPClasses(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "control: contradiction keyword still flagged",
+			// T105: this used to be the control proving the keyword layer alive.
+			// That layer scored 13 findings and 13 false positives on the live
+			// bank and was removed, so a supersession announced only in prose is
+			// no longer a signal. The pair below is the same claim made
+			// explicit, and it is what the surviving signals read.
+			name: "control: prose-only supersession no longer flagged",
 			a:    mem("We use Postgres", "db", nil),
+			b:    mem("Migrated to MySQL, Postgres removed", "db", nil),
+			want: false,
+		},
+		{
+			name: "control: the same change, recorded in the lifecycle field",
+			a:    mem("We use Postgres", "db", map[string]string{"lifecycle_status": "outdated"}),
 			b:    mem("Migrated to MySQL, Postgres removed", "db", nil),
 			want: true,
 		},
@@ -83,5 +94,36 @@ func TestHasContradictionSignals_SuppressesFPClasses(t *testing.T) {
 				t.Fatalf("hasContradictionSignals = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestContradictionIgnoresProseVocabulary pins the T105 removal by the shape
+// that caused it, not by the absence of a function: a record whose own advice
+// is to mark things superseded must not become a hub for everything
+// semantically near it.
+//
+// The live measurement behind this: 1565 active records, 13 findings, 13 false,
+// one record in 3 pairs and another in 3. Reintroducing a substring scan over
+// prose — in either direction, disjunctive or conjunctive — fails here.
+func TestContradictionIgnoresProseVocabulary(t *testing.T) {
+	hub := mem("Pattern: put up a SUPERSEDED banner when routing changes", "marketing", nil)
+
+	neighbours := []*memory.Memory{
+		mem("Marketing artifacts carry external links", "marketing", nil),
+		mem("Routing was migrated to the new gateway", "marketing", nil),
+		mem("The old approach is no longer used here", "marketing", nil),
+	}
+	for _, n := range neighbours {
+		if hasContradictionSignals(hub, n) {
+			t.Errorf("hub paired with %q — prose vocabulary must not be a contradiction signal", n.Title)
+		}
+	}
+
+	// Both sides carrying the vocabulary is agreement about a change, not a
+	// disagreement — the reason a conjunctive rule was rejected too.
+	agreeA := mem("We migrated to gRPC", "transport", nil)
+	agreeB := mem("The transport migrated to gRPC last quarter", "transport", nil)
+	if hasContradictionSignals(agreeA, agreeB) {
+		t.Error("two records agreeing about a migration must not be a contradiction")
 	}
 }
