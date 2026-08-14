@@ -80,7 +80,7 @@ Reference docs: [HOOKS](docs/HOOKS.md) · [MCP_TOOLS](docs/MCP_TOOLS.md) · [SHA
 - **Local-only embedding mode**: keep hosted providers disabled and send text only to your local Ollama endpoint
 - **Safer semantic recall**: memories from a different embedding model no longer produce misleading matches
 - **Explicit migration flow**: use `agent-memory-mcp reembed` for memory migration and `agent-memory-mcp index` for RAG rebuilds after switching models
-- **Better visibility**: `stats` and `memory_stats` now show how many memories belong to each embedding model
+- **Better visibility**: `stats` and `memory_stats` show how many memories belong to each embedding model, and name the ones no semantic query can reach — records the encoder refused outright, and records embedded from their opening only
 - **Ready MCP client configs**: generate copy-paste snippets for Claude Desktop, Cursor, and Codex
 - **Safer indexing defaults**: built-in directory excludes, optional per-path exclude globs, and secret redaction before documents are indexed
 - **Source-aware retrieval**: docs, ADRs, RFCs, changelogs, runbooks, postmortems, CI configs, Helm, Terraform, and K8s files are classified and surfaced with source metadata

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-08-14
+
+Four defects that shared a shape: something was wrong with what sat in the
+index, and nothing anywhere said so. Three of the four turned out to have a
+different root cause than the one they were reported with.
+
+### Fixed
+
+- **The no-knowledge guard was installed on one write path out of four (T122)** — a session summary whose body was nothing but `- Promoted canonical: <uuid>` lines ranked above the answer to a query about promotion. The guard for exactly this has existed since T80/T85, but `hooks.Check` was called only by the two session-*checkpoint* callers; the terminal session-*summary* write goes through `sessionclose.SaveRawSummaryWithOptions`, reached from `close-session`, from `executeActions` and from the auto-capture idle flush, and none of them consulted it.
+
+  Measured on a live bank of 4571: the same predicate matches **0 of 63 checkpoints and 75 of 2296 summaries**, still arriving daily. The verdict now lives at the write boundary, where it is a property of the record rather than of the entry point.
+
+  Three labels join the whitelist by the criterion T85 already stated — the value is a pointer, never a statement: `promoted canonical`, `runbook search`, `listed repo path`. The 80 such records already in the bank are excluded from semantic selection the way T84 excludes review-queue items, via a flag computed once at cache load. They stay visible to `List`, which is what keeps the unprocessed-summary queue intact.
+
+  🔴 The task reported 469 records, counting bodies where half the lines or more are service lines. That conflated two classes: 80 are journals, and 151 are session summaries made entirely of `- Stored memory: <content>` bullets — **1019 of 1273 such bullets (80.0%) reproduce the opening of a record that exists separately and in full**. A truncated copy competing with its own original is a different defect with a different fix, and a whitelist would only address it by dropping genuine closure reports. Filed separately rather than folded in.
+
+- **Chunks were cut on byte boundaries (T118)** — 2622 chunks (4.28%) across 746 documents did not decode as UTF-8. In every sampled case the first invalid byte sits immediately after the breadcrumb prefix, i.e. at the first byte of the body, which is exactly where the window offset lands: chunk windows advance by `chunkSize - overlap` arithmetic, and Cyrillic is two bytes per rune. Both ends are now aligned via `textfmt.AlignRuneStart`, next to `TruncateSuffix` — the same defect's fix for the truncation case (T87).
+
+  The two splitters become one. `splitIntoChunks` was "intentionally a near-copy" of `splitTextByBudget`, so this defect existed twice.
+
+  Existing chunks are not sanitized in place. A memory row was all there was, so T87 rewrote it with U+FFFD; a chunk has its source file on disk, so sanitizing would freeze a replacement character where a real letter belongs and leave the chunk looking healthy forever. Instead the affected documents get their stored hash cleared and the indexer re-chunks them. ⚠️ Clearing the hash, not deleting the `indexed_files` row: deleting it makes the file untracked, and the orphan sweep that runs immediately after would take all 746 documents out of search until someone re-indexed.
+
+- **Every warning the memory store emitted in production was discarded (T120)** — the store was constructed with `zap.NewNop()`, so a refused embedding, a row that failed to scan and invalid UTF-8 all logged into nothing. That is why eight records sat in the bank with no vector at all — stored, confirmed and counted like any other record, and unreachable by any semantic query, because recall checks the embedding model before the cosine. The store now gets the file logger, as the steward service already did.
+
+  The refusal is not about context length: llama-server rejects an input larger than its *physical batch* (`-ub`), and that diagnosis appears only in the server's own log. A refusal now costs a second attempt on a rune-safe prefix, and the record carries `embedding_truncated=true` — a 102 KB summary encoded from its opening is at least reachable, but only if the partiality is visible.
+
+### Changed
+
+- **`memory_stats` names records that no semantic query can reach** — a line for records with no embedding and a line for records embedded from their opening only. They were visible before only as an `(none)` row in the by-model breakdown, where they read as one more model.
+- **CI fails on a *new* goreleaser deprecation (T117)** — `goreleaser check` exits non-zero on this config because `brews` is deprecated, and `brews` stays: Homebrew's cask `service` stanza only relocates a plist shipped inside the archive, while the formula's `service do` generates it from `run [...]`, and the cask has no `install` block where the SOPS wrapper is written. A plain check step could only ever be red, so the gate is on the set of deprecations instead.
+
 ## [0.11.0] - 2026-08-14
 
 One change, measured. Recall no longer applies calendar age decay by default,
