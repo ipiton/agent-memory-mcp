@@ -90,7 +90,17 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 		emb = nil
 	}
 
-	memoryStore, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), zap.NewNop())
+	// T120: the store used to be handed zap.NewNop(), so every warning it emits
+	// — a refused embedding, a row that failed to scan, invalid UTF-8 — was
+	// discarded in production. That is why eight records sat in the bank without
+	// a vector and nothing anywhere said so. The steward already takes the file
+	// logger this way.
+	storeLogger := zap.NewNop()
+	if fileLogger != nil {
+		storeLogger = fileLogger.Logger
+	}
+
+	memoryStore, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), storeLogger)
 	if err != nil {
 		if fileLogger != nil {
 			fileLogger.Warn("Memory store initialization failed - memory features will be unavailable",

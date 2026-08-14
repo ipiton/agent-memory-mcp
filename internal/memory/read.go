@@ -947,6 +947,38 @@ func (ms *Store) CountByType() map[Type]int {
 	return counts
 }
 
+// CountWithoutEmbedding returns the number of memories carrying no vector at
+// all (T120). These are stored, confirmed and counted like any other record,
+// but semantic recall never reaches the cosine for them — the model check
+// fails first and they fall through to text matching.
+func (ms *Store) CountWithoutEmbedding() int {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	n := 0
+	for _, m := range ms.memories {
+		if len(m.Embedding) == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// CountTruncatedEmbedding returns the number of memories whose vector covers
+// only the opening of the body (T120).
+func (ms *Store) CountTruncatedEmbedding() int {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+
+	n := 0
+	for _, m := range ms.memories {
+		if m.Metadata[MetadataEmbeddingTruncated] == "true" {
+			n++
+		}
+	}
+	return n
+}
+
 // CountByEmbeddingModel returns the number of memories grouped by embedding model.
 func (ms *Store) CountByEmbeddingModel() map[string]int {
 	ms.mu.RLock()
