@@ -20,6 +20,21 @@ The model id is derived, not configured — `llamacpp:<base-url>:<model>:<dim>`.
 Changing the port or the model label alone is enough to invalidate a bank, so
 keep both stable once migrated.
 
+## Before anything: check what the service is actually running
+
+The scoring code and the model are one decision, not two. Measure on one binary
+and deploy to another and the numbers do not transfer — Granite R2 scored 0.9101
+Hit@5 with mean-centering and 0.2870 without it, so shipping the model to a
+build that predates centering is a large regression sold as an upgrade. That is
+not hypothetical; it is what happened on the first attempt at this migration.
+
+```bash
+brew list --versions agent-memory-mcp   # what is installed
+git log --oneline -1                    # what you measured against
+```
+
+If those differ in anything touching retrieval scoring, release first.
+
 ## Order
 
 ```sh
