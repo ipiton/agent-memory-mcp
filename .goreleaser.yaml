@@ -28,6 +28,20 @@ changelog:
       - "^ci:"
       - "^chore:"
 
+# T117: `brews` is deprecated in goreleaser 2.x and stays anyway, deliberately.
+#
+# The suggested replacement is `homebrew_casks`, which this file already
+# publishes below — but it cannot carry the service. The Homebrew *cask*
+# `service` stanza is a file-moving artifact (Cask::Artifact::Service < Moved):
+# it relocates a launchd plist that ships inside the archive. The *formula*
+# `service do` generates that plist from `run [...]`. And the cask has no
+# `install` block, which is where the T101 secrets wrapper is written. Dropping
+# `brews` would therefore drop both `brew services` support and SOPS.
+#
+# So the formula is the real distribution channel and the cask is a binary-only
+# convenience. The version pin in .github/workflows/release.yml ('~> v2') keeps
+# a major upgrade deliberate, and scripts/check-goreleaser-deprecations.sh fails
+# CI on any deprecation other than this one.
 brews:
   - name: agent-memory-mcp
     repository:
