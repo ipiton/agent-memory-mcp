@@ -420,50 +420,37 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 			stats.OutdatedCount++
 			result.TotalOutdated++
 		case "promotion_candidate":
-			if cfg.DryRun {
-				if cfg.AutoPromote {
-					stats.Promoted++
-					result.TotalPromoted++
-				} else {
-					stats.PromotionCandidates++
-					result.TotalPromotionCand++
-				}
-				break
-			}
-			if cfg.AutoPromote {
-				_, err := sw.store.PromoteToCanonical(ctx, m.ID, AutoPromoteOwner, false)
-				if errors.Is(err, memory.ErrPromotionRequiresVerification) {
-					// T77: a conversational-origin record must not be
-					// auto-canonicalized (memory-poisoning defense). Route it to
-					// human review instead of promoting or hard-erroring.
-					if cerr := sw.createPromotionCandidate(ctx, m, slug, existingReviews); cerr != nil {
-						result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, cerr))
-						sw.logger.Warn("archive-sweep: create review-queue item failed",
-							zap.String("id", m.ID), zap.String("slug", slug), zap.Error(cerr))
+			// T92: the outcome is decided once, for both modes, and only the
+			// write below is conditional on DryRun. The preview used to run a
+			// shorter chain of its own that skipped the T77 provenance gate, so
+			// it forecast "promote 209" where the real run promoted 14 and sent
+			// 195 to review. A preview exists to be decided on; one that
+			// disagrees with reality is worse than none.
+			//
+			// T77: a conversational-origin record must not be auto-canonicalized
+			// (memory-poisoning defense) — it goes to human review instead.
+			if cfg.AutoPromote && memory.PromotionAllowed(m, false) {
+				if !cfg.DryRun {
+					if _, err := sw.store.PromoteToCanonical(ctx, m.ID, AutoPromoteOwner, false); err != nil {
+						result.Errors = append(result.Errors, fmt.Sprintf("%s: promote to canonical: %v", m.ID, err))
+						sw.logger.Warn("archive-sweep: promote to canonical failed",
+							zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
 						break
 					}
-					existingReviews[m.ID] = struct{}{}
-					stats.PromotionCandidates++
-					result.TotalPromotionCand++
-					break
-				}
-				if err != nil {
-					result.Errors = append(result.Errors, fmt.Sprintf("%s: promote to canonical: %v", m.ID, err))
-					sw.logger.Warn("archive-sweep: promote to canonical failed",
-						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
-					break
 				}
 				stats.Promoted++
 				result.TotalPromoted++
 				break
 			}
-			if err := sw.createPromotionCandidate(ctx, m, slug, existingReviews); err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, err))
-				sw.logger.Warn("archive-sweep: create review-queue item failed",
-					zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
-				break
+			if !cfg.DryRun {
+				if err := sw.createPromotionCandidate(ctx, m, slug, existingReviews); err != nil {
+					result.Errors = append(result.Errors, fmt.Sprintf("%s: create review-queue item: %v", m.ID, err))
+					sw.logger.Warn("archive-sweep: create review-queue item failed",
+						zap.String("id", m.ID), zap.String("slug", slug), zap.Error(err))
+					break
+				}
+				existingReviews[m.ID] = struct{}{} // keep dedup set hot
 			}
-			existingReviews[m.ID] = struct{}{} // keep dedup set hot
 			stats.PromotionCandidates++
 			result.TotalPromotionCand++
 		default:

@@ -91,3 +91,48 @@ func TestPromoteToCanonicalTrustedProvenanceAutoAllowed(t *testing.T) {
 		t.Fatalf("trusted record must canonicalize, got %q", LifecycleStatusOf(got))
 	}
 }
+
+// T111. last_verified_at was stamped on every promotion, including the
+// automatic ones, so records the archive sweep canonicalized looked freshly
+// verified without ever passing verify_entry — 12 of them on the live bank.
+// A field that means "someone checked this" must only be written when someone
+// did.
+func TestPromoteStampsVerificationOnlyWhenVerified(t *testing.T) {
+	store := newTestStore(t)
+
+	auto := &Memory{
+		Title: "auto", Content: "auto content", Type: TypeSemantic, Context: "t111",
+		Metadata: map[string]string{MetadataProvenance: ProvenanceExternal},
+	}
+	if err := store.Store(context.Background(), auto); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if _, err := store.PromoteToCanonical(context.Background(), auto.ID, "archive-sweep", false); err != nil {
+		t.Fatalf("auto promote: %v", err)
+	}
+	got, err := store.Get(auto.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := got.Metadata[MetadataLastVerifiedAt]; v != "" {
+		t.Errorf("auto-promoted record claims last_verified_at=%q; nothing verified it", v)
+	}
+	if got.Metadata["canonical_promoted_at"] == "" {
+		t.Error("canonical_promoted_at must still record when the promotion happened")
+	}
+
+	human := &Memory{Title: "human", Content: "human content", Type: TypeSemantic, Context: "t111"}
+	if err := store.Store(context.Background(), human); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if _, err := store.PromoteToCanonical(context.Background(), human.ID, "vit", true); err != nil {
+		t.Fatalf("human promote: %v", err)
+	}
+	got, err = store.Get(human.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Metadata[MetadataLastVerifiedAt] == "" {
+		t.Error("a verified promotion must stamp last_verified_at")
+	}
+}

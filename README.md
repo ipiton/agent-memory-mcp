@@ -920,7 +920,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_RAG_KEEP_NOISE` | `false` | T49 escape hatch: keep noisy Markdown sections (Table of Contents / References / Changelog / etc.) in the index instead of dropping them at chunking time |
 | `MCP_TRIPLE_EXTRACTOR_ENABLED` | `false` | T50 knowledge-graph layer. Enable to fire an async LLM call on every memory write that extracts 3-7 (subj, rel, obj) triples powering `recall_multihop` |
 | `MCP_TRIPLE_EXTRACTOR_BASE_URL` | - | OpenAI-compatible `/chat/completions` endpoint (DeepSeek, Together, Groq, Qwen, …); falls back to `OPENAI_BASE_URL` when empty |
-| `MCP_TRIPLE_EXTRACTOR_API_KEY` | - | Bearer token for the extractor; falls back to `OPENAI_API_KEY` when empty |
+| `MCP_TRIPLE_EXTRACTOR_API_KEY` | - | Bearer token for the extractor. Falls back to `OPENAI_API_KEY` **only** when `MCP_TRIPLE_EXTRACTOR_BASE_URL` is empty or equal to `OPENAI_BASE_URL`. Pointing the extractor at a third-party endpoint without giving it its own key disables extraction with an explicit message — the OpenAI key is never sent to an address it was not issued for |
 | `MCP_TRIPLE_EXTRACTOR_MODEL` | - | Model id passed to the extractor (e.g. `deepseek-chat`, `qwen2.5-72b-instruct`) |
 | `MCP_TRIPLE_EXTRACTOR_TIMEOUT` | `30s` | Per-request timeout for the extractor HTTP call |
 

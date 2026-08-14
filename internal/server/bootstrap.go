@@ -130,13 +130,14 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 // wireTripleExtractor attaches the optional OpenAI triple extractor to the
 // store, logging and skipping on misconfiguration.
 func wireTripleExtractor(cfg config.Config, memoryStore *memory.Store, fileLogger *logger.FileLogger) {
-	apiKey := cfg.TripleExtractor.APIKey
-	if apiKey == "" {
-		apiKey = cfg.Embeddings.OpenAIAPIKey
-	}
-	baseURL := cfg.TripleExtractor.BaseURL
-	if baseURL == "" {
-		baseURL = cfg.Embeddings.OpenAIBaseURL
+	baseURL, apiKey, credErr := cfg.TripleExtractorCredentials()
+	if credErr != nil {
+		if fileLogger != nil {
+			fileLogger.Warn("Triple extractor disabled: credential pair", zap.Error(credErr))
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: triple extractor disabled: %v\n", credErr)
+		}
+		return
 	}
 	extractor, exErr := memory.NewOpenAIExtractor(memory.OpenAIExtractorConfig{
 		BaseURL: baseURL,

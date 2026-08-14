@@ -355,6 +355,22 @@ func (ms *Store) MarkOutdated(ctx context.Context, id string, reason string, sup
 // requires an explicit verified=true (human review) decision.
 var ErrPromotionRequiresVerification = errors.New("promotion to canonical requires verification: conversational-origin memory cannot be auto-promoted")
 
+// PromotionAllowed reports whether PromoteToCanonical would accept this
+// promotion, without performing it. verified=true is the human decision and
+// always clears; an automated caller only clears for already-trusted
+// provenance.
+//
+// T92: the gate needs a name because callers legitimately have to know the
+// answer before the write. The archive sweep's dry run used to open-code its
+// own shorter version of this chain, so the preview counted as "promoted"
+// records that the real run routed to review — a 15× divergence on the
+// 2026-07-16 measurement. Both the preview and the write now read this one
+// definition, which is what keeps them from drifting the next time the gate
+// gains a condition.
+func PromotionAllowed(m *Memory, verified bool) bool {
+	return verified || ProvenanceIsTrusted(ProvenanceOf(m))
+}
+
 // PromoteToCanonical marks a memory as the current canonical entry.
 //
 // Threat model (T77): canonical is the highest-trust layer. Auto-promotion
@@ -379,7 +395,7 @@ func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string
 		return nil, err
 	}
 
-	if !verified && !ProvenanceIsTrusted(ProvenanceOf(mem)) {
+	if !PromotionAllowed(mem, verified) {
 		return nil, ErrPromotionRequiresVerification
 	}
 
@@ -397,7 +413,17 @@ func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string
 	metadata["canonical"] = "true"
 	canonicalNow := ms.now().UTC().Format(time.RFC3339)
 	metadata["canonical_promoted_at"] = canonicalNow
-	metadata["last_verified_at"] = canonicalNow
+	// T111: only a promotion that actually went through verification may claim
+	// one. The stamp used to be unconditional, so the archive sweep's automatic
+	// promotions (verified=false) wrote "last verified: now" for records nobody
+	// had looked at — 12 such canonical entries on the 2026-08-12 measurement,
+	// none of which had ever been through verify_entry. Freshness scoring is
+	// unaffected either way: deriveTrust falls back to UpdatedAt, which the
+	// promotion sets regardless. What changes is that the field stops asserting
+	// something that did not happen.
+	if verified {
+		metadata["last_verified_at"] = canonicalNow
+	}
 	delete(metadata, "archived")
 
 	importance := mem.Importance

@@ -113,11 +113,63 @@ type EmbeddingsConfig struct {
 // TripleExtractorConfig holds the optional knowledge-graph triple extractor
 // (T50 slice 2). Errors degrade gracefully — extraction never blocks ingest.
 type TripleExtractorConfig struct {
-	Enabled bool          // MCP_TRIPLE_EXTRACTOR_ENABLED
-	BaseURL string        // MCP_TRIPLE_EXTRACTOR_BASE_URL
-	APIKey  string        // MCP_TRIPLE_EXTRACTOR_API_KEY (falls back to OPENAI_API_KEY when empty)
+	Enabled bool   // MCP_TRIPLE_EXTRACTOR_ENABLED
+	BaseURL string // MCP_TRIPLE_EXTRACTOR_BASE_URL
+	// APIKey (MCP_TRIPLE_EXTRACTOR_API_KEY) falls back to OPENAI_API_KEY only
+	// when BaseURL addresses the same host as the embeddings config — see
+	// TripleExtractorCredentials for why the fallback is conditional.
+	APIKey  string
 	Model   string        // MCP_TRIPLE_EXTRACTOR_MODEL
 	Timeout time.Duration // MCP_TRIPLE_EXTRACTOR_TIMEOUT (default 30s)
+}
+
+// ErrCrossFamilyCredential is returned when the triple extractor points at a
+// third-party endpoint but has no key of its own, so the only way to satisfy it
+// would be to send OPENAI_API_KEY somewhere OpenAI does not run.
+var ErrCrossFamilyCredential = errors.New("incomplete MCP_TRIPLE_EXTRACTOR_* pair")
+
+// TripleExtractorCredentials resolves the endpoint and key the extractor should
+// use, refusing to pair a key from one variable family with an address from
+// another.
+//
+// T100: the fallback to OPENAI_API_KEY was unconditional. Point
+// MCP_TRIPLE_EXTRACTOR_BASE_URL at OpenRouter or a local proxy, leave
+// MCP_TRIPLE_EXTRACTOR_API_KEY unset, and the OpenAI key travelled to that
+// third party — with nothing to notice, because the request succeeds and
+// extraction works. The convenience is real (one key when both point at
+// OpenAI), and that is exactly what makes the failure quiet: the fallback keeps
+// working after BASE_URL stops meaning OpenAI.
+//
+// So the fallback survives, narrowed to the case it was written for: the
+// extractor address is empty or is the embeddings address. Anywhere else the
+// extractor needs its own key, and the refusal names both variables rather than
+// substituting silently.
+func (c Config) TripleExtractorCredentials() (baseURL, apiKey string, err error) {
+	extractorURL := strings.TrimSpace(c.TripleExtractor.BaseURL)
+	openAIURL := strings.TrimSpace(c.Embeddings.OpenAIBaseURL)
+
+	baseURL = extractorURL
+	if baseURL == "" {
+		baseURL = openAIURL
+	}
+
+	apiKey = strings.TrimSpace(c.TripleExtractor.APIKey)
+	if apiKey != "" {
+		return baseURL, apiKey, nil
+	}
+
+	if extractorURL != "" && !sameEndpoint(extractorURL, openAIURL) {
+		return "", "", fmt.Errorf(
+			"%w: MCP_TRIPLE_EXTRACTOR_BASE_URL is %q but MCP_TRIPLE_EXTRACTOR_API_KEY is empty; "+
+				"OPENAI_API_KEY is not sent to a non-OpenAI endpoint — set the extractor's own key",
+			ErrCrossFamilyCredential, extractorURL)
+	}
+	return baseURL, strings.TrimSpace(c.Embeddings.OpenAIAPIKey), nil
+}
+
+// sameEndpoint compares two base URLs ignoring case and a trailing slash.
+func sameEndpoint(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(a, "/"), strings.TrimRight(b, "/"))
 }
 
 // HTTPConfig holds HTTP transport settings.

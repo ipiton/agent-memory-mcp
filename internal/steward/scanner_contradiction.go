@@ -147,15 +147,32 @@ func hasContradictionSignals(a, b *memory.Memory) bool {
 		}
 	}
 
-	// Content-level contradiction signals.
-	contentA := strings.ToLower(a.Content)
-	contentB := strings.ToLower(b.Content)
-	for _, signal := range contradictionKeywords {
-		if strings.Contains(contentA, signal) || strings.Contains(contentB, signal) {
-			return true
-		}
-	}
-
+	// T105 removed a fifth signal here: a disjunctive substring search for 11
+	// English supersession phrases ("superseded", "replaced by", "deprecated",
+	// "removed", …) over the whole body of either record. It is gone rather
+	// than repaired, and the reason is a measurement, not taste.
+	//
+	// On the live bank (1565 active records) it produced 13 findings, all
+	// false, and it was the *only* producer — the four structural signals above
+	// contributed none. The 2026-08-12 measurement that opened T105 saw the
+	// same shape at 17/17, with one record standing in 3 pairs and another in
+	// 5. The corpus explains it: this bank is largely patterns describing
+	// fixes, so that vocabulary is its normal register. A record whose advice
+	// is "put up a SUPERSEDED banner" became a hub conflicting with everything
+	// semantically near it.
+	//
+	// The repair named in the task — require the marker in *both* records —
+	// was implemented and measured at 0 findings, then rejected: it inverts the
+	// semantics. Two records that both say "migrated to X" agree about the
+	// migration; conjunction fires precisely on agreement. Disjunction is
+	// noise, conjunction is wrong, and a directional version ("A declares B's
+	// subject obsolete") needs to parse the claim, which is not a steward
+	// heuristic.
+	//
+	// What remains are the four signals above, all grounded in explicit fields
+	// (lifecycle status, SupersededBy/Replaces, validity windows) rather than
+	// in prose. A genuine supersession reaches them: MarkOutdated writes the
+	// status the first signal reads.
 	return false
 }
 
