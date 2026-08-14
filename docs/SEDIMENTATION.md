@@ -72,8 +72,8 @@ responsibility.
 
 | Current     | Next        | Condition                                                              | Auto  | Reason                |
 |-------------|-------------|------------------------------------------------------------------------|-------|-----------------------|
-| `surface`   | `episodic`  | `age >= 7d` AND `access_count >= 1`                                    | yes   | `aged-surface`        |
-| `episodic`  | `semantic`  | `age >= 30d` AND `access_count >= 3`                                   | no    | `aged-episodic`       |
+| `surface`   | `episodic`  | `age >= 7d` AND `targeted_access_count >= 1`                           | yes   | `aged-surface`        |
+| `episodic`  | `semantic`  | `age >= 30d` AND `targeted_access_count >= 3`                          | no    | `aged-episodic`       |
 | `semantic`  | `character` | `referenced_by_count >= 20` OR `lifecycle_status == canonical`         | no    | `canonical-promotion` |
 | `character` | `semantic`  | `accessed_at` older than 90d                                           | no    | `character-decay`     |
 
@@ -279,12 +279,32 @@ Until production access-pattern data is available, operate the cycle in
 - **Error rate**: any non-empty `SedimentCycleResult.Errors`. Each entry
   names a specific memory ID and the underlying write error.
 
+### Which counter the gate reads (T113)
+
+Both promotion rules read `targeted_access_count`, **not** `access_count`.
+The two differ by intent: `access_count` counts every appearance in a result
+set, including sweeps — `Recall` with `limit <= 0` (the shape
+`RecallCanonical` passes) marks everything scoring above `minScore`. On the
+live bank that drove it to a median of 110 and let **4046 of 4556** entries
+clear the `>= 3` threshold, so the gate admitted 89% of the corpus and gated
+nothing. `targeted_access_count` moves only for a recall with a result budget.
+
+The column is added by migration and **not backfilled** — the old values are
+the defect. Every entry starts at zero and earns the count back, which means
+age-based promotions pause until real bounded retrievals accumulate. That
+pause is the point: before the fix the criterion "the entry proved useful"
+was satisfied by having existed long enough to be swept.
+
+Character decay still reads `accessed_at`, which carries the same conflation.
+It is a NON-AUTO rule (it only proposes), so it currently proposes nothing;
+fixing it would need a second timestamp column that nothing else reads.
+
 ### Degraded-mode caveat
 
 T48 shipped without 2 months of production access-pattern history. The
-thresholds (7d, 30d, 90d, 20 refs, access_count ≥ 1/3) are plausible defaults,
-not empirically tuned. Expect to revisit them once the cycle has produced
-~8 weeks of data. All thresholds live in `SedimentPolicy` and are wired
+thresholds (7d, 30d, 90d, 20 refs, targeted_access_count ≥ 1/3) are plausible
+defaults, not empirically tuned. Expect to revisit them once the cycle has
+produced ~8 weeks of data on the corrected counter. All thresholds live in `SedimentPolicy` and are wired
 through the CLI/MCP tool args for easy override.
 
 ## Testing

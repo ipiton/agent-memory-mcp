@@ -7,11 +7,11 @@ import (
 // seedTriplesGraph builds a deterministic triple graph rooted at a seed
 // memory whose content matches "incident root cause". Topology:
 //
-//	   m1 (seed)            m2                m3                m4
-//	  ┌──────────┐      ┌─────────┐       ┌──────────┐      ┌─────────┐
-//	  │ payments │─────▶│ db_pool │──────▶│ migration│ ◀────│ release │
-//	  │ outage   │      │ exhaust │       │  v42     │      │ release │
-//	  └──────────┘      └─────────┘       └──────────┘      └─────────┘
+//	 m1 (seed)            m2                m3                m4
+//	┌──────────┐      ┌─────────┐       ┌──────────┐      ┌─────────┐
+//	│ payments │─────▶│ db_pool │──────▶│ migration│ ◀────│ release │
+//	│ outage   │      │ exhaust │       │  v42     │      │ release │
+//	└──────────┘      └─────────┘       └──────────┘      └─────────┘
 //
 // Edges:
 //

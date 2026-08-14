@@ -33,12 +33,12 @@ type SedimentCycleConfig struct {
 
 // SedimentCycleResult is the outcome of a SedimentCycle run.
 type SedimentCycleResult struct {
-	AutoApplied  int                   `json:"auto_applied"`
-	ReviewQueued int                   `json:"review_queued"`
-	Skipped      int                   `json:"skipped"`
-	Errors       []string              `json:"errors,omitempty"`
-	DryRun       bool                  `json:"dry_run"`
-	Transitions  []SedimentTransition  `json:"transitions,omitempty"`
+	AutoApplied  int                  `json:"auto_applied"`
+	ReviewQueued int                  `json:"review_queued"`
+	Skipped      int                  `json:"skipped"`
+	Errors       []string             `json:"errors,omitempty"`
+	DryRun       bool                 `json:"dry_run"`
+	Transitions  []SedimentTransition `json:"transitions,omitempty"`
 }
 
 // RunSedimentCycle scans all memories, computes Decide transitions, and

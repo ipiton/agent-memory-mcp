@@ -67,12 +67,12 @@ const (
 // at the time of implementation. Operators should revisit these once 2+
 // months of cycle outputs are instrumented.
 const (
-	DefaultSurfaceToEpisodicAge    = 7 * 24 * time.Hour   // 7d
-	DefaultEpisodicToSemanticAge   = 30 * 24 * time.Hour  // 30d
-	DefaultSemanticToCharacterRefs = 20                   // referenced_by count
-	DefaultCharacterDemotionAge    = 90 * 24 * time.Hour  // 90d
-	DefaultEpisodicToSemanticMin   = 3                    // min access_count for episodic→semantic
-	DefaultSurfaceToEpisodicMin    = 1                    // min access_count for surface→episodic
+	DefaultSurfaceToEpisodicAge    = 7 * 24 * time.Hour  // 7d
+	DefaultEpisodicToSemanticAge   = 30 * 24 * time.Hour // 30d
+	DefaultSemanticToCharacterRefs = 20                  // referenced_by count
+	DefaultCharacterDemotionAge    = 90 * 24 * time.Hour // 90d
+	DefaultEpisodicToSemanticMin   = 3                   // min targeted_access_count for episodic→semantic
+	DefaultSurfaceToEpisodicMin    = 1                   // min targeted_access_count for surface→episodic
 )
 
 // IsValidSedimentLayer reports whether s is one of the four canonical layers.
@@ -128,11 +128,11 @@ type SedimentPolicy struct {
 	EpisodicToSemanticAge   time.Duration
 	SemanticToCharacterRefs int
 	CharacterDemotionAge    time.Duration
-	// EpisodicToSemanticMin is the minimum access_count required before an
-	// aged episodic memory is proposed for semantic promotion.
+	// EpisodicToSemanticMin is the minimum targeted_access_count required
+	// before an aged episodic memory is proposed for semantic promotion.
 	EpisodicToSemanticMin int
-	// SurfaceToEpisodicMin is the minimum access_count required before an
-	// aged surface memory is auto-promoted to episodic.
+	// SurfaceToEpisodicMin is the minimum targeted_access_count required
+	// before an aged surface memory is auto-promoted to episodic.
 	SurfaceToEpisodicMin int
 }
 
@@ -167,8 +167,8 @@ func (p SedimentPolicy) DefaultsApplied() SedimentPolicy {
 // calculations so tests can inject a fixed clock.
 //
 // Rules:
-//   - surface → episodic : age >= SurfaceToEpisodicAge AND access_count >= SurfaceToEpisodicMin. AUTO.
-//   - episodic → semantic: age >= EpisodicToSemanticAge AND access_count >= EpisodicToSemanticMin. NON-AUTO.
+//   - surface → episodic : age >= SurfaceToEpisodicAge AND targeted_access_count >= SurfaceToEpisodicMin. AUTO.
+//   - episodic → semantic: age >= EpisodicToSemanticAge AND targeted_access_count >= EpisodicToSemanticMin. NON-AUTO.
 //   - semantic → character: referenced_by_count >= SemanticToCharacterRefs OR lifecycle_status == canonical. NON-AUTO.
 //   - character → semantic: last access >= CharacterDemotionAge ago. NON-AUTO (demotion).
 //   - otherwise: nil.
@@ -199,7 +199,11 @@ func Decide(m *Memory, policy SedimentPolicy) *SedimentTransition {
 		if age < policy.SurfaceToEpisodicAge {
 			return nil
 		}
-		if m.AccessCount < policy.SurfaceToEpisodicMin {
+		// T113: the gate reads TargetedAccessCount, not AccessCount. The
+		// latter counts appearances in any result set, sweeps included, and on
+		// the live bank 4046 of 4556 entries cleared the episodic threshold on
+		// it — a criterion that admits 89% of the bank is not a criterion.
+		if m.TargetedAccessCount < policy.SurfaceToEpisodicMin {
 			return nil
 		}
 		return &SedimentTransition{
@@ -216,7 +220,7 @@ func Decide(m *Memory, policy SedimentPolicy) *SedimentTransition {
 		if age < policy.EpisodicToSemanticAge {
 			return nil
 		}
-		if m.AccessCount < policy.EpisodicToSemanticMin {
+		if m.TargetedAccessCount < policy.EpisodicToSemanticMin {
 			return nil
 		}
 		return &SedimentTransition{
@@ -256,6 +260,13 @@ func Decide(m *Memory, policy SedimentPolicy) *SedimentTransition {
 		// Demotion only when the memory has *accessed_at* older than the
 		// threshold. A never-accessed character entry retains AccessedAt from
 		// CreatedAt (Store sets all three to Now()), so this is well-defined.
+		//
+		// T113 boundary, recorded rather than fixed: accessed_at carries the
+		// same conflation the counter did — a sweep refreshes it, so on a bank
+		// that gets swept this branch effectively never fires. Fixing it needs
+		// a second timestamp column, which nothing else would read; the rule is
+		// NON-AUTO (it only proposes), so a rule that proposes nothing costs
+		// nothing until someone wants character decay to actually work.
 		if m.AccessedAt.IsZero() {
 			return nil
 		}

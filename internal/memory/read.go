@@ -332,8 +332,13 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 	}
 
+	// T113: `limit > 0` is the whole distinction. A bounded recall returns the
+	// top N of a question and those N did answer it; a sweep (limit <= 0, the
+	// shape RecallCanonical passes) returns everything above minScore and
+	// proves nothing about any single entry. Both are recorded; only the first
+	// moves the counter the sediment gate reads.
 	select {
-	case ms.accessCh <- ids:
+	case ms.accessCh <- accessEvent{ids: ids, targeted: limit > 0}:
 	default:
 		ms.logger.Debug("Access stats channel full, dropping update")
 	}
@@ -445,8 +450,19 @@ func (ms *Store) textMatchScore(query string, m *cachedMemory) float64 {
 	return score
 }
 
+// accessEvent is one batch of retrieved IDs plus the kind of retrieval that
+// produced them. T113: the two kinds are accounted separately — see
+// Memory.TargetedAccessCount — so the flag has to survive the trip through
+// the channel rather than being decided at flush time.
+type accessEvent struct {
+	ids      []string
+	targeted bool
+}
+
 // accessStatsWorker drains accessCh and flushes batched access stats updates.
 // Batches are flushed when 100 IDs accumulate or after 5 seconds of inactivity.
+// Targeted and sweep accesses are batched apart: merging them would force the
+// flush to pick one meaning for the whole batch.
 func (ms *Store) accessStatsWorker() {
 	defer ms.accessWG.Done()
 
@@ -454,11 +470,15 @@ func (ms *Store) accessStatsWorker() {
 		maxBatch     = 100
 		flushTimeout = 5 * time.Second
 	)
-	batch := make(map[string]struct{}, maxBatch)
+	batches := map[bool]map[string]struct{}{
+		true:  make(map[string]struct{}, maxBatch),
+		false: make(map[string]struct{}, maxBatch),
+	}
 	timer := time.NewTimer(flushTimeout)
 	defer timer.Stop()
 
-	flush := func() {
+	flushOne := func(targeted bool) {
+		batch := batches[targeted]
 		if len(batch) == 0 {
 			return
 		}
@@ -467,21 +487,26 @@ func (ms *Store) accessStatsWorker() {
 			ids = append(ids, id)
 		}
 		clear(batch)
-		ms.flushAccessStats(ids)
+		ms.flushAccessStats(ids, targeted)
+	}
+	flush := func() {
+		flushOne(true)
+		flushOne(false)
 	}
 
 	for {
 		select {
-		case ids, ok := <-ms.accessCh:
+		case ev, ok := <-ms.accessCh:
 			if !ok {
 				flush()
 				return
 			}
-			for _, id := range ids {
+			batch := batches[ev.targeted]
+			for _, id := range ev.ids {
 				batch[id] = struct{}{}
 			}
 			if len(batch) >= maxBatch {
-				flush()
+				flushOne(ev.targeted)
 				timer.Reset(flushTimeout)
 			}
 		case <-timer.C:
@@ -495,7 +520,7 @@ func (ms *Store) accessStatsWorker() {
 // Round 3 M3: all per-id UPDATEs run inside a single transaction so the
 // WAL fsync count is one per batch instead of one per id (was N fsyncs
 // per Recall under bursty traffic).
-func (ms *Store) flushAccessStats(ids []string) {
+func (ms *Store) flushAccessStats(ids []string, targeted bool) {
 	if len(ids) == 0 {
 		return
 	}
@@ -512,7 +537,12 @@ func (ms *Store) flushAccessStats(ids []string) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`UPDATE memories SET accessed_at = ?, access_count = access_count + 1 WHERE id = ?`)
+	update := `UPDATE memories SET accessed_at = ?, access_count = access_count + 1 WHERE id = ?`
+	if targeted {
+		update = `UPDATE memories SET accessed_at = ?, access_count = access_count + 1,
+			targeted_access_count = targeted_access_count + 1 WHERE id = ?`
+	}
+	stmt, err := tx.Prepare(update)
 	if err != nil {
 		ms.logger.Warn("Failed to prepare access stats stmt", zap.Error(err))
 		return
@@ -546,6 +576,9 @@ func (ms *Store) flushAccessStats(ids []string) {
 			updated := m.cloneForUpdate()
 			updated.AccessedAt = now
 			updated.AccessCount++
+			if targeted {
+				updated.TargetedAccessCount++
+			}
 			ms.cacheSetLocked(updated)
 		}
 	}
@@ -557,7 +590,7 @@ func (ms *Store) flushAccessStats(ids []string) {
 // shorter subset that omitted replaces/observed_at — those gaps are
 // preserved there for now to avoid widening the cachedMemory shape.
 const memoryColumns = `id, content, type, title, tags, context, importance, metadata, embedding_model,
-		embedding, created_at, updated_at, accessed_at, access_count,
+		embedding, created_at, updated_at, accessed_at, access_count, targeted_access_count,
 		valid_from, valid_until, superseded_by, replaces, observed_at, sediment_layer`
 
 // rowScanner abstracts *sql.Row and *sql.Rows so scanMemoryRow can serve
@@ -603,7 +636,7 @@ func scanMemoryRowCounting(scanner rowScanner, softErrors *int) (*Memory, error)
 	if err := scanner.Scan(
 		&m.ID, &m.Content, &m.Type, &m.Title, &tagsJSON, &m.Context,
 		&m.Importance, &metadataJSON, &embeddingModel, &embeddingBlob,
-		&createdAt, &updatedAt, &accessedAt, &m.AccessCount,
+		&createdAt, &updatedAt, &accessedAt, &m.AccessCount, &m.TargetedAccessCount,
 		&validFrom, &validUntil, &supersededBy, &replaces, &observedAt, &sedimentLayer,
 	); err != nil {
 		return nil, err

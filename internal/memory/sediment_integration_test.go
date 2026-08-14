@@ -281,8 +281,8 @@ func TestRunSedimentCycle_AutoAppliesSurfaceAging(t *testing.T) {
 	// Force CreatedAt backwards and lift AccessCount in SQLite.
 	oldTime := time.Now().Add(-10 * 24 * time.Hour)
 	if _, err := store.db.Exec(
-		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
-		oldTime, 5, m.ID,
+		`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id = ?`,
+		oldTime, 5, 5, m.ID,
 	); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
@@ -320,8 +320,8 @@ func TestRunSedimentCycle_DryRunNoMutation(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 	oldTime := time.Now().Add(-10 * 24 * time.Hour)
-	if _, err := store.db.Exec(`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
-		oldTime, 5, m.ID); err != nil {
+	if _, err := store.db.Exec(`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id = ?`,
+		oldTime, 5, 5, m.ID); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 	if err := store.loadMemoriesToCache(); err != nil {
@@ -359,8 +359,8 @@ func TestRunSedimentCycle_Idempotent(t *testing.T) {
 		t.Fatalf("Store: %v", err)
 	}
 	oldTime := time.Now().Add(-10 * 24 * time.Hour)
-	if _, err := store.db.Exec(`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
-		oldTime, 5, m.ID); err != nil {
+	if _, err := store.db.Exec(`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id = ?`,
+		oldTime, 5, 5, m.ID); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 	if err := store.loadMemoriesToCache(); err != nil {
@@ -587,8 +587,8 @@ func TestRunSedimentCycle_SinceDays_FiltersYoungMemories(t *testing.T) {
 	}
 	youngCreated := time.Now().Add(-3 * 24 * time.Hour)
 	if _, err := store.db.Exec(
-		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
-		youngCreated, 1, young.ID,
+		`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id = ?`,
+		youngCreated, 1, 1, young.ID,
 	); err != nil {
 		t.Fatalf("backdate young: %v", err)
 	}
@@ -600,8 +600,8 @@ func TestRunSedimentCycle_SinceDays_FiltersYoungMemories(t *testing.T) {
 	}
 	oldCreated := time.Now().Add(-8 * 24 * time.Hour)
 	if _, err := store.db.Exec(
-		`UPDATE memories SET created_at = ?, access_count = ? WHERE id = ?`,
-		oldCreated, 1, old.ID,
+		`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id = ?`,
+		oldCreated, 1, 1, old.ID,
 	); err != nil {
 		t.Fatalf("backdate old: %v", err)
 	}
@@ -657,8 +657,8 @@ func TestRunSedimentCycle_SinceDaysZero_ProcessesAll(t *testing.T) {
 	}
 	oldTime := time.Now().Add(-10 * 24 * time.Hour)
 	if _, err := store.db.Exec(
-		`UPDATE memories SET created_at = ?, access_count = ? WHERE id IN (?, ?)`,
-		oldTime, 1, m1.ID, m2.ID,
+		`UPDATE memories SET created_at = ?, access_count = ?, targeted_access_count = ? WHERE id IN (?, ?)`,
+		oldTime, 1, 1, m1.ID, m2.ID,
 	); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
