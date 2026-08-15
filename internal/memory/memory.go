@@ -175,6 +175,10 @@ type Store struct {
 	mu       sync.RWMutex     // protects in-memory cache (memories, contextIndex)
 	accessCh chan accessEvent // batched access stats updates
 	accessWG sync.WaitGroup
+	// watcher converges the cache on writes made by other processes (T116).
+	// nil in the CLI, where a process re-reads the file on every invocation.
+	watchMu sync.Mutex
+	watcher *foreignWriteWatcher
 	// In-memory cache for fast search (minimal fields)
 	memories     map[string]*cachedMemory
 	contextIndex map[string]map[string]*cachedMemory // context → id → *cachedMemory

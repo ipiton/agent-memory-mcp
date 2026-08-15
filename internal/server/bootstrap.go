@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -119,6 +120,18 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 			zap.String("memory_db_path", cfg.Memory.DBPath),
 		)
 	}
+	// T116: the CLI and every session hook write to this same file with their
+	// own Store, and the daemon serves everything but Get from a cache nothing
+	// invalidated — so those records stayed invisible until a restart. The
+	// daemon watches the file and converges. Failure here is not fatal: the
+	// service works exactly as it did before, just without convergence.
+	if err := memoryStore.WatchForeignWrites(context.Background()); err != nil {
+		if fileLogger != nil {
+			fileLogger.Warn("Foreign-write watch unavailable; records written by the CLI will stay invisible until restart",
+				zap.Error(err))
+		}
+	}
+
 	// T48: propagate the sediment feature flag into the store so
 	// Recall knows whether to apply layer-aware scoring.
 	memoryStore.SetSedimentEnabled(cfg.Sediment.Enabled)
