@@ -1014,6 +1014,7 @@ func (ms *Store) ReloadCache() error {
 // Order matters: drain in-flight triple-extraction goroutines first so they
 // don't write to a closed DB. Then stop the access-stats worker.
 func (ms *Store) Close() error {
+	ms.stopWatching()
 	ms.extractionWG.Wait()
 	close(ms.accessCh)
 	ms.accessWG.Wait()
