@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank eval-corpus eval-real eval-recall
+.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
 
 build:
 	go build -o bin/$(BINARY_NAME) ./cmd/agent-memory-mcp
@@ -57,9 +57,27 @@ eval-corpus:
 	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run TestGenerateEvalCorpus
 
 eval-real:
-	MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) \
+	set -a; [ -f $(EVAL_SERVICE_CONFIG) ] && . $(EVAL_SERVICE_CONFIG); set +a; \
+	MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) MCP_EVAL_CORPUS_NAME=$${MCP_EVAL_CORPUS_NAME:-corpus} \
 	LLAMACPP_BASE_URL=$${LLAMACPP_BASE_URL:-http://127.0.0.1:8090/v1} \
 	go test -tags=eval ./internal/rag/eval/ -count=1 -v -timeout 30m -run TestRetrievalEvalGenerated
+
+# T102: the permutation arm. Builds a copy of the corpus with heading texts
+# shuffled corpus-wide (levels untouched) and runs the same QA set against it,
+# so the two runs differ in exactly one thing: whether a section's label says
+# anything about the content under it.
+eval-permute:
+	MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) \
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run TestPermuteEvalCorpusHeadings
+	$(MAKE) eval-real MCP_EVAL_CORPUS_NAME=corpus-permuted
+
+# T102, discriminating arm: headings demoted to bold text. The words stay put,
+# the section tree does not, so baseline minus this run is what the structure
+# itself was worth — which the permutation arm cannot tell apart from the words.
+eval-flatten:
+	MCP_EVAL_OUT_DIR=$(EVAL_OUT_DIR) \
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run TestFlattenEvalCorpusHeadings
+	$(MAKE) eval-real MCP_EVAL_CORPUS_NAME=corpus-flat
 
 # The instrument with actual headroom (Hit@5 = 0.62): memory recall, not
 # document search. Runs against a COPY of the bank — never the live file, since

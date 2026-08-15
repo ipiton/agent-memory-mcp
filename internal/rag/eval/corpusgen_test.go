@@ -39,6 +39,7 @@ const (
 	envOutDir      = "MCP_EVAL_OUT_DIR"      // where corpus/ and qa.json land
 	envMaxTasks    = "MCP_EVAL_MAX_TASKS"    // cap on generated queries
 	envQueryMode   = "MCP_EVAL_QUERY_MODE"   // title (default) or summary
+	envCorpusName  = "MCP_EVAL_CORPUS_NAME"  // corpus (default) or corpus-permuted (T102)
 )
 
 // TestGenerateEvalCorpus is a generator, not an assertion: it is skipped
@@ -264,4 +265,178 @@ func copyTaskDocs(srcDir, dstDir, slug string) ([]string, int, error) {
 		copied++
 	}
 	return docs, copied, nil
+}
+
+// TestPermuteEvalCorpusHeadings writes a copy of the generated corpus with the
+// heading *texts* permuted across the whole corpus, levels untouched.
+//
+// T102 asks whether a tree walk with summaries at the nodes could retrieve as
+// well as the vector index. The donor (SegTreeMem) settles the analogous
+// question with a permutation: destroy the structure's information and see
+// whether quality moves. Ours is executable before a single LLM call, because
+// the hierarchy is already extracted — every chunk carries a
+// "[doc > section > subsection]" breadcrumb (T49).
+//
+// Permuting the texts while keeping the levels holds everything else fixed: the
+// same number of headings, the same depth, the same amount of heading-shaped
+// text in the corpus. What it removes is the association between a section's
+// label and the content under it — which is the only thing a descent navigates
+// by. If Hit@5 and MRR do not move, the labels carry no navigational signal on
+// this corpus, and a tree leg has nothing to add that the flat index lacks.
+//
+// A ceiling does not block this test. T119 measured the document arm at
+// Hit@5 0.97–0.99, which prevents detecting an improvement, not a degradation.
+func TestPermuteEvalCorpusHeadings(t *testing.T) {
+	outDir := os.Getenv(envOutDir)
+	if outDir == "" {
+		t.Skipf("set %s (see `make eval-corpus`) to build the permuted variant", envOutDir)
+	}
+	src := filepath.Join(outDir, "corpus")
+	dst := filepath.Join(outDir, "corpus-permuted")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("no corpus at %s — run `make eval-corpus` first (%v)", src, err)
+	}
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatalf("clear %s: %v", dst, err)
+	}
+
+	type headingRef struct {
+		file  string
+		line  int
+		level string
+	}
+	var refs []headingRef
+	var texts []string
+	bodies := map[string][]string{}
+
+	headingRe := regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	walkErr := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".md") {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		lines := strings.Split(string(raw), "\n")
+		bodies[path] = lines
+		for i, line := range lines {
+			if m := headingRe.FindStringSubmatch(line); m != nil && strings.TrimSpace(m[2]) != "" {
+				refs = append(refs, headingRef{file: path, line: i, level: m[1]})
+				texts = append(texts, strings.TrimSpace(m[2]))
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walk corpus: %v", walkErr)
+	}
+	if len(refs) < 2 {
+		t.Fatalf("corpus has %d headings — nothing to permute", len(refs))
+	}
+
+	// Deterministic derangement-ish shuffle: a fixed seed keeps the two arms
+	// comparable across runs, and rotating by a stride coprime with the length
+	// guarantees no heading keeps its own text.
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].file != refs[j].file {
+			return refs[i].file < refs[j].file
+		}
+		return refs[i].line < refs[j].line
+	})
+	sorted := append([]string(nil), texts...)
+	sort.Strings(sorted)
+	stride := len(sorted)/2 + 1
+	for gcd(stride, len(sorted)) != 1 {
+		stride++
+	}
+	for i, ref := range refs {
+		lines := bodies[ref.file]
+		lines[ref.line] = ref.level + " " + sorted[(i*stride)%len(sorted)]
+	}
+
+	written := 0
+	for path, lines := range bodies {
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			t.Fatalf("rel %s: %v", path, relErr)
+		}
+		target := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(target), err)
+		}
+		if err := os.WriteFile(target, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatalf("write %s: %v", target, err)
+		}
+		written++
+	}
+	t.Logf("permuted corpus: %d documents, %d headings relabelled -> %s", written, len(refs), dst)
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// TestFlattenEvalCorpusHeadings writes a copy of the corpus with every heading
+// demoted to bold text: "## Гейт промоушена" becomes "**Гейт промоушена**".
+//
+// T102, discriminating arm. The permutation arm above moves heading *text*
+// around, and a heading is two things at once — the structural label a descent
+// would navigate by, and ordinary content whose words match a query. Its drop
+// therefore cannot say which of the two carried the loss.
+//
+// Flattening separates them: the words stay exactly where they were, in the
+// same document, in the same position, so lexical and semantic matching is
+// untouched. What disappears is the section tree — the markdown parser sees no
+// headings, so no chunk gets a meaningful breadcrumb. Baseline minus this arm
+// is the structure's own contribution.
+func TestFlattenEvalCorpusHeadings(t *testing.T) {
+	outDir := os.Getenv(envOutDir)
+	if outDir == "" {
+		t.Skipf("set %s (see `make eval-corpus`) to build the flattened variant", envOutDir)
+	}
+	src := filepath.Join(outDir, "corpus")
+	dst := filepath.Join(outDir, "corpus-flat")
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("no corpus at %s — run `make eval-corpus` first (%v)", src, err)
+	}
+	if err := os.RemoveAll(dst); err != nil {
+		t.Fatalf("clear %s: %v", dst, err)
+	}
+
+	headingRe := regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	docs, flattened := 0, 0
+	walkErr := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".md") {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		lines := strings.Split(string(raw), "\n")
+		for i, line := range lines {
+			if m := headingRe.FindStringSubmatch(line); m != nil && strings.TrimSpace(m[2]) != "" {
+				lines[i] = "**" + strings.TrimSpace(m[2]) + "**"
+				flattened++
+			}
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		target := filepath.Join(dst, rel)
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
+			return mkErr
+		}
+		docs++
+		return os.WriteFile(target, []byte(strings.Join(lines, "\n")), 0o644)
+	})
+	if walkErr != nil {
+		t.Fatalf("walk corpus: %v", walkErr)
+	}
+	t.Logf("flattened corpus: %d documents, %d headings demoted to bold text -> %s", docs, flattened, dst)
 }
