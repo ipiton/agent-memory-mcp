@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-08-15
+
+Three things the cache, the write boundary and the tool surface were each
+getting wrong, plus the eval harness learning to measure this system rather
+than a neighbouring one.
+
+### Added
+
+- **`update_memory` accepts metadata, and an empty value removes a key (T96)** — the tool took no metadata at all, so a key could not be set or unset through any surface, and a direct SQL write is unsafe while the daemon holds its cache. The store has supported removal all along (`updateLocked` deletes on an empty value); what was missing was the edge. ⚠️ The same trap sits on the way to it twice — `NormalizeMetadata` drops empty values and so does the shared `getStringMap` — so the patch is read by a helper that keeps them, and treats JSON `null` as a removal too.
+
+  This unblocks stripping `last_verified_at` from canonical records that got the stamp from their own promotion. Measured while checking it: the condition the task stated (`owner=archive-sweep`) matches nothing, because `owner` records who owns a memory rather than who promoted it. The real signature is `last_verified_at` equal to `canonical_promoted_at` with no `verified_by`, and 10 records carry it.
+
+### Fixed
+
+- **The daemon now sees records written by other processes (T116)** — everything but `Get` is answered from an in-memory cache, and nothing ever invalidated it. The CLI — `checkpoint`, `auto-capture`, `close-session`, and every SessionStart/SessionEnd/PreCompact hook — opens the same file with its own store rather than talking to the daemon, so a record written that way was durable, confirmed, and invisible to recall, to list, and to every steward scan, sediment cycle and archive sweep until someone restarted the service. Measured live: the daemon reported 4562 records against the file's 4564, and the two it could not see were a PreCompact checkpoint written 40 minutes earlier.
+
+  The model is "the file is the source of truth, the cache is a derived view that has to converge". It fits one long-lived daemon plus a stream of short-lived CLI processes, and it keeps the CLI working when the daemon is down — which routing every CLI write through the daemon's HTTP endpoint does not, without a fallback that reintroduces the same problem.
+
+  🔴 Detection is `PRAGMA data_version` on a connection the watcher holds open. The pinned connection is not an optimisation: `data_version` is per connection and `database/sql` hands out whatever is free in the pool, so reading it through `*sql.DB` compares numbers from different connections and means nothing. Costs measured rather than assumed: the check is one pragma; the reload it can trigger is 83ms for 4574 records with embeddings; the 2s ticker bounds it to one reload per interval however many writes land.
+
+  ⚠️ Not fixed: the lost update. `updateMemoryRow` writes the whole row from an in-memory struct, so a CLI process that read a record before the daemon changed it still overwrites that change. Convergence makes the window visible; closing it needs a single writer.
+
+- **Session activity lines point at a record instead of copying it (T123)** — `- Stored memory: …` carried the first 220 characters of the record's content, so every such bullet was a lossy copy of a record sitting in the bank in full, and the copy competes with its own original: the same vocabulary in less text scores denser. Measured after the encoder migration — 1020 copy/original pairs; querying with the copied text put the copy above the original in 2 of a 60-pair sample and displaced it entirely in another 4. The title is a pointer and cannot duplicate the record, and 1018 of the 1020 originals have one, so it goes first.
+
+  The 1020 already in the bank stay. Detecting them needs a cross-record prefix comparison at cache load, which is not proportionate at 10% measured harm — and unlike the T122 journals, a copy can be the only surviving trace when its original was merged away.
+
+### Changed
+
+- **The recall eval harness assembles the deployed configuration instead of copying it** — the first run after the Granite migration reported Hit@5 0.0232, which read as a catastrophic regression and was a broken instrument. Two copied defaults had gone stale: the scoring knobs were literals under a comment claiming they followed config, and the encoder label was a literal that no longer matched any record in the bank. `Recall` compares the model id before the vectors and falls back to text matching on a mismatch, so the run completed, printed a number, and the number described text matching. The harness now loads `config.LoadFromEnv`, `make eval-recall` sources the service's config, and `assertEncoderMatchesBank` fails with both ids rather than printing a number about a different system. With the deployed configuration the same run gives **Hit@5 0.9130, MRR 0.7847** over 345 queries.
+- **New eval arms `make eval-permute` and `make eval-flatten`** — built to settle T102 and kept because they measure what document structure is worth. Permuting heading texts corpus-wide moved Hit@5 0.9600 → 0.8320 and MRR 0.9580 → 0.5559; demoting headings to bold text, which removes the section tree and leaves every word in place, moved them to 0.9600 / 0.9493. The tree is worth 0.0000 and 0.0087 against a 0.05 discrimination threshold, so the permutation arm's collapse was the words moving, not the structure vanishing.
+
 ## [0.12.1] - 2026-08-14
 
 ### Fixed
