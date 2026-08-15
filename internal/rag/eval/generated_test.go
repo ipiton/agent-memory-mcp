@@ -30,8 +30,15 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 		t.Fatalf("no QA set at %s — run `make eval-corpus` first (%v)", qaPath, err)
 	}
 
+	// T102: the permuted-headings arm lives in a sibling directory, so the two
+	// runs differ in exactly one thing and share the encoder, the QA set and the
+	// pipeline.
+	corpusName := os.Getenv(envCorpusName)
+	if corpusName == "" {
+		corpusName = "corpus"
+	}
 	cfg := eval.HarnessConfig{
-		CorpusDir: filepath.Join(outDir, "corpus"),
+		CorpusDir: filepath.Join(outDir, corpusName),
 		QAPath:    qaPath,
 		K:         5,
 	}
@@ -48,7 +55,7 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 		t.Fatalf("run all: %v", err)
 	}
 
-	t.Logf("HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
+	t.Logf("corpus=%s HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", corpusName, cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
 	misses := 0
 	for _, r := range results {
 		if !r.Hit {
