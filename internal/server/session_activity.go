@@ -28,7 +28,8 @@ func buildActivityLine(name string, args map[string]any) string {
 	case "store_memory":
 		return buildGenericMemoryActivity(args)
 	case "update_memory":
-		return prefixedActivity("Updated knowledge", firstNonEmpty(trimArg(args, "content"), trimArg(args, "title"), trimArg(args, "id")))
+		// T123: title first — see buildGenericMemoryActivity.
+		return prefixedActivity("Updated knowledge", firstNonEmpty(trimArg(args, "title"), trimArg(args, "id"), trimArg(args, "content")))
 	case "merge_duplicates":
 		return prefixedActivity("Merged duplicates", firstNonEmpty(trimArg(args, "primary_id"), trimArg(args, "duplicate_ids")))
 	case "mark_outdated":
@@ -58,8 +59,19 @@ func buildActivityLine(name string, args map[string]any) string {
 	}
 }
 
+// buildGenericMemoryActivity renders the "the session stored a record" line.
+//
+// T123: the title comes first, and that ordering is the whole point. Taking the
+// content first made the line a 220-character copy of a record that exists in
+// the bank in full, and the copy competes with its own original — shorter text
+// carrying the same vocabulary scores denser. Measured on the live bank: 1020
+// such pairs, and querying with the copied text put the copy above the original
+// (or displaced it from the top ten entirely) in 6 of a 60-pair sample.
+//
+// A title is a pointer to the same record and cannot duplicate it. 1018 of the
+// 1020 originals have one; content stays as the fallback for the rest.
 func buildGenericMemoryActivity(args map[string]any) string {
-	content := firstNonEmpty(trimArg(args, "content"), trimArg(args, "title"))
+	content := firstNonEmpty(trimArg(args, "title"), trimArg(args, "content"))
 	if content == "" {
 		return ""
 	}
