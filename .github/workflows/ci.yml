@@ -44,11 +44,15 @@ jobs:
       # deprecations instead: the known one passes, a new one fails. Without
       # this the next deprecation is found the way this one was — by accident,
       # while preparing an unrelated task.
-      - name: Release config deprecations
+      #
+      # The action only installs the binary. The script runs `check` itself and
+      # decides the verdict, so running it here too would both duplicate the
+      # call and leave a permanent red annotation on a step whose failure is
+      # expected — which is exactly the noise this gate exists to cut through.
+      - name: Install goreleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
-          args: check
-        continue-on-error: true
+          install-only: true
       - name: Fail on an unexpected release-config deprecation
         run: ./scripts/check-goreleaser-deprecations.sh
