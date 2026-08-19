@@ -80,7 +80,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to load keyword candidates: %w", err)
 	}
 
-	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug)
+	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug, newFusionSettings(vs.config.Fusion, vs.config.RRFK))
 
 	// Neural reranker pass — strictly opt-in. Any error or timeout falls back
 	// to hybrid ordering without bubbling an error to the caller, unless strict

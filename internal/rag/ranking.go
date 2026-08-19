@@ -25,9 +25,13 @@ type hybridCandidate struct {
 	sourceType    string
 	semanticScore float64
 	keywordScore  float64
-	recencyScore  float64
-	sourceBoost   float64
-	trust         *trust.Metadata
+	// 1-based position within the arm that produced the candidate, 0 when
+	// that arm did not return it. Only read by the RRF fusion modes.
+	semanticRank int
+	keywordRank  int
+	recencyScore float64
+	sourceBoost  float64
+	trust        *trust.Metadata
 }
 
 func normalizeSourceType(value string) string {
@@ -195,6 +199,56 @@ func confidenceBoost(confidence float64) float64 {
 	return math.Max(0, (confidence-0.50)*0.05)
 }
 
+// fusionSettings selects how the two retrieval arms are merged. T124: the
+// default blends raw scores, which are not on comparable scales -- the
+// semantic term is a raw cosine (T76a measured its median at 0.555 between
+// unrelated pairs on this corpus, so the scale carries little information),
+// and the keyword term is normalised against the best hit in the current
+// result set, so its magnitude depends on what else was found. RRF sidesteps
+// both by summing 1/(k+rank) instead of the scores themselves.
+type fusionSettings struct {
+	mode string
+	k    int
+}
+
+func newFusionSettings(mode string, k int) fusionSettings {
+	if k <= 0 {
+		k = 60
+	}
+	return fusionSettings{mode: mode, k: k}
+}
+
+func (f fusionSettings) usesRanks() bool {
+	return f.mode == "rrf" || f.mode == "rrf-boosted"
+}
+
+// score merges one candidate's signals into its final ranking score.
+//
+// In the RRF modes the boosts are expressed in RRF units rather than their own:
+// a full set of them is worth about ten rank positions, which keeps them a
+// tie-breaker instead of something that can outrank the retrieval itself.
+func (f fusionSettings) score(c hybridCandidate, keywordComponent, confidenceComponent float64) float64 {
+	if !f.usesRanks() {
+		score := c.semanticScore*0.60 + keywordComponent*0.30 + c.recencyScore + c.sourceBoost + confidenceComponent
+		if keywordComponent > 0 && c.semanticScore < 0.1 {
+			score += 0.05
+		}
+		return score
+	}
+
+	score := 0.0
+	if c.semanticRank > 0 {
+		score += 1 / float64(f.k+c.semanticRank)
+	}
+	if c.keywordRank > 0 {
+		score += 1 / float64(f.k+c.keywordRank)
+	}
+	if f.mode == "rrf-boosted" {
+		score += (c.recencyScore + c.sourceBoost + confidenceComponent) / float64(f.k+1)
+	}
+	return score
+}
+
 // buildHybridSearchResults fuses semantic+keyword candidates into ordered
 // SearchResult rows and returns a parallel slice of full chunk content keyed
 // by index. The parallel content slice is consumed by the neural reranker
@@ -203,7 +257,7 @@ func confidenceBoost(confidence float64) float64 {
 //
 // The content slice always has the same length and ordering as the returned
 // []SearchResult, so content[i] is the full text for results[i].
-func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool) ([]SearchResult, []string, *SearchDebug) {
+func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool, fusion fusionSettings) ([]SearchResult, []string, *SearchDebug) {
 	now := time.Now()
 	normalizedFilter := normalizeSourceType(sourceTypeFilter)
 
@@ -212,7 +266,7 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 	discardedAsNoise := 0
 	maxKeywordScore := 0.0
 
-	for _, result := range semanticResults {
+	for i, result := range semanticResults {
 		candidate := candidateMap[result.ID]
 		if candidate == nil {
 			candidate = &hybridCandidate{
@@ -224,9 +278,12 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		if result.Score > candidate.semanticScore {
 			candidate.semanticScore = result.Score
 		}
+		if candidate.semanticRank == 0 {
+			candidate.semanticRank = i + 1
+		}
 	}
 
-	for _, result := range keywordResults {
+	for i, result := range keywordResults {
 		candidate := candidateMap[result.ID]
 		if candidate == nil {
 			candidate = &hybridCandidate{
@@ -240,6 +297,9 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		}
 		if result.Score > maxKeywordScore {
 			maxKeywordScore = result.Score
+		}
+		if candidate.keywordRank == 0 {
+			candidate.keywordRank = i + 1
 		}
 	}
 
@@ -275,10 +335,7 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		}
 
 		confidenceComponent := confidenceBoost(candidate.trust.Confidence)
-		score := candidate.semanticScore*0.60 + keywordComponent*0.30 + candidate.recencyScore + candidate.sourceBoost + confidenceComponent
-		if keywordComponent > 0 && candidate.semanticScore < 0.1 {
-			score += 0.05
-		}
+		score := fusion.score(candidate, keywordComponent, confidenceComponent)
 
 		fullContent := candidate.chunk.Content
 		snippet := fullContent

@@ -35,6 +35,12 @@ type HarnessConfig struct {
 	// plumbing goes through config.Config and does not touch this field.
 	Reranker reranker.Reranker
 
+	// Fusion / RRFK select the ranking arm under test (T124). Empty Fusion
+	// keeps the production default, so an eval run that says nothing about
+	// fusion measures what a deployment does.
+	Fusion string
+	RRFK   int
+
 	// Embeddings, when non-nil, replaces the deterministic fixture encoder
 	// with a real provider. T119: the fixture is a hash of ASCII tokens — it
 	// carries no semantics at all, and on a Russian corpus it produces no
@@ -117,6 +123,8 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 			ChunkOverlap: 200,
 			AutoIndex:    false,
 			FileWatcher:  false,
+			Fusion:       config.NormalizeFusion(cfg.Fusion),
+			RRFK:         cfg.RRFK,
 		},
 		Embeddings: embeddings,
 	}
