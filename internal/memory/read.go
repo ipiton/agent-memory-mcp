@@ -1012,10 +1012,15 @@ func (ms *Store) ReloadCache() error {
 }
 
 // Close shuts down all background workers and closes the database connection.
-// Order matters: drain in-flight triple-extraction goroutines first so they
-// don't write to a closed DB. Then stop the access-stats worker.
+// Order matters: cancel the startup re-embed first — it is the one worker whose
+// natural runtime scales with the size of the bank, and accessWG below waits on
+// it. Then drain in-flight triple-extraction goroutines so they don't write to a
+// closed DB, and stop the access-stats worker.
 func (ms *Store) Close() error {
 	ms.stopWatching()
+	if ms.reembedCancel != nil {
+		ms.reembedCancel()
+	}
 	ms.extractionWG.Wait()
 	close(ms.accessCh)
 	ms.accessWG.Wait()

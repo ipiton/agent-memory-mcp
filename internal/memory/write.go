@@ -765,20 +765,44 @@ type ReembedResult struct {
 }
 
 // ReembedAll regenerates embeddings with the currently available embedding model.
+//
+// The model is probed once up front so rows that already carry it are skipped
+// without an embedder round-trip. Previously the loop embedded every row and
+// compared model IDs only afterwards: a bank of a few thousand memories with a
+// single stale row cost thousands of pointless calls, and the startup re-embed
+// that Close waits on outlived the hook that had triggered it.
+//
+// ctx is honoured between rows, so a cancelled context stops the walk instead
+// of running it to the end of the bank.
 func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 	if ms.embedder == nil {
 		return nil, fmt.Errorf("embedder not available")
+	}
+
+	probe, err := ms.embedder.EmbedDetailed(ctx, "model probe")
+	if err != nil {
+		return nil, fmt.Errorf("probe embedding model: %w", err)
 	}
 
 	snapshot := ms.snapshotReadonlyMemories()
 
 	result := &ReembedResult{
 		Total:              len(snapshot),
+		CurrentModel:       probe.ModelID,
 		ChangedFromByModel: make(map[string]int),
 		FailedByID:         make(map[string]string),
 	}
 
 	for _, m := range snapshot {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+
+		if m.EmbeddingModel == probe.ModelID && len(m.Embedding) > 0 {
+			result.AlreadyCurrent++
+			continue
+		}
+
 		// We need content for re-embedding
 		full, err := ms.Get(m.ID)
 		if err != nil {
@@ -794,15 +818,8 @@ func (ms *Store) ReembedAll(ctx context.Context) (*ReembedResult, error) {
 			continue
 		}
 
-		if result.CurrentModel == "" {
-			result.CurrentModel = embedResult.ModelID
-		} else if embedResult.ModelID != result.CurrentModel {
+		if embedResult.ModelID != result.CurrentModel {
 			return nil, fmt.Errorf("embedding model changed during re-embed: started with %s, then got %s", result.CurrentModel, embedResult.ModelID)
-		}
-
-		if m.EmbeddingModel == embedResult.ModelID && len(m.Embedding) > 0 {
-			result.AlreadyCurrent++
-			continue
 		}
 
 		if err := ms.updateStoredEmbedding(m.ID, embedResult.Embedding, embedResult.ModelID); err != nil {
