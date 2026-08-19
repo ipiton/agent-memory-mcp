@@ -37,10 +37,22 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 	if corpusName == "" {
 		corpusName = "corpus"
 	}
+	// T124: the fusion arm under test. Env-driven for the same reason the
+	// encoder is — which arm ran is a property of the run, and the three of
+	// them have to differ in exactly this one thing.
+	fusion := config.NormalizeFusion(os.Getenv("MCP_RAG_FUSION"))
+	rrfK := 60
+	if raw := os.Getenv("MCP_RAG_RRF_K"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			rrfK = parsed
+		}
+	}
 	cfg := eval.HarnessConfig{
 		CorpusDir: filepath.Join(outDir, corpusName),
 		QAPath:    qaPath,
 		K:         5,
+		Fusion:    fusion,
+		RRFK:      rrfK,
 	}
 	if emb := liveEmbeddings(); emb != nil {
 		cfg.Embeddings = emb
@@ -55,7 +67,7 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 		t.Fatalf("run all: %v", err)
 	}
 
-	t.Logf("corpus=%s HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", corpusName, cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
+	t.Logf("corpus=%s fusion=%s k=%d HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", corpusName, fusion, rrfK, cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
 	misses := 0
 	for _, r := range results {
 		if !r.Hit {

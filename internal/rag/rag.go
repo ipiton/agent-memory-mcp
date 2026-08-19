@@ -162,6 +162,10 @@ type vecServiceConfig struct {
 	// Strict makes every fallback on this path an error instead. See
 	// config.Config.RetrievalStrict (T99).
 	Strict bool
+	// Fusion / RRFK select how the semantic and keyword arms are merged.
+	// See config.RAGConfig.Fusion (T124).
+	Fusion string
+	RRFK   int
 }
 
 type document struct {
@@ -285,6 +289,8 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		RerankTimeout: cfg.Rerank.Timeout,
 		RerankerName:  cfg.Rerank.Provider,
 		Strict:        cfg.RetrievalStrict,
+		Fusion:        cfg.RAG.Fusion,
+		RRFK:          cfg.RAG.RRFK,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {

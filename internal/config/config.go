@@ -118,6 +118,14 @@ type RAGConfig struct {
 	FileWatcher       bool     // Watch for file changes (default: true)
 	WatchInterval     time.Duration
 	DebounceDuration  time.Duration
+	// Fusion selects how the semantic and keyword arms are merged (T124):
+	// "weighted" (default) blends the two scores, "rrf" fuses their ranks,
+	// "rrf-boosted" fuses ranks and keeps the additive boosts on top.
+	// MCP_RAG_FUSION.
+	Fusion string
+	// RRFK is the RRF damping constant, canonically 60. Only read when
+	// Fusion is an RRF variant. MCP_RAG_RRF_K.
+	RRFK int
 }
 
 // EmbeddingsConfig holds embedding provider + transport settings.
@@ -346,6 +354,8 @@ type envValues struct {
 	chunkSize                        int
 	chunkOverlap                     int
 	ragKeepNoise                     bool
+	ragFusion                        string
+	ragRRFK                          int
 	tripleExtractorEnabled           bool
 	tripleExtractorBaseURL           string
 	tripleExtractorAPIKey            string
@@ -444,6 +454,8 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		chunkSize:                        s.Int("MCP_CHUNK_SIZE", 2000),
 		chunkOverlap:                     s.Int("MCP_CHUNK_OVERLAP", 200),
 		ragKeepNoise:                     s.Bool("MCP_RAG_KEEP_NOISE", false),
+		ragFusion:                        s.String("MCP_RAG_FUSION", "weighted"),
+		ragRRFK:                          s.Int("MCP_RAG_RRF_K", 60),
 		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
 		tripleExtractorBaseURL:           s.String("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
 		tripleExtractorAPIKey:            s.String("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
@@ -608,6 +620,8 @@ func resolvePaths(ev envValues) (Config, error) {
 			FileWatcher:       ev.fileWatcher,
 			WatchInterval:     ev.watchInterval,
 			DebounceDuration:  ev.debounceDuration,
+			Fusion:            NormalizeFusion(ev.ragFusion),
+			RRFK:              ev.ragRRFK,
 		},
 
 		Embeddings: EmbeddingsConfig{
@@ -934,6 +948,19 @@ func normalizeOutputMode(value string) string {
 		return "content-length"
 	default:
 		return ""
+	}
+}
+
+// NormalizeFusion maps MCP_RAG_FUSION onto the three modes the ranker knows,
+// falling back to the blended default the way every other enum here does.
+func NormalizeFusion(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "rrf":
+		return "rrf"
+	case "rrf-boosted", "rrf_boosted", "rrf+boosts":
+		return "rrf-boosted"
+	default:
+		return "weighted"
 	}
 }
 

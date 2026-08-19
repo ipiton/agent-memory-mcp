@@ -570,6 +570,7 @@ func TestBuildHybridSearchResultsIncludesTrustMetadata(t *testing.T) {
 		len(chunks),
 		10,
 		true,
+		newFusionSettings("weighted", 60),
 	)
 
 	if len(results) != 2 {
@@ -709,6 +710,7 @@ func TestBuildHybridSearchResultsKeywordBoostsRunbook(t *testing.T) {
 		len(chunks),
 		10,
 		true,
+		newFusionSettings("weighted", 60),
 	)
 
 	if len(results) != 2 {
@@ -773,6 +775,7 @@ func TestBuildHybridSearchResultsAppliesRecencyBoost(t *testing.T) {
 		len(chunks),
 		10,
 		true,
+		newFusionSettings("weighted", 60),
 	)
 
 	if len(results) != 2 {
@@ -826,6 +829,7 @@ func TestBuildHybridSearchResultsFiltersBySourceType(t *testing.T) {
 		len(chunks),
 		10,
 		true,
+		newFusionSettings("weighted", 60),
 	)
 
 	if len(results) != 1 {
