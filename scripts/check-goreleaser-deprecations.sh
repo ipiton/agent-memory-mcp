@@ -17,12 +17,22 @@ known_deprecations=(
 output="$(goreleaser check 2>&1 || true)"
 echo "$output"
 
+# goreleaser colours its output whenever it thinks a terminal is watching, and
+# on GitHub Actions it does. The escape codes sit between "DEPRECATED:" and the
+# key, so the pattern below matched an empty string and the gate reported
+# "none" on every CI run while `brews` was right there in the log -- a gate
+# that cannot see the deprecation it knows about would not have seen a new one
+# either. NO_COLOR does not override it, so strip the SGR sequences instead.
+# $(printf) rather than \x1b: BSD sed on macOS does not understand the escape.
+esc="$(printf '\033')"
+plain="$(printf '%s\n' "$output" | sed "s/${esc}\[[0-9;]*m//g")"
+
 # No mapfile: macOS still ships bash 3.2 and this must run locally too.
 found=""
 while IFS= read -r item; do
   [ -n "$item" ] && found="$found $item"
 done < <(
-  printf '%s\n' "$output" |
+  printf '%s\n' "$plain" |
     sed -n 's/.*DEPRECATED: *\([a-z_.]*\) .*/\1/p' |
     sort -u
 )
