@@ -3,11 +3,8 @@ package vectorstore
 
 import (
 	"database/sql"
-	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -235,9 +232,13 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 			chunk.LastModified = lastModified.Time
 		}
 
-		embedding, err := decodeEmbedding(embeddingBlob)
+		embedding, err := dbutil.DecodeEmbedding(embeddingBlob)
 		if err != nil {
 			s.logger.Warn("Failed to decode embedding", zap.String("id", chunk.ID), zap.Error(err))
+			continue
+		}
+		if len(embedding) == 0 {
+			s.logger.Warn("Chunk has no embedding", zap.String("id", chunk.ID))
 			continue
 		}
 		chunk.Embedding = embedding
@@ -301,7 +302,7 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 	defer func() { _ = stmt.Close() }()
 
 	for _, chunk := range chunks {
-		embeddingBlob := encodeEmbedding(chunk.Embedding)
+		embeddingBlob := dbutil.EncodeEmbedding(chunk.Embedding)
 
 		_, err = stmt.Exec(
 			chunk.ID, chunk.DocPath, chunk.Content, chunk.Title,
@@ -484,47 +485,6 @@ func (s *SQLiteStore) Count() int {
 // Close closes the underlying SQLite database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
-}
-
-// encodeEmbedding serializes a float32 slice to a compact binary blob (little-endian).
-func encodeEmbedding(embedding []float32) []byte {
-	buf := make([]byte, len(embedding)*4)
-	for i, v := range embedding {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
-	}
-	return buf
-}
-
-// decodeEmbedding deserializes an embedding blob. Tries binary first, falls back to JSON
-// for backwards compatibility with older indexes.
-func decodeEmbedding(blob []byte) ([]float32, error) {
-	if len(blob) > 0 && len(blob)%4 == 0 && !looksLikeJSONArray(blob) {
-		return decodeBinaryEmbedding(blob), nil
-	}
-	var result []float32
-	if err := json.Unmarshal(blob, &result); err != nil {
-		if len(blob) > 0 && len(blob)%4 == 0 {
-			return decodeBinaryEmbedding(blob), nil
-		}
-		return nil, err
-	}
-	return result, nil
-}
-
-// looksLikeJSONArray reports whether the blob is a legacy JSON-encoded embedding.
-// A binary blob starts with '[' once every 256 vectors by chance, so the closing
-// bracket is checked as well.
-func looksLikeJSONArray(blob []byte) bool {
-	return blob[0] == '[' && blob[len(blob)-1] == ']'
-}
-
-func decodeBinaryEmbedding(blob []byte) []float32 {
-	n := len(blob) / 4
-	result := make([]float32, n)
-	for i := range n {
-		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
-	}
-	return result
 }
 
 // CosineSimilarity is a thin alias kept for backwards compatibility.

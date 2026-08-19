@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"flag"
 	"testing"
+
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 )
 
 var corpusDB = flag.String("corpus-db", "", "path to a read-only copy of a memories.db snapshot")
@@ -59,7 +61,7 @@ func TestLoadErrorCorpus(t *testing.T) {
 			}
 		}
 		if len(blob) > 0 {
-			if _, err := unmarshalEmbeddingBinary(blob); err != nil {
+			if _, err := dbutil.DecodeEmbedding(blob); err != nil {
 				embFailed++
 				if embFailed <= 25 {
 					t.Logf("embedding decode failed: %s → %d bytes (%v)", id, len(blob), err)

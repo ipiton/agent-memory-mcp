@@ -715,39 +715,3 @@ func TestStoreInterfaceCompliance(t *testing.T) {
 	// Verify that SQLiteStore implements the Store interface
 	var _ Store = (*SQLiteStore)(nil)
 }
-
-func TestDecodeEmbeddingBinaryStartingWithBracket(t *testing.T) {
-	// One binary vector in 256 starts with 0x5B ('['); it must not be routed
-	// to the legacy JSON decoder.
-	emb := []float32{math.Float32frombits(0x3F80005B), 0.25, -1.5}
-	blob := encodeEmbedding(emb)
-	if blob[0] != '[' {
-		t.Fatalf("setup: want first byte '[', got %#x", blob[0])
-	}
-
-	got, err := decodeEmbedding(blob)
-	if err != nil {
-		t.Fatalf("decodeEmbedding: %v", err)
-	}
-	if len(got) != len(emb) {
-		t.Fatalf("len = %d, want %d", len(got), len(emb))
-	}
-	for i := range emb {
-		if got[i] != emb[i] {
-			t.Errorf("got[%d] = %v, want %v", i, got[i], emb[i])
-		}
-	}
-}
-
-func TestDecodeEmbeddingLegacyJSON(t *testing.T) {
-	got, err := decodeEmbedding([]byte("[0.5,-0.25,1]"))
-	if err != nil {
-		t.Fatalf("decodeEmbedding: %v", err)
-	}
-	want := []float32{0.5, -0.25, 1}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("got[%d] = %v, want %v", i, got[i], want[i])
-		}
-	}
-}
