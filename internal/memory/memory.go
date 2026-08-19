@@ -175,6 +175,12 @@ type Store struct {
 	mu       sync.RWMutex     // protects in-memory cache (memories, contextIndex)
 	accessCh chan accessEvent // batched access stats updates
 	accessWG sync.WaitGroup
+	// reembedCancel stops the startup re-embed that maybeStartBackgroundReembed
+	// launches. Close waits on accessWG, so without a way to cancel the walk a
+	// short-lived process (the hooks CLI) could not exit until the whole bank
+	// had been re-embedded. Assigned once inside NewStore before the store is
+	// handed to the caller, read only by Close — no lock needed.
+	reembedCancel context.CancelFunc
 	// watcher converges the cache on writes made by other processes (T116).
 	// nil in the CLI, where a process re-reads the file on every invocation.
 	watchMu sync.Mutex
@@ -966,10 +972,14 @@ func (ms *Store) maybeStartBackgroundReembed() {
 		zap.Int("total", total),
 	)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	ms.reembedCancel = cancel
+
 	ms.accessWG.Add(1)
 	go func() {
 		defer ms.accessWG.Done()
-		result, err := ms.ReembedAll(context.Background())
+		defer cancel()
+		result, err := ms.ReembedAll(ctx)
 		if err != nil {
 			ms.logger.Error("Background re-embed failed", zap.Error(err))
 			return
