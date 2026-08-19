@@ -498,19 +498,33 @@ func encodeEmbedding(embedding []float32) []byte {
 // decodeEmbedding deserializes an embedding blob. Tries binary first, falls back to JSON
 // for backwards compatibility with older indexes.
 func decodeEmbedding(blob []byte) ([]float32, error) {
-	if len(blob) > 0 && len(blob)%4 == 0 && blob[0] != '[' {
-		n := len(blob) / 4
-		result := make([]float32, n)
-		for i := range n {
-			result[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
-		}
-		return result, nil
+	if len(blob) > 0 && len(blob)%4 == 0 && !looksLikeJSONArray(blob) {
+		return decodeBinaryEmbedding(blob), nil
 	}
 	var result []float32
 	if err := json.Unmarshal(blob, &result); err != nil {
+		if len(blob) > 0 && len(blob)%4 == 0 {
+			return decodeBinaryEmbedding(blob), nil
+		}
 		return nil, err
 	}
 	return result, nil
+}
+
+// looksLikeJSONArray reports whether the blob is a legacy JSON-encoded embedding.
+// A binary blob starts with '[' once every 256 vectors by chance, so the closing
+// bracket is checked as well.
+func looksLikeJSONArray(blob []byte) bool {
+	return blob[0] == '[' && blob[len(blob)-1] == ']'
+}
+
+func decodeBinaryEmbedding(blob []byte) []float32 {
+	n := len(blob) / 4
+	result := make([]float32, n)
+	for i := range n {
+		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
+	}
+	return result
 }
 
 // CosineSimilarity is a thin alias kept for backwards compatibility.
