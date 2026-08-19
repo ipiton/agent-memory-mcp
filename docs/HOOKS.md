@@ -5,8 +5,8 @@
 | Hook | When it fires | What it does |
 |------|---------------|--------------|
 | `SessionStart`  | Claude Code starts a session in the project | Injects recent memories and pending raw summaries into the system prompt via `agent-memory-mcp context-inject` |
-| `SessionEnd`    | Session ends (user closes, agent exits) | Reads the transcript from stdin, runs the extract → plan → apply pipeline via `agent-memory-mcp auto-capture --stdin` |
-| `PreCompact`    | Claude Code is about to compress context | Saves a raw checkpoint (`agent-memory-mcp checkpoint --boundary pre_compact --stdin`) so nothing is lost when the conversation is summarised |
+| `SessionEnd`    | Session ends (user closes, agent exits) | Reads the hook event, summarises the transcript it points at, and runs the extract → plan → apply pipeline via `agent-memory-mcp auto-capture --hook-event` |
+| `PreCompact`    | Claude Code is about to compress context | Saves a raw checkpoint (`agent-memory-mcp checkpoint --hook-event`) so nothing is lost when the conversation is summarised |
 
 Together these turn Claude Code into a memory-aware shell: every session contributes back to the project memory, every new session starts with relevant context surfaced.
 
@@ -51,13 +51,13 @@ This prints a JSON fragment ready to merge into the `hooks` block. Example outpu
   "SessionEnd": [
     {
       "type": "command",
-      "command": "/usr/local/bin/agent-memory-mcp auto-capture --stdin"
+      "command": "/usr/local/bin/agent-memory-mcp auto-capture --hook-event"
     }
   ],
   "PreCompact": [
     {
       "type": "command",
-      "command": "/usr/local/bin/agent-memory-mcp checkpoint --boundary pre_compact --stdin"
+      "command": "/usr/local/bin/agent-memory-mcp checkpoint --hook-event"
     }
   ]
 }
@@ -76,9 +76,36 @@ Lightweight read-only path: opens `MCP_MEMORY_DB_PATH` in WAL `mode=ro` and prin
 
 Why: Claude Code injects stdout into the system prompt, so the agent starts the session already aware of recent work.
 
+### What a hook receives on stdin
+
+Claude Code does not pipe the conversation to a hook. It writes a small JSON
+event describing it:
+
+```json
+{"session_id":"…","transcript_path":"…","cwd":"…","hook_event_name":"SessionEnd","reason":"other"}
+```
+
+`--hook-event` is what reads that shape: the event is parsed, the transcript at
+`transcript_path` is read, and the conversation is condensed into the record —
+last 40 messages, 1500 characters each, 12000 in total, text blocks only (tool
+calls, thinking blocks and injected `<system-reminder>` context are dropped).
+
+The context label defaults to the working directory's name plus the first eight
+characters of the session id (`Moving-abc123de`). That suffix is not decoration:
+`sessionclose` folds records sharing a context within six hours into the first
+one and only replaces the text at 0.95 lexical overlap, which two different
+sessions never reach — a project-level label would keep the first session of the
+evening and silently drop the second. Pass `--context` to override.
+
+⚠️ `--stdin` still means what it always meant: **stdin is the summary text**.
+Wiring a Claude Code hook to `--stdin` stores the event object itself as the
+session record — one live bank accumulated 1102 such records over 40 days before
+this flag existed. Under `--hook-event`, prose on stdin is rejected with an
+error rather than stored.
+
 ### `SessionEnd` — `auto-capture`
 
-Reads the full transcript from stdin and runs the `sessionclose` pipeline:
+Summarises the transcript named by the event and runs the `sessionclose` pipeline:
 
 1. **Dedup check** — if the summary is too short (`MCP_CHECKPOINT_DEDUP_MIN_CHARS`) or near-duplicate of a recent one in the same context (`MCP_CHECKPOINT_DEDUP_THRESHOLD` jaccard within `MCP_CHECKPOINT_DEDUP_WINDOW`), it is skipped.
 2. **Extract** — the raw summary is saved as a `session_summary` memory record.
@@ -89,7 +116,9 @@ CLI flags mirror the `close-session` subcommand (`--mode coding|incident|migrati
 
 ### `PreCompact` — `checkpoint`
 
-Saves a `session_checkpoint` memory record with `boundary=pre_compact`. This is a crash/compression safety net: even if the in-conversation summary is later compressed away, the raw checkpoint stays in the memory store and can be recalled with `recall_memory tags=session-checkpoint`.
+Saves a `session_checkpoint` memory record with `boundary=pre_compact` — under
+`--hook-event` the boundary comes from the event's own `hook_event_name`, so it
+no longer has to be repeated in a flag. This is a crash/compression safety net: even if the in-conversation summary is later compressed away, the raw checkpoint stays in the memory store and can be recalled with `recall_memory tags=session-checkpoint`.
 
 Same dedup rules as `auto-capture`. Disable globally with `MCP_CHECKPOINT_DEDUP_DISABLED=true` if needed.
 

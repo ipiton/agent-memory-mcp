@@ -59,13 +59,13 @@ func buildHooksConfig(binaryPath string) map[string][]hookEntry {
 		"SessionEnd": {
 			{
 				Type:    "command",
-				Command: fmt.Sprintf("%s auto-capture --stdin", bin),
+				Command: fmt.Sprintf("%s auto-capture --hook-event", bin),
 			},
 		},
 		"PreCompact": {
 			{
 				Type:    "command",
-				Command: fmt.Sprintf("%s checkpoint --boundary pre_compact --stdin", bin),
+				Command: fmt.Sprintf("%s checkpoint --hook-event", bin),
 			},
 		},
 	}

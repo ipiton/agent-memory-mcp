@@ -234,7 +234,8 @@ func hasTag(tags []string, target string) bool {
 // runAutoCapture reads session transcript from stdin and runs the full extract/plan/apply pipeline.
 func runAutoCapture(args []string) error {
 	fs := flag.NewFlagSet("auto-capture", flag.ContinueOnError)
-	stdin := fs.Bool("stdin", false, "Read transcript from stdin")
+	stdin := fs.Bool("stdin", false, "Read the summary text from stdin")
+	hookEvent := fs.Bool("hook-event", false, "Read a Claude Code hook event (JSON) from stdin and summarise the transcript it points at")
 	summary := fs.String("summary", "", "Session summary text")
 	mode := fs.String("mode", "", "Session mode: coding, incident, migration, research, cleanup")
 	memContext := fs.String("context", "", "Project or task context")
@@ -246,10 +247,15 @@ func runAutoCapture(args []string) error {
 		return err
 	}
 
-	summaryText, err := readSessionSummary(*summary, *stdin, fs.Args())
+	input, err := resolveSessionInput(*hookEvent, *summary, *stdin, *memContext, fs.Args())
 	if err != nil {
 		return err
 	}
+	if !input.Captured {
+		fmt.Println("Auto-capture skipped: the hook event carried no readable transcript")
+		return nil
+	}
+	summaryText, contextValue := input.Summary, input.Context
 
 	modeValue, err := parseSessionModeValue(*mode)
 	if err != nil {
@@ -270,7 +276,7 @@ func runAutoCapture(args []string) error {
 	svc := sessionclose.New(store)
 	sessionSummary := memory.SessionSummary{
 		Mode:    modeValue,
-		Context: strings.TrimSpace(*memContext),
+		Context: contextValue,
 		Service: strings.TrimSpace(*service),
 		Summary: summaryText,
 		Tags:    parseCSVTags(*tags),
@@ -312,7 +318,8 @@ func runAutoCapture(args []string) error {
 // runCheckpoint saves a raw session checkpoint (used by PreCompact hook).
 func runCheckpoint(args []string) error {
 	fs := flag.NewFlagSet("checkpoint", flag.ContinueOnError)
-	stdin := fs.Bool("stdin", false, "Read content from stdin")
+	stdin := fs.Bool("stdin", false, "Read the checkpoint text from stdin")
+	hookEvent := fs.Bool("hook-event", false, "Read a Claude Code hook event (JSON) from stdin and summarise the transcript it points at")
 	summary := fs.String("summary", "", "Checkpoint summary text")
 	boundary := fs.String("boundary", "checkpoint", "Boundary type: checkpoint or pre_compact")
 	memContext := fs.String("context", "", "Project or task context")
@@ -322,10 +329,15 @@ func runCheckpoint(args []string) error {
 		return err
 	}
 
-	summaryText, err := readSessionSummary(*summary, *stdin, fs.Args())
+	input, err := resolveSessionInput(*hookEvent, *summary, *stdin, *memContext, fs.Args())
 	if err != nil {
 		return err
 	}
+	if !input.Captured {
+		fmt.Println("Checkpoint skipped: the hook event carried no readable transcript")
+		return nil
+	}
+	summaryText, contextValue := input.Summary, input.Context
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -340,7 +352,7 @@ func runCheckpoint(args []string) error {
 
 	svc := sessionclose.New(store)
 	sessionSummary := memory.SessionSummary{
-		Context: strings.TrimSpace(*memContext),
+		Context: contextValue,
 		Service: strings.TrimSpace(*service),
 		Summary: summaryText,
 		Tags:    parseCSVTags(*tags),
@@ -349,6 +361,12 @@ func runCheckpoint(args []string) error {
 	boundaryValue := strings.TrimSpace(*boundary)
 	if boundaryValue == "" {
 		boundaryValue = "checkpoint"
+	}
+	// A PreCompact event says what boundary this is; making the caller repeat
+	// it in a flag is how `checkpoint --stdin` ended up filed as a plain
+	// checkpoint in some configs and as pre_compact in others.
+	if boundaryValue == "checkpoint" && input.Event.Name == "PreCompact" {
+		boundaryValue = "pre_compact"
 	}
 
 	extraTags := []string{"session-checkpoint"}

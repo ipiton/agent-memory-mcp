@@ -5,10 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
 	"github.com/ipiton/agent-memory-mcp/internal/sessionclose"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
@@ -147,6 +149,66 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 	}
 	fmt.Println(sessionclose.FormatAnalysis(result))
 	return nil
+}
+
+// sessionInput is what a capture command needs from its invocation: the text
+// to store and the context to file it under. Captured is false when a hook
+// event arrived but pointed at nothing readable — a session with no transcript
+// is nothing to save, not a failure to report to the hook runner.
+type sessionInput struct {
+	Summary  string
+	Context  string
+	Event    hooks.Event
+	Captured bool
+}
+
+// resolveSessionInput reads either a hook event or a summary, depending on
+// --hook-event.
+//
+// The flag exists because the two are not the same thing and used to be
+// treated as one: Claude Code writes an event object to a hook's stdin, and
+// `--stdin` stored that object as the session text. Every SessionEnd record
+// written that way holds the event's metadata and nothing about the session.
+// Under --hook-event the transcript named by the event is read instead, and
+// the context label carries the session id so two sessions in one evening do
+// not consolidate into one record.
+func resolveSessionInput(hookEvent bool, summary string, useStdin bool, contextFlag string, positional []string) (sessionInput, error) {
+	if !hookEvent {
+		text, err := readSessionSummary(summary, useStdin, positional)
+		if err != nil {
+			return sessionInput{}, err
+		}
+		return sessionInput{Summary: text, Context: strings.TrimSpace(contextFlag), Captured: true}, nil
+	}
+
+	data, err := readStdin()
+	if err != nil {
+		return sessionInput{}, fmt.Errorf("reading hook event from stdin: %w", err)
+	}
+	event, err := hooks.ParseEvent(data)
+	if err != nil {
+		return sessionInput{}, err
+	}
+
+	input := sessionInput{Context: event.ContextLabel(contextFlag), Event: event}
+	if strings.TrimSpace(event.TranscriptPath) == "" {
+		return input, nil
+	}
+	text, err := hooks.SummarizeTranscript(event.TranscriptPath)
+	if err != nil {
+		// A transcript that cannot be read is worth saying out loud — the hook
+		// still exits 0, because failing the session over it helps nobody.
+		fmt.Fprintf(os.Stderr, "hook event: %v\n", err)
+		if strings.TrimSpace(text) == "" {
+			return input, nil
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return input, nil
+	}
+	input.Summary = text
+	input.Captured = true
+	return input, nil
 }
 
 func readSessionSummary(summary string, useStdin bool, positional []string) (string, error) {
