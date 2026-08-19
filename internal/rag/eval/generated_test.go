@@ -10,6 +10,7 @@ package eval_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -82,6 +83,24 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 
 	if metrics.TotalQueries == 0 {
 		t.Fatal("empty QA set")
+	}
+
+	// T124: aggregate metrics can coincide while the orderings differ, and
+	// "the arms scored the same" is a different claim from "the arms returned
+	// the same thing". Dumping the ranking makes the second one checkable.
+	if dump := os.Getenv("MCP_EVAL_DUMP"); dump != "" {
+		rankings := make(map[string][]string, len(results))
+		for _, r := range results {
+			rankings[r.Query.ID] = r.TopK
+		}
+		payload, err := json.MarshalIndent(rankings, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal rankings: %v", err)
+		}
+		if err := os.WriteFile(dump, payload, 0o644); err != nil {
+			t.Fatalf("write rankings: %v", err)
+		}
+		t.Logf("rankings written to %s", dump)
 	}
 }
 
