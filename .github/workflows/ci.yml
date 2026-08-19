@@ -14,10 +14,10 @@ jobs:
         go-version: ['1.26']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -45,7 +45,7 @@ jobs:
       # this the next deprecation is found the way this one was — by accident,
       # while preparing an unrelated task.
       - name: Release config deprecations
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
           args: check
