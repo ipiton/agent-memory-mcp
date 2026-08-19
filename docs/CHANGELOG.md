@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-08-19
+
+### Fixed
+
+- **The vector index dropped one chunk in 256 on load (T109, second instance)** — `decodeEmbedding` picked the format from the first byte alone: `blob[0] != '['` meant binary, anything else meant the legacy JSON array. A little-endian float32 vector starts with `0x5B` ('[') once every 256 vectors by chance, so those blobs went to `json.Unmarshal` and were dropped with `invalid character ... looking for beginning of value`. On the Moving index that silently cost 83 of 20565 chunks — 0.40%, against the 0.39% the birthday math predicts. Reindexing could not fix it: the stored bytes were fine, and a fresh vector hits the same odds.
+
+  This is the same defect T109 fixed in the memory store in 0.10.0, surviving in the second store because the two kept their own copies of the codec. Both now share `dbutil.EncodeEmbedding` / `dbutil.DecodeEmbedding`, which is where the fix and its history live — a third copy is the only way this comes back. The prefix is a hint, not a verdict: JSON has to actually parse, and a blob that merely starts like it falls through to the binary path. Nothing about the stored format changes, so the affected chunks recover on the next load without a re-embed.
+
 ## [0.13.0] - 2026-08-15
 
 Three things the cache, the write boundary and the tool surface were each

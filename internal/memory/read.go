@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/ipiton/agent-memory-mcp/internal/topk"
 	"go.uber.org/zap"
@@ -724,7 +725,7 @@ func scanMemoryRowCounting(scanner rowScanner, softErrors *int) (*Memory, error)
 	}
 	m.Metadata, _ = parseMetadataJSON(metadataJSON)
 	if len(embeddingBlob) > 0 {
-		parsed, err := unmarshalEmbeddingBinary(embeddingBlob)
+		parsed, err := dbutil.DecodeEmbedding(embeddingBlob)
 		if err != nil {
 			countSoft()
 		} else {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"go.uber.org/zap"
 )
 
@@ -93,13 +94,13 @@ func BenchmarkEncodeDecodeEmbedding(b *testing.B) {
 	emb := randomEmbedding(768)
 	b.Run("encode", func(b *testing.B) {
 		for range b.N {
-			encodeEmbedding(emb)
+			dbutil.EncodeEmbedding(emb)
 		}
 	})
-	blob := encodeEmbedding(emb)
+	blob := dbutil.EncodeEmbedding(emb)
 	b.Run("decode", func(b *testing.B) {
 		for range b.N {
-			if _, err := decodeEmbedding(blob); err != nil {
+			if _, err := dbutil.DecodeEmbedding(blob); err != nil {
 				b.Fatal(err)
 			}
 		}
