@@ -107,9 +107,9 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
-	// Idle timeout is 20ms; sleep just past it to let the timer fire,
-	// then drain the flush goroutine deterministically (Round 3 M10).
-	time.Sleep(40 * time.Millisecond)
+	// No sleep: waitForBackground drains the armed idle timer and then the
+	// flush goroutine it starts. Sleeping "just past" a 20ms timeout is what
+	// made this test race on a loaded runner.
 	s.sessionTracker.waitForBackground()
 
 	memories, err := s.memoryStore.List(context.Background(), memory.Filters{Context: "payments"}, 20)

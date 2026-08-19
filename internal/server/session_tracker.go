@@ -393,12 +393,39 @@ func (st *sessionTracker) waitForCheckpoints() {
 // waitForBackground drains both checkpoint workers and idle-timer-driven
 // flushSession goroutines. Tests should call this instead of sleeping
 // before asserting on side effects of flushFromIdle / saveCheckpoint.
+//
+// An armed idle timer has not run flushFromIdle yet, so flushWG is still at
+// zero and Wait would return before the flush it is supposed to wait for even
+// starts. Worse, the Add(1) that flushFromIdle then performs lands next to a
+// zero-counter Wait — a WaitGroup misuse the race detector reports, which is
+// how this surfaced: a CI runner slow enough to push a 20ms timer past the
+// caller's sleep. So the timer is drained first, and only then the group.
 func (st *sessionTracker) waitForBackground() {
 	if st == nil {
 		return
 	}
 	st.checkpointWG.Wait()
+	st.waitForIdleTimer()
 	st.flushWG.Wait()
+}
+
+// waitForIdleTimer blocks until no idle timer is armed — flushFromIdle clears
+// it once it fires, and the cancel paths clear it when the flush will never
+// happen. The deadline keeps a caller that kept the session busy (and so kept
+// resetting the timer) from hanging instead of failing.
+func (st *sessionTracker) waitForIdleTimer() {
+	// Wall clock on purpose: this waits on a real timer, not on the tracker's
+	// injectable notion of "now".
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		st.mu.Lock()
+		armed := st.timer != nil
+		st.mu.Unlock()
+		if !armed || !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // saveCheckpoint is the async entry point used from the HandleToolCall hot
