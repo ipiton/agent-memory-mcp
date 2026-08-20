@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-08-20
+
+The session hooks had been storing their own metadata instead of the sessions,
+and the startup re-embed had been keeping the process that found it alive.
+
+### Added
+
+- **`--hook-event` — the hooks read what Claude Code actually sends (T128)** — Claude Code writes an event object to a hook's stdin (`session_id`, `cwd`, `transcript_path`), and `auto-capture --stdin` took that object as the summary text. Every `SessionEnd` record stored the event instead of the session: 1102 of them accumulated in a live bank over 40 days, and `PreCompact` was writing the same shape as recently as 2026-08-14. 🔴 The hook looked healthy throughout — it ran, a record appeared, the counters moved; only the content told you it had saved its own name.
+
+  Under the new flag the event is parsed and the transcript it points at is condensed into the record: last 40 messages, 1500 characters each, 12000 in total, text blocks only, so tool payloads and thinking signatures stay out of the bank. Prose on stdin is refused rather than stored — the exact failure that started this. `--stdin` keeps its old meaning, and `setup` / `hooks-config` now generate the new form (a test pins that the generated configuration carries no `--stdin`).
+
+  Two things the flag settles by itself: the default context label is the working directory plus the first eight characters of the session id, because `sessionclose` folds same-context records within six hours and only replaces their text at 0.95 lexical overlap — a project-level label keeps the first session of an evening and silently drops the second. And a `PreCompact` event carries its own boundary, so `--boundary pre_compact` no longer has to be repeated by hand.
+
+- **`MCP_RAG_FUSION` — Reciprocal Rank Fusion behind a flag (T124)** — the hybrid ranker adds a raw cosine to a keyword score normalised against the current result set, with weights set by eye. RRF sums `1/(k+rank)` instead, so the scales never meet. Measured on 250 questions with a real encoder: **Hit@5 and MRR do not move at all** — 0.9600 / 0.9580 in every arm, and the rank of the first expected document is identical in all 250 queries. The default stays `weighted`.
+
+  ⚠️ That verdict is narrower than it sounds. The arms disagree on the order of 78 of the 250 queries and on the first result of 14 — the metrics simply cannot see it, because both stop at the first hit and the movement is below it. Metrics that look further do move: R@5 by document 0.5104 → 0.5444, nDCG@5 0.6184 → 0.6487, and a top-5 of chunks unfolds into 2.07 distinct documents under blending against 2.22 under RRF. Neither clears the 0.05 threshold, so the decision is still skip — recorded as T127 rather than as "no difference".
+
+### Fixed
+
+- **The startup re-embed outlived the process that started it** — `SessionEnd` had been dead since 2026-07-10: every `auto-capture` run hung until Claude Code killed it at the hook timeout. `ReembedAll` embedded every row and compared model IDs only afterwards, so a bank of 4771 memories with 16 stale rows cost 4771 embedder calls; and `Close` waits on the worker group the walk sits in, with a `context.Background()`, so a short-lived CLI could not exit until the whole bank had been walked. The model is now probed once up front, current rows are skipped before the call, and the walk runs on a context `Close` cancels first. Measured on a copy of the live bank: `auto-capture` went from never returning to 2.06s.
+
+- **A session-tracker test raced against its own timer** — `waitForBackground` promised to drain idle-timer flushes but could not: `flushFromIdle` performs its `flushWG.Add(1)` when the timer fires, so a caller arriving earlier waited on a zero counter and returned having drained nothing. A `time.Sleep(40ms)` against a 20ms timeout covered the gap until a loaded CI runner missed it. The wait now drains the armed timer first, with a 2s deadline.
+
+- **The goreleaser deprecation gate could not see deprecations** — the T117 gate reported `deprecations: none (all known)` on every CI run since it landed, with `DEPRECATED: brews` printed three lines above it. goreleaser colours its output on GitHub Actions, and the escape sequences sit between `DEPRECATED:` and the key, so the pattern matched an empty string. A gate blind to the deprecation it was built around would have been blind to the next one. Also: the workflow actions now declare the node24 runtime they were already being forced onto, and `goreleaser check` runs once instead of twice.
+
 ## [0.13.1] - 2026-08-19
 
 ### Fixed
