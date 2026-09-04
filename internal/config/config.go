@@ -763,16 +763,59 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	flag.StringVar(&ev.root, "root", ev.root, "Repository root (defaults to current dir)")
-	flag.StringVar(&ev.allow, "allow", ev.allow, "Comma-separated allowlist of repo-relative paths")
-	flag.StringVar(&ev.outputMode, "stdio-mode", ev.outputMode, "Stdio framing: line or content-length")
-	flag.BoolVar(&ev.statsEnabled, "stats-enabled", ev.statsEnabled, "Enable MCP usage stats logging")
-	flag.StringVar(&ev.statsPath, "stats-path", ev.statsPath, "Path for MCP usage stats log (jsonl)")
-	flag.Float64Var(&ev.statsSample, "stats-sample-rate", ev.statsSample, "Sample rate for stats logging (0-1)")
-	flag.Int64Var(&ev.maxFileBytes, "max-file-bytes", ev.maxFileBytes, "Max bytes to read per file")
-	flag.IntVar(&ev.maxSearch, "max-search-results", ev.maxSearch, "Max search results")
-	flag.IntVar(&ev.maxDepth, "max-depth", ev.maxDepth, "Max directory depth for listing")
+	// Flags are registered against fresh variables rather than against the
+	// already-loaded env values, so `--help` prints the flag's contract instead
+	// of whatever this machine's dotenv chain resolved to (T129: the published
+	// help advertised `-root … (default "/Users/vit/Sema")`, a path read from
+	// the installed instance's config.env).
+	//
+	// Precedence stays "flag > env > file": flag.Visit reports only the flags
+	// actually present on the command line, so an unset flag never overwrites
+	// the env value, and an explicitly passed empty string still does.
+	var (
+		fRoot         string
+		fAllow        string
+		fOutputMode   string
+		fStatsEnabled bool
+		fStatsPath    string
+		fStatsSample  float64
+		fMaxFileBytes int64
+		fMaxSearch    int
+		fMaxDepth     int
+	)
+	flag.StringVar(&fRoot, "root", "", "Repository root (overrides MCP_ROOT; defaults to current dir)")
+	flag.StringVar(&fAllow, "allow", "", "Comma-separated allowlist of repo-relative paths (overrides MCP_ALLOW_DIRS)")
+	flag.StringVar(&fOutputMode, "stdio-mode", "", "Stdio framing: line or content-length (overrides MCP_STDIO_MODE)")
+	flag.BoolVar(&fStatsEnabled, "stats-enabled", false, "Enable MCP usage stats logging (overrides MCP_STATS_ENABLED)")
+	flag.StringVar(&fStatsPath, "stats-path", "", "Path for MCP usage stats log (jsonl) (overrides MCP_STATS_PATH)")
+	flag.Float64Var(&fStatsSample, "stats-sample-rate", 1, "Sample rate for stats logging (0-1) (overrides MCP_STATS_SAMPLE_RATE)")
+	flag.Int64Var(&fMaxFileBytes, "max-file-bytes", DefaultMaxFileBytes, "Max bytes to read per file (overrides MCP_MAX_FILE_BYTES)")
+	flag.IntVar(&fMaxSearch, "max-search-results", DefaultMaxSearchResult, "Max search results (overrides MCP_MAX_SEARCH_RESULTS)")
+	flag.IntVar(&fMaxDepth, "max-depth", DefaultMaxDepth, "Max directory depth for listing (overrides MCP_MAX_DEPTH)")
 	flag.Parse()
+
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "root":
+			ev.root = fRoot
+		case "allow":
+			ev.allow = fAllow
+		case "stdio-mode":
+			ev.outputMode = normalizeOutputMode(fOutputMode)
+		case "stats-enabled":
+			ev.statsEnabled = fStatsEnabled
+		case "stats-path":
+			ev.statsPath = fStatsPath
+		case "stats-sample-rate":
+			ev.statsSample = fStatsSample
+		case "max-file-bytes":
+			ev.maxFileBytes = fMaxFileBytes
+		case "max-search-results":
+			ev.maxSearch = fMaxSearch
+		case "max-depth":
+			ev.maxDepth = fMaxDepth
+		}
+	})
 
 	return resolvePaths(ev)
 }
