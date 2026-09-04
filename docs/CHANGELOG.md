@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-09-04
+
+Six defects, four of them in what the hooks write down. The pattern they share
+is that each one kept working loudly while being wrong quietly: a hook that
+stored its own event and reported a save, a help text that described this
+machine, a summary that swallowed the previous one, a result list that spent
+itself on one file.
+
+### Added
+
+- **`skip_promotion` — the promotion class finally has an off switch (T131)** — `promotion_threshold` could never turn promotion off, because `type=procedural` is the first disjunct in `decide()` and bypasses the threshold entirely. Measured on the Sema corpus (968 archived slugs), thresholds 0.7 and 1.0 produced the same 441 candidates against 10 useful `outdated` markings — so a sweep run for its markings alone had to either push 441 records into canonical or add 441 items to a review queue already holding 866.
+
+  The new option (CLI `-skip-promotion`, MCP `skip_promotion` on `sweep_archive` and `end_task`, both default false) leaves those records untouched: `skipped_promotion_disabled`, not promoted, not queued — and 🔴 deliberately not marked `outdated` either, since declining to act on a record must not decide its fate the other way instead. The comment above the disjunction had claimed the branch "usually fires on importance only"; the same measurement disproved it, since all 441 survivors at threshold 1.0 came through the type disjunct.
+
+### Changed
+
+- **A top-5 spans five documents instead of two (T127)** — adjacent chunks of a file carry nearly the same cosine, so they land next to each other in the blend: on 250 questions with a real encoder, a top-5 of chunks unfolded into **2.07 distinct documents**, with more than half the list spent on more of a file the reader had already been shown. `MCP_RAG_MAX_CHUNKS_PER_DOC` decides how many chunks of one document may occupy the list, and it **ships at 1** — a default change, not a flag left off.
+
+  | arm | distinct@5 | R@5 (doc) | nDCG@5 | Hit@5 | MRR |
+  |---|---|---|---|---|---|
+  | cap 0 (previous behaviour) | 2.068 | 0.5104 | 0.6184 | 0.9600 | 0.9580 |
+  | cap 2 | 3.108 | 0.7648 | 0.8246 | 0.9600 | 0.9580 |
+  | **cap 1 (new default)** | **5.000** | **0.8676** | **0.8927** | **0.9640** | **0.9590** |
+  | rrf (T124, for scale) | 2.220 | 0.5444 | 0.6487 | 0.9600 | 0.9580 |
+
+  R@5 moves by 0.357 against a 0.05 decision threshold, and the first-hit metrics do not pay for it — per query, 207 of 250 improved and **zero got worse**, one miss became a hit and no hit became a miss. RRF, the alternative T127 listed, buys 0.15 of a document. The cap is a preference rather than a quota: when fewer documents exist than the limit asks for, the skipped chunks are added back in ranking order, so a query with one relevant file still returns a full list. Set `0` to restore the uncapped order, `2` for the middle position.
+
+  ⚠️ The QA set's own boundary is worth stating with the number: it scores by document, so R@5 is exactly the axis a cap improves, and nothing in it measures depth inside one document — that is what `ExpandSection` is for.
+
+### Fixed
+
+- **The `PreCompact` payload was stored as if it were the session summary (T132)** — the T80 guard tested "every key of this object is known hook metadata", with the key set copied from a `SessionEnd` payload. `PreCompact` also carries `custom_instructions`, and since 2026-08-07 `scratchpad_dir`, so the test was false for every `PreCompact` event ever passed in. Measured on the live brew bank 2026-09-04: **78 records hold a hook payload as their body**, 78 of them carry `custom_instructions`, and 0 would have matched the whitelist. 🔴 The guard did not stop working — it never applied to this event at all.
+
+  `IsHookEventPayload` replaces the enumeration with the two fields every hook event carries, `session_id` and `hook_event_name`, so the next field the harness invents does not switch it off; the old whitelist stays as a second arm for payloads trimmed past the signature. The CLI now refuses earlier and names the fix: without `--hook-event`, `resolveSessionInput` recognises the event and skips with a reason pointing at the flag — exit 0, nothing stored.
+
+- **Session summaries opened mid-codepoint (T133)** — both limits in `SummarizeTranscript` count bytes and both cuts used a raw byte index. A rune is two bytes in Cyrillic, so an arbitrary index lands inside a codepoint about half the time, and the tail cut does it to the *first* rune of the record. Measured on the live bank 2026-09-04: 335 records carry U+FFFD, 280 of them created after the transcript reader shipped on 08-19, all 280 session records, and 64 begin with it. `textfmt.AlignRuneStart` exists for exactly this class and names its two earlier instances in its own comment (T87 in memory, T118 in the RAG index) — this is the third. The budget may now overshoot by up to one rune, which is cheaper than a split codepoint.
+
+- **Two sessions in one project overwrote each other (T130)** — `findConsolidationTarget` looked for "the most recent terminal episodic of this slug within six hours" and folded the new summary into it, while `shouldReplaceContent` only replaces the text at 0.95 lexical overlap — which two different sessions never reach. So the second session's tags and metadata were merged in and **its content was dropped**. Reproducible with two sessions in a row, and now pinned end-to-end through the hook path.
+
+  The bank had no session identifier to group by: `MetadataSourceSessionID` exists, but despite the name it holds the id of the raw summary *record* a review-queue item derives from. The hook event carries the real one, so records written by `auto-capture` / `checkpoint` now store it as `agent_session_id`, and consolidation requires an equal id — records with no id (manual `close_session`, anything older) still consolidate with each other and never with an identified session.
+
+  With identity in the metadata the 0.13.2 workaround comes out of the label: `ContextLabel` is the project name again, so `recall_memory --context Moving` finds the project's sessions. ⚠️ Records written by 0.13.2 keep their suffixed label and stay outside that exact match — documented in `HOOKS.md`.
+
+- **The CLI help advertised this machine's paths, and `--config` only worked on `serve` (T129)** — `-root` printed `(default "/Users/vit/Sema")` because the flag was registered with the already-resolved env value as its default, and that value comes from the installed instance's `config.env`. Flags now register against fresh variables with contract defaults, and `flag.Visit` applies only the ones actually passed — so precedence stays flag > env > file while the help describes the flag instead of the machine. The same leak affected `-allow` and `-stats-path`; all nine flags go through the new path.
+
+  `--config` turned out worse than reported: `extractConfigFlag` ran inside `runServe` only, so `auto-capture --config …` did not merely lack a help entry, it failed with `flag provided but not defined`. It is stripped in `run()` before dispatch — which is where a flag that picks the bank belongs on a machine running three of them — and listed under `Global flags` in the usage text.
+
 ## [0.13.2] - 2026-08-20
 
 The session hooks had been storing their own metadata instead of the sessions,
