@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 )
 
 // Event is the JSON object Claude Code writes to a hook's stdin.
@@ -121,7 +123,7 @@ func SummarizeTranscript(path string) (string, error) {
 			continue
 		}
 		if len(body) > maxTranscriptPerMessage {
-			body = body[:maxTranscriptPerMessage]
+			body = body[:textfmt.AlignRuneStart(body, maxTranscriptPerMessage)]
 		}
 		messages = append(messages, label+": "+body)
 	}
@@ -133,8 +135,15 @@ func SummarizeTranscript(path string) (string, error) {
 		messages = messages[len(messages)-maxTranscriptMessages:]
 	}
 	summary := strings.Join(messages, "\n\n")
+	// T133: both limits are byte counts, and every cut here used to land on a
+	// raw byte index. On Cyrillic — two bytes a rune — that splits a codepoint
+	// about half the time, and the tail cut does it to the *first* rune of the
+	// record, so the summary opened with U+FFFD. 64 records in the live bank
+	// begin that way, all of them after the transcript reader shipped.
+	// AlignRuneStart exists for exactly this class (T87, T118); the budget may
+	// overshoot by up to three bytes, which is cheaper than a broken rune.
 	if len(summary) > maxTranscriptTotal {
-		summary = summary[len(summary)-maxTranscriptTotal:]
+		summary = summary[textfmt.AlignRuneStart(summary, len(summary)-maxTranscriptTotal):]
 	}
 	return summary, err
 }
