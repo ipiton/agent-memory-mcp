@@ -90,12 +90,18 @@ event describing it:
 last 40 messages, 1500 characters each, 12000 in total, text blocks only (tool
 calls, thinking blocks and injected `<system-reminder>` context are dropped).
 
-The context label defaults to the working directory's name plus the first eight
-characters of the session id (`Moving-abc123de`). That suffix is not decoration:
+The context label defaults to the working directory's name (`Moving`), and the
+session's own id is written to the record's metadata as `agent_session_id`.
 `sessionclose` folds records sharing a context within six hours into the first
-one and only replaces the text at 0.95 lexical overlap, which two different
-sessions never reach — a project-level label would keep the first session of the
-evening and silently drop the second. Pass `--context` to override.
+one and only replaces the text at 0.95 lexical overlap — which two different
+sessions never reach — so consolidation matches on that id: the same session
+closing twice folds, two sessions in one evening do not. Pass `--context` to
+override the label.
+
+⚠️ Records written by 0.13.2 carry the session id **in the label** instead
+(`Moving-abc123de`), because the id had nowhere else to live at the time. They
+stay where they are: `recall_memory --context Moving` matches exactly and will
+not return them.
 
 ⚠️ `--stdin` still means what it always meant: **stdin is the summary text**.
 Wiring a Claude Code hook to `--stdin` stores the event object itself as the

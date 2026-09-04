@@ -284,6 +284,11 @@ func runAutoCapture(args []string) error {
 			memory.MetadataSessionOrigin: "hook_auto_capture",
 		},
 	}
+	// T130: the session's own id, so consolidation can tell "this session
+	// again" from "a different session in the same project".
+	if sid := strings.TrimSpace(input.Event.SessionID); sid != "" {
+		sessionSummary.Metadata[memory.MetadataAgentSessionID] = sid
+	}
 
 	// Note: LastInContext only matches session-checkpoint records, so in the
 	// auto-capture path this effectively guards only the "empty" case. If we
@@ -386,10 +391,7 @@ func runCheckpoint(args []string) error {
 	rawID, err := svc.SaveRawSummaryWithOptions(context.Background(), sessionSummary, sessionclose.RawSaveOptions{
 		RecordKind: memory.RecordKindSessionCheckpoint,
 		ExtraTags:  extraTags,
-		Metadata: map[string]string{
-			memory.MetadataSessionBoundary: boundaryValue,
-			memory.MetadataSessionOrigin:   "hook_checkpoint",
-		},
+		Metadata:   checkpointMetadata(boundaryValue, input.Event.SessionID),
 	})
 	if err != nil {
 		return err
@@ -416,4 +418,18 @@ func dedupSkipMessage(action string, dedup hooks.DedupResult) string {
 	default:
 		return action + " skipped"
 	}
+}
+
+// checkpointMetadata assembles the metadata for a checkpoint record. The agent
+// session id (T130) is only written when the event carried one — a manual
+// `checkpoint --summary` has no session to name.
+func checkpointMetadata(boundary, sessionID string) map[string]string {
+	md := map[string]string{
+		memory.MetadataSessionBoundary: boundary,
+		memory.MetadataSessionOrigin:   "hook_checkpoint",
+	}
+	if sid := strings.TrimSpace(sessionID); sid != "" {
+		md[memory.MetadataAgentSessionID] = sid
+	}
+	return md
 }

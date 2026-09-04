@@ -268,7 +268,7 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 	// into it instead of creating a second near-identical episodic. Cross-session
 	// duplicates are left to the steward (T69).
 	if recordKind == memory.RecordKindSessionSummary {
-		target, err := s.findConsolidationTarget(ctx, summary)
+		target, err := s.findConsolidationTarget(ctx, mem)
 		if err != nil {
 			return "", err
 		}
@@ -302,13 +302,25 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 // working session; cross-session duplicates are deferred to the steward (T69).
 const consolidationWindow = 6 * time.Hour
 
-// findConsolidationTarget returns the most recent terminal episodic memory in
-// summary.Context created within consolidationWindow, or nil when none exists.
-func (s *Service) findConsolidationTarget(ctx context.Context, summary memory.SessionSummary) (*memory.Memory, error) {
-	slug := strings.TrimSpace(summary.Context)
+// findConsolidationTarget returns the most recent terminal episodic memory of
+// the same agent session in mem.Context created within consolidationWindow, or
+// nil when none exists.
+//
+// T130: the session id is what makes the target the same session rather than
+// merely the same project. Grouping by context alone folded the evening's
+// second session into the first — and since shouldReplaceContent needs a 0.95
+// lexical overlap to replace the text, which two different sessions never
+// reach, the second session's content was dropped while its tags and metadata
+// were merged in. Records that carry no id (a manual close_session, anything
+// written before the id existed) still consolidate with each other, which is
+// the old behaviour for the surfaces that have no session to name; an id is
+// only ever compared against an equal id.
+func (s *Service) findConsolidationTarget(ctx context.Context, mem *memory.Memory) (*memory.Memory, error) {
+	slug := strings.TrimSpace(mem.Context)
 	if slug == "" {
 		return nil, nil
 	}
+	sessionID := strings.TrimSpace(mem.Metadata[memory.MetadataAgentSessionID])
 	existing, err := s.store.List(ctx, memory.Filters{Context: slug, Type: memory.TypeEpisodic}, 0)
 	if err != nil {
 		return nil, err
@@ -320,6 +332,9 @@ func (s *Service) findConsolidationTarget(ctx context.Context, summary memory.Se
 			continue
 		}
 		if !isTerminalRecord(m) {
+			continue
+		}
+		if strings.TrimSpace(m.Metadata[memory.MetadataAgentSessionID]) != sessionID {
 			continue
 		}
 		if target == nil || m.CreatedAt.After(target.CreatedAt) {
