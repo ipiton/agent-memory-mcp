@@ -68,8 +68,11 @@ func TestResolveSessionInputReadsTheTranscriptTheEventPointsAt(t *testing.T) {
 	if !strings.Contains(input.Summary, "why did the hook go quiet") {
 		t.Errorf("summary lost the conversation: %q", input.Summary)
 	}
-	if input.Context != "Moving-abc123de" {
-		t.Errorf("context = %q, want %q", input.Context, "Moving-abc123de")
+	if input.Context != "Moving" {
+		t.Errorf("context = %q, want the project label %q (T130: the session id moved to metadata)", input.Context, "Moving")
+	}
+	if input.Event.SessionID != "abc123def456" {
+		t.Errorf("event session id = %q, want it preserved for the record's metadata", input.Event.SessionID)
 	}
 	if input.Event.Name != "SessionEnd" {
 		t.Errorf("event name = %q", input.Event.Name)
@@ -97,8 +100,8 @@ func TestResolveSessionInputWithoutTranscriptCapturesNothing(t *testing.T) {
 	if input.Captured {
 		t.Error("Captured = true with no transcript path")
 	}
-	if input.Context != "tmp-x" {
-		t.Errorf("context = %q, want %q", input.Context, "tmp-x")
+	if input.Context != "tmp" {
+		t.Errorf("context = %q, want %q", input.Context, "tmp")
 	}
 }
 

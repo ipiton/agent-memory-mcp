@@ -27,6 +27,13 @@ const (
 	MetadataSessionBoundary    = "session_boundary"
 	MetadataSessionOrigin      = "session_origin"
 	MetadataSourceSessionID    = "source_session_id"
+	// MetadataAgentSessionID is the id of the agent session a record was
+	// captured in — Claude Code's `session_id` from the hook event. It is a
+	// separate key because MetadataSourceSessionID, despite its name, holds the
+	// id of the raw summary *record* a review-queue item derives from
+	// (session_tracker.go); nothing has ever stored the session's own id, which
+	// is why session consolidation had to group by context label (T130).
+	MetadataAgentSessionID     = "agent_session_id"
 	MetadataActionKind         = "action_kind"
 	MetadataActionHandling     = "action_handling"
 	MetadataVerifiedBy         = "verified_by"

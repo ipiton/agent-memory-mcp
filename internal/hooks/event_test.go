@@ -34,13 +34,14 @@ func TestParseEventReadsClaudeCodeShape(t *testing.T) {
 	}
 }
 
-// The context label decides whether a second session of the evening survives:
-// sessionclose folds same-context records within six hours, and only replaces
-// the text at 0.95 lexical overlap, which two sessions never reach.
-func TestContextLabelKeepsSessionsApart(t *testing.T) {
+// The label names the project, so `recall_memory --context Moving` — an exact
+// match — finds the project's sessions. Keeping two sessions of one evening
+// apart is the job of the session id in the record's metadata (T130), not of
+// the label; the 0.13.2 suffix conflated the two.
+func TestContextLabelIsTheProject(t *testing.T) {
 	event := Event{SessionID: "abc123def456789", CWD: "/Users/vit/Documents/Moving"}
-	if got := event.ContextLabel(""); got != "Moving-abc123de" {
-		t.Errorf("ContextLabel = %q, want %q", got, "Moving-abc123de")
+	if got := event.ContextLabel(""); got != "Moving" {
+		t.Errorf("ContextLabel = %q, want %q (no session-id suffix)", got, "Moving")
 	}
 	if got := event.ContextLabel("  moving-release  "); got != "moving-release" {
 		t.Errorf("explicit context = %q, want it untouched", got)

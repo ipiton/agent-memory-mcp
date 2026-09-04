@@ -48,29 +48,24 @@ func ParseEvent(data []byte) (Event, error) {
 // ContextLabel returns the context to file the record under, leaving an
 // explicit --context untouched.
 //
-// The session id is part of the generated label on purpose: sessionclose folds
-// records that share a context within six hours into the first one, and
-// shouldReplaceContent needs a 0.95 lexical overlap to update the text. Two
-// different sessions never reach that, so a project-level label would keep the
-// first session's content and quietly drop the second one's.
+// The label is the project — the working directory's name. It carried the
+// first eight characters of the session id for one release (0.13.2), because
+// sessionclose grouped consolidation candidates by context alone and folded
+// the evening's second session into the first. That made the label unique per
+// session at the cost of what a label is for: `recall_memory --context Moving`
+// matches exactly and so found none of them. The session id now lives in the
+// record's metadata (memory.MetadataAgentSessionID), where consolidation reads
+// it, and the label is a project name again (T130).
 func (e Event) ContextLabel(explicit string) string {
 	if label := strings.TrimSpace(explicit); label != "" {
 		return label
 	}
-	slug := "session"
 	if cwd := strings.TrimSpace(e.CWD); cwd != "" {
 		if base := filepath.Base(filepath.Clean(cwd)); base != "." && base != string(filepath.Separator) {
-			slug = base
+			return base
 		}
 	}
-	id := strings.TrimSpace(e.SessionID)
-	if id == "" {
-		return slug
-	}
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return slug + "-" + id
+	return "session"
 }
 
 // Transcript summarisation limits. The transcript of a long session runs to
