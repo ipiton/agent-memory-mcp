@@ -162,3 +162,25 @@ func TestBuildSweepConfigDefaultsAutoPromoteTrue(t *testing.T) {
 		t.Errorf("roots = %v, want the convention fallback", cfg.Roots)
 	}
 }
+
+// TestBuildSweepConfigSkipPromotion (T131) pins the MCP argument that turns the
+// promotion class off, and its default: absent means today's behaviour.
+func TestBuildSweepConfigSkipPromotion(t *testing.T) {
+	s := newMemoryTestServer(t)
+
+	cfg, rErr := s.buildSweepConfigFromArgs(map[string]any{}, false)
+	if rErr != nil {
+		t.Fatalf("buildSweepConfigFromArgs: %+v", rErr)
+	}
+	if cfg.SkipPromotion {
+		t.Error("skip_promotion must default to false")
+	}
+
+	cfg, rErr = s.buildSweepConfigFromArgs(map[string]any{"skip_promotion": true}, false)
+	if rErr != nil {
+		t.Fatalf("buildSweepConfigFromArgs: %+v", rErr)
+	}
+	if !cfg.SkipPromotion {
+		t.Error("explicit skip_promotion=true must be honored")
+	}
+}

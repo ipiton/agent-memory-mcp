@@ -103,6 +103,16 @@ type ArchiveSweepConfig struct {
 	// consolidation (T62) — reduces inbox growth proportional to closed
 	// tasks. DryRun still wins: nothing is written.
 	AutoPromote bool
+
+	// SkipPromotion turns the promotion class off entirely: memories that
+	// would become promotion candidates are left untouched (action
+	// "skipped_promotion_disabled") instead of being promoted, queued for
+	// review — or marked outdated. PromotionThreshold cannot express this
+	// because Type=procedural bypasses it (see decide), so a sweep run for
+	// its outdated markings alone had no way to avoid dragging the whole
+	// promotion class along (T131: 10 useful markings against 441 candidates
+	// on the Sema corpus). Default false — existing behaviour is unchanged.
+	SkipPromotion bool
 }
 
 // ArchiveAction is a single decision made during a sweep.
@@ -110,7 +120,8 @@ type ArchiveAction struct {
 	MemoryID string `json:"memory_id"`
 	Slug     string `json:"slug"`
 	// Action is one of: "outdated" | "promotion_candidate" | "skipped_keep_tag"
-	// | "already_outdated" | "skipped_non_working" | "skipped_review_queue_item".
+	// | "already_outdated" | "skipped_non_working" | "skipped_review_queue_item"
+	// | "skipped_promotion_disabled".
 	Action string `json:"action"`
 	Reason string `json:"reason,omitempty"`
 }
@@ -467,6 +478,7 @@ func (sw *Sweeper) sweepSlug(ctx context.Context, slug string, cfg ArchiveSweepC
 		zap.Int("skipped", stats.Skipped),
 		zap.Bool("dry_run", cfg.DryRun),
 		zap.Bool("auto_promote", cfg.AutoPromote),
+		zap.Bool("skip_promotion", cfg.SkipPromotion),
 	)
 	return nil
 }
@@ -505,10 +517,20 @@ func (sw *Sweeper) decide(m *memory.Memory, slug string, cfg ArchiveSweepConfig)
 		return base
 	}
 
-	// Procedural type → always promotion candidate (patterns are reusable).
-	// Working memories use Type=working so this path usually fires on
-	// importance only.
+	// Procedural type → always promotion candidate (patterns are reusable),
+	// whatever the importance. The disjunction is deliberate, but it also means
+	// PromotionThreshold has no "off" position: on the Sema corpus threshold
+	// 0.7 and 1.0 produced the same 441 candidates, all of them procedural
+	// (T131). SkipPromotion is that switch.
 	if m.Type == memory.TypeProcedural || m.Importance >= cfg.PromotionThreshold {
+		if cfg.SkipPromotion {
+			// Left as-is, not marked outdated: the record earned the promotion
+			// branch, and a sweep that declines to act on it must not decide
+			// its fate the other way instead.
+			base.Action = "skipped_promotion_disabled"
+			base.Reason = fmt.Sprintf("promotion disabled: importance=%.2f threshold=%.2f type=%s", m.Importance, cfg.PromotionThreshold, m.Type)
+			return base
+		}
 		base.Action = "promotion_candidate"
 		base.Reason = fmt.Sprintf("importance=%.2f threshold=%.2f type=%s", m.Importance, cfg.PromotionThreshold, m.Type)
 		return base
