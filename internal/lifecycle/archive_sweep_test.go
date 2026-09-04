@@ -712,3 +712,110 @@ func TestSweep_IntegrationMultiSlug(t *testing.T) {
 		t.Fatalf("expected 2 promotion candidates, got %d", result.TotalPromotionCand)
 	}
 }
+
+// TestSweep_SkipPromotion_LeavesCandidatesUntouched (T131) pins the mode the
+// promotion threshold could not express: a sweep run for its outdated markings
+// alone. Both routes into the promotion branch are seeded — a procedural
+// memory below the threshold (type bypasses it) and a working memory above it
+// — and neither may be promoted, queued for review, or marked outdated.
+func TestSweep_SkipPromotion_LeavesCandidatesUntouched(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-skip")
+
+	proc := &memory.Memory{
+		Title:      "procedural pattern",
+		Content:    "how to do X",
+		Type:       memory.TypeProcedural,
+		Context:    "task-skip",
+		Importance: 0.4, // below the threshold: only the type puts it in the branch
+	}
+	if err := store.Store(context.Background(), proc); err != nil {
+		t.Fatalf("Store procedural: %v", err)
+	}
+	important := seedWorkingMemory(t, store, "task-skip", "important note", 0.9, nil, nil)
+	stale := seedWorkingMemory(t, store, "task-skip", "stale note", 0.2, nil, nil)
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{
+		Roots:         []string{root},
+		AutoPromote:   true, // the promotion class is off, so this must not fire either
+		SkipPromotion: true,
+	})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+
+	if result.TotalPromotionCand != 0 || result.TotalPromoted != 0 {
+		t.Fatalf("promotion happened with SkipPromotion=true: candidates=%d promoted=%d (actions=%+v)",
+			result.TotalPromotionCand, result.TotalPromoted, result.Actions)
+	}
+	// The useful half still runs: only the below-threshold working memory.
+	if result.TotalOutdated != 1 {
+		t.Fatalf("expected exactly 1 outdated (the stale working memory), got %d (actions=%+v)",
+			result.TotalOutdated, result.Actions)
+	}
+	if result.TotalSkipped != 2 {
+		t.Fatalf("expected 2 skipped (procedural + important), got %d", result.TotalSkipped)
+	}
+
+	for _, id := range []string{proc.ID, important.ID} {
+		fresh, err := store.Get(id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if memory.LifecycleStatusOf(fresh) == memory.LifecycleOutdated {
+			// The bug this guards against: declining to promote must not flip
+			// the record into the outdated branch instead.
+			t.Fatalf("memory %s was marked outdated instead of being left alone", id)
+		}
+		if n := countReviewQueueItemsForTarget(t, store, id); n != 0 {
+			t.Fatalf("review-queue item created for %s with SkipPromotion=true (got %d)", id, n)
+		}
+	}
+	for _, a := range result.Actions {
+		if (a.MemoryID == proc.ID || a.MemoryID == important.ID) && a.Action != "skipped_promotion_disabled" {
+			t.Fatalf("memory %s classified as %q, want skipped_promotion_disabled", a.MemoryID, a.Action)
+		}
+	}
+
+	fresh, err := store.Get(stale.ID)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+	if memory.LifecycleStatusOf(fresh) != memory.LifecycleOutdated {
+		t.Fatalf("stale memory %s not marked outdated: lifecycle=%s", stale.ID, memory.LifecycleStatusOf(fresh))
+	}
+}
+
+// TestSweep_SkipPromotionDefaultsOff (T131) is the other half of the contract:
+// the same corpus without the flag keeps producing promotion candidates. The
+// default must not change — the fix adds a mode, it does not pick one.
+func TestSweep_SkipPromotionDefaultsOff(t *testing.T) {
+	store := newTestStore(t)
+	root := seedTempArchive(t, "task-default")
+
+	proc := &memory.Memory{
+		Title:      "procedural pattern",
+		Content:    "how to do X",
+		Type:       memory.TypeProcedural,
+		Context:    "task-default",
+		Importance: 0.4,
+	}
+	if err := store.Store(context.Background(), proc); err != nil {
+		t.Fatalf("Store procedural: %v", err)
+	}
+	seedWorkingMemory(t, store, "task-default", "stale note", 0.2, nil, nil)
+
+	sw := NewSweeper(store)
+	result, err := sw.SweepArchive(context.Background(), ArchiveSweepConfig{Roots: []string{root}})
+	if err != nil {
+		t.Fatalf("SweepArchive: %v", err)
+	}
+	if result.TotalPromotionCand != 1 {
+		t.Fatalf("expected 1 promotion candidate without the flag, got %d (actions=%+v)",
+			result.TotalPromotionCand, result.Actions)
+	}
+	if result.TotalOutdated != 1 {
+		t.Fatalf("expected 1 outdated without the flag, got %d", result.TotalOutdated)
+	}
+}

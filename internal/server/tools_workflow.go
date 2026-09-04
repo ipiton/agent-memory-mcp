@@ -691,6 +691,9 @@ func (srv *MCPServer) buildSweepConfigFromArgs(args map[string]any, dryRun bool)
 	if v, ok := args["promotion_threshold"].(float64); ok && v > 0 {
 		sweepCfg.PromotionThreshold = v
 	}
+	if v, ok := getBool(args, "skip_promotion"); ok {
+		sweepCfg.SkipPromotion = v
+	}
 	if kt := strings.TrimSpace(mustString(args, "keep_tag")); kt != "" {
 		sweepCfg.KeepTag = kt
 	}

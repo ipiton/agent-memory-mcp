@@ -49,7 +49,7 @@ The sweep enumerates memories of type **working** and **procedural** whose
 | `record_kind=review_queue_item` | **skip** — workflow records, keeps the sweep idempotent |
 | carries the keep tag (`keep-after-archive`) | **skip** (`skipped_keep_tag`) |
 | already `outdated` | **skip** (`already_outdated`) |
-| `type=procedural` **or** `importance ≥ threshold` (default **0.70**) | **promotion candidate** |
+| `type=procedural` **or** `importance ≥ threshold` (default **0.70**) | **promotion candidate** — or **skip** (`skipped_promotion_disabled`) when `skip_promotion=true` |
 | otherwise | **outdated** (reason: `task archived: <slug>`) |
 
 Rationale for the type/importance split — this is the "re-promote canonical vs
@@ -64,6 +64,16 @@ mark outdated" policy decision:
 
 The threshold is not hardcoded: pass `PromotionThreshold` (or the sweep uses
 `DefaultPromotionThreshold = 0.70`).
+
+⚠️ **The threshold has no "off" position** — `type=procedural` is the first
+disjunct and bypasses it, so raising the threshold to `1.0` leaves every
+procedural memory a candidate (measured on a 968-slug corpus: threshold 0.7 and
+1.0 both produced the same 441 candidates, T131). To run a sweep for its
+`outdated` markings alone, pass **`skip_promotion=true`**: memories that would
+enter the promotion branch are left exactly as they are —
+`skipped_promotion_disabled`, neither promoted nor queued for review, and
+explicitly *not* marked outdated either. Default `false`; the flag adds a mode
+rather than changing one.
 
 ## What happens to a promotion candidate
 
@@ -104,7 +114,7 @@ Consolidation runs three ways; all share the `decide` policy above.
   root (defense-in-depth against path traversal). Explicit per-task path.
 
 Both tools default `auto_promote=true` (T63 zero-ops; the T77 gate keeps it safe)
-and support `dry_run`. `dry_run=true` reports the exact actions and counters
+and support `dry_run` and `skip_promotion` (CLI: `-skip-promotion`). `dry_run=true` reports the exact actions and counters
 (outdated / promotion candidates / promoted / skipped) without any writes — the
 safe first step for a manual bulk run.
 

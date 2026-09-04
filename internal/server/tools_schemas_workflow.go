@@ -73,6 +73,11 @@ func workflowToolDefs() []tool {
 						"default":     true,
 						"description": "Promote candidates directly to canonical instead of creating review-queue items (T63 zero-ops default; the T77 provenance gate routes conversational-origin memories to review regardless). Set false to force review-queue items.",
 					},
+					"skip_promotion": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "Run for outdated markings only: memories that would become promotion candidates are left untouched instead of being promoted or queued for review. promotion_threshold cannot express this — procedural memories become candidates regardless of it.",
+					},
 					"format": map[string]any{
 						"type":        "string",
 						"enum":        []string{"text", "json"},
@@ -119,6 +124,11 @@ func workflowToolDefs() []tool {
 						"type":        "boolean",
 						"default":     true,
 						"description": "Promote candidates directly to canonical instead of creating review-queue items (T63 zero-ops default; the T77 provenance gate routes conversational-origin memories to review regardless). Set false to force review-queue items.",
+					},
+					"skip_promotion": map[string]any{
+						"type":        "boolean",
+						"default":     false,
+						"description": "Run for outdated markings only: memories that would become promotion candidates are left untouched instead of being promoted or queued for review. promotion_threshold cannot express this — procedural memories become candidates regardless of it.",
 					},
 					"format": map[string]any{
 						"type":        "string",

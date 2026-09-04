@@ -22,6 +22,7 @@ func runSweepArchive(args []string) error {
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	threshold := fs.Float64("promotion-threshold", lifecycle.DefaultPromotionThreshold, "Importance threshold for promotion candidates")
 	keepTag := fs.String("keep-tag", lifecycle.KeepAfterArchiveTag, "Tag that opts a memory out of sweep")
+	skipPromotion := fs.Bool("skip-promotion", false, "Run for outdated markings only: leave promotion candidates untouched (-promotion-threshold cannot express this, procedural memories bypass it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -31,7 +32,7 @@ func runSweepArchive(args []string) error {
 		return err
 	}
 
-	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, *pattern, *threshold, *keepTag, *dryRun)
+	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, *pattern, *threshold, *keepTag, *dryRun, *skipPromotion)
 	if err != nil {
 		return err
 	}
@@ -77,6 +78,7 @@ func runEndTask(args []string) error {
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	threshold := fs.Float64("promotion-threshold", lifecycle.DefaultPromotionThreshold, "Importance threshold for promotion candidates")
 	keepTag := fs.String("keep-tag", lifecycle.KeepAfterArchiveTag, "Tag that opts a memory out of sweep")
+	skipPromotion := fs.Bool("skip-promotion", false, "Run for outdated markings only: leave promotion candidates untouched (-promotion-threshold cannot express this, procedural memories bypass it)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,7 +93,7 @@ func runEndTask(args []string) error {
 		return err
 	}
 
-	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, "", *threshold, *keepTag, *dryRun)
+	sweepCfg, err := buildSweepConfig(cfg, *rootsCSV, "", *threshold, *keepTag, *dryRun, *skipPromotion)
 	if err != nil {
 		return err
 	}
@@ -124,13 +126,14 @@ func runEndTask(args []string) error {
 // buildSweepConfig merges CLI flags with the env-loaded config. The roots
 // slice is defensively copied so downstream mutation cannot poison the
 // long-lived config.TaskArchiveRoots slice.
-func buildSweepConfig(cfg config.Config, rootsCSV, pattern string, threshold float64, keepTag string, dryRun bool) (lifecycle.ArchiveSweepConfig, error) {
+func buildSweepConfig(cfg config.Config, rootsCSV, pattern string, threshold float64, keepTag string, dryRun, skipPromotion bool) (lifecycle.ArchiveSweepConfig, error) {
 	sweepCfg := lifecycle.ArchiveSweepConfig{
 		Roots:              append([]string(nil), cfg.Lifecycle.TaskArchiveRoots...),
 		SlugPattern:        cfg.Lifecycle.TaskSlugPattern,
 		DryRun:             dryRun,
 		PromotionThreshold: threshold,
 		KeepTag:            keepTag,
+		SkipPromotion:      skipPromotion,
 	}
 	if strings.TrimSpace(rootsCSV) != "" {
 		sweepCfg.Roots = splitColonList(rootsCSV)
