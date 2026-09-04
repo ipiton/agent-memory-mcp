@@ -160,6 +160,18 @@ type sessionInput struct {
 	Context  string
 	Event    hooks.Event
 	Captured bool
+	// SkipReason says why nothing was captured when the default explanation
+	// ("no readable transcript") would be the wrong one. Empty otherwise.
+	SkipReason string
+}
+
+// skipMessage is what a capture command tells the hook runner when Captured is
+// false. There is always a reason; only some of them are worth their own words.
+func (s sessionInput) skipMessage() string {
+	if reason := strings.TrimSpace(s.SkipReason); reason != "" {
+		return reason
+	}
+	return "the hook event carried no readable transcript"
 }
 
 // resolveSessionInput reads either a hook event or a summary, depending on
@@ -177,6 +189,17 @@ func resolveSessionInput(hookEvent bool, summary string, useStdin bool, contextF
 		text, err := readSessionSummary(summary, useStdin, positional)
 		if err != nil {
 			return sessionInput{}, err
+		}
+		// T132: without --hook-event the text is taken verbatim, so a hook
+		// runner configured the old way feeds the event object straight into
+		// the bank. Refusing here rather than at the write boundary is what
+		// lets the message name the fix; the hook still exits 0, because a
+		// misconfigured hook is not a reason to fail the session.
+		if hooks.IsHookEventPayload(text) {
+			return sessionInput{
+				Context:    strings.TrimSpace(contextFlag),
+				SkipReason: "stdin carried a Claude Code hook event, not a summary — pass --hook-event so the transcript it points at is read",
+			}, nil
 		}
 		return sessionInput{Summary: text, Context: strings.TrimSpace(contextFlag), Captured: true}, nil
 	}

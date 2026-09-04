@@ -51,9 +51,10 @@ const (
 	ReasonHookNoise = "hook_noise"
 )
 
-// hookMetadataKeys are the fields present in a raw Claude Code session-hook
-// JSON payload. A summary whose keys are entirely within this set carries no
-// session content (T80).
+// hookMetadataKeys are the fields of the SessionEnd payload T80 was written
+// against. The set stays closed on purpose, and is only the *second* arm of the
+// verdict below — see IsHookEventPayload for why a closed set cannot be the
+// whole test.
 var hookMetadataKeys = map[string]struct{}{
 	"session_id":      {},
 	"transcript_path": {},
@@ -65,28 +66,79 @@ var hookMetadataKeys = map[string]struct{}{
 	"trigger":         {},
 }
 
-// isHookMetadataOnly reports whether summary is a raw session-hook JSON payload
-// with no actual session content — a JSON object whose keys are all known
-// hook-metadata fields (T80). A real prose summary, or any JSON carrying a
-// content field, does not match.
-func isHookMetadataOnly(summary string) bool {
-	s := strings.TrimSpace(summary)
-	if len(s) < 2 || s[0] != '{' {
+// contentKeys are the fields whose presence means somebody put a summary into
+// the object deliberately. A payload carrying one is not a bare hook event.
+var contentKeys = []string{"summary", "content"}
+
+// IsHookEventPayload reports whether summary is the JSON object Claude Code
+// writes to a hook's stdin. It identifies the shape by the two fields every
+// hook event carries — session_id and hook_event_name — instead of by
+// enumerating the rest of them.
+//
+// T132: the enumeration was the bug. T80 built hookMetadataKeys from a
+// SessionEnd payload, but PreCompact also carries custom_instructions, a key
+// outside that set, so "every key is known metadata" was false for every
+// PreCompact event ever handed to this package. Measured on the live brew bank
+// on 2026-09-04: 78 records hold a hook payload as their body, all 78 carry
+// custom_instructions, and 0 of them would have matched the whitelist — the
+// guard did not stop working, it never applied to this event at all. The field
+// list keeps growing on its own (scratchpad_dir appeared on 2026-08-07)
+// because the producer is the harness and not this repo, so the verdict must
+// not depend on knowing it in full.
+func IsHookEventPayload(summary string) bool {
+	obj, ok := jsonObject(summary)
+	if !ok {
 		return false
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(s), &obj); err != nil {
+	if _, has := obj["session_id"]; !has {
 		return false
 	}
-	if len(obj) == 0 {
+	if _, has := obj["hook_event_name"]; !has {
 		return false
 	}
-	for k := range obj {
-		if _, ok := hookMetadataKeys[strings.ToLower(k)]; !ok {
+	for _, key := range contentKeys {
+		if _, has := obj[key]; has {
 			return false
 		}
 	}
 	return true
+}
+
+// isHookMetadataOnly reports whether summary is a session-hook JSON payload
+// with no session content (T80). Either arm is sufficient: the event signature
+// above, or — for a payload trimmed down past it, such as
+// {"session_id":…,"reason":"other"} — an object whose every key is known
+// metadata. A real prose summary, or any JSON carrying a content field, matches
+// neither.
+func isHookMetadataOnly(summary string) bool {
+	if IsHookEventPayload(summary) {
+		return true
+	}
+	obj, ok := jsonObject(summary)
+	if !ok || len(obj) == 0 {
+		return false
+	}
+	for k := range obj {
+		if _, known := hookMetadataKeys[strings.ToLower(k)]; !known {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonObject decodes summary as a JSON object and reports false for anything
+// else — prose, an array, a bare value. The leading-brace check keeps a long
+// prose summary away from the decoder.
+func jsonObject(summary string) (map[string]json.RawMessage, bool) {
+	s := strings.TrimSpace(summary)
+	if len(s) < 2 || s[0] != '{' {
+		return nil, false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(s), &obj); err != nil {
+		return nil, false
+	}
+	return obj, true
 }
 
 // isChoreLogOnly reports whether summary is an activity journal: every line a

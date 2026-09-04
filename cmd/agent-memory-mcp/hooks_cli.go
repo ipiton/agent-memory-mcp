@@ -252,7 +252,7 @@ func runAutoCapture(args []string) error {
 		return err
 	}
 	if !input.Captured {
-		fmt.Println("Auto-capture skipped: the hook event carried no readable transcript")
+		fmt.Println("Auto-capture skipped: " + input.skipMessage())
 		return nil
 	}
 	summaryText, contextValue := input.Summary, input.Context
@@ -334,7 +334,7 @@ func runCheckpoint(args []string) error {
 		return err
 	}
 	if !input.Captured {
-		fmt.Println("Checkpoint skipped: the hook event carried no readable transcript")
+		fmt.Println("Checkpoint skipped: " + input.skipMessage())
 		return nil
 	}
 	summaryText, contextValue := input.Summary, input.Context
