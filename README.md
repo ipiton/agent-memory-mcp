@@ -832,7 +832,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 
 Config files are loaded in this order (each file only fills in values not already set):
 
-1. `--config /path/to/file` (explicit path, skips chain)
+1. `--config /path/to/file` (explicit path, skips chain; accepted by every command, not just `serve`)
 2. `.env` in the current directory
 3. `~/.config/agent-memory-mcp/config.env` (XDG)
 4. `$(brew --prefix)/etc/agent-memory-mcp/config.env` (Homebrew)

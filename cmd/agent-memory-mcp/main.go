@@ -34,6 +34,14 @@ func main() {
 // instead of calling os.Exit, so deferred cleanup (SQLite WAL sync, engine
 // stop) runs before the process exits and handlers stay unit-testable.
 func run(argv []string) error {
+	// --config belongs to every subcommand, not just serve: it has to be
+	// resolved before any of them loads the dotenv chain, and a FlagSet cannot
+	// do that because the chain is read inside the handler. Stripping it here
+	// (T129) means `auto-capture --config …` picks the right bank instead of
+	// failing with "flag provided but not defined" — which is what every
+	// subcommand but serve used to do, on a machine that runs three banks.
+	argv = extractConfigFlag(argv)
+
 	// Backward compat: no subcommand or flags starting with "-" → serve
 	if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
 		return runServe(argv)
@@ -108,9 +116,8 @@ func run(argv []string) error {
 }
 
 func runServe(args []string) error {
-	// Extract --config before flag.Parse() so dotenv chain uses it.
-	args = extractConfigFlag(args)
-
+	// --config was already stripped by run(); os.Args is restored below so the
+	// flag.Parse inside config.Load() sees the remaining flags.
 	// Restore os.Args so flag.Parse() in config.Load() works correctly
 	os.Args = append([]string{os.Args[0]}, args...)
 
@@ -203,6 +210,9 @@ func printUsage() {
 
 Usage:
   agent-memory-mcp [command] [flags]
+
+Global flags (accepted by every command):
+  --config <path>  Config env file to load instead of the discovery chain
 
 Commands:
   serve     Start MCP server (stdio/http) — default when no command given
