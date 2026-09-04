@@ -494,3 +494,63 @@ func TestFormatSearchResultsOmitsZeroVerifiedTimestamp(t *testing.T) {
 		t.Fatalf("formatted output unexpectedly contains zero verified timestamp:\n%s", formatted)
 	}
 }
+
+// TestCallStoreMemoryRoundTripsExplicitParams guards against the "parameter
+// accepted, value lost" class: a handler that silently coerced `type` to the
+// default would still return "Memory stored" with a valid ID, so a test that
+// only asserts the write happened cannot see it. Each explicit value is read
+// back from the store and compared with what was passed.
+func TestCallStoreMemoryRoundTripsExplicitParams(t *testing.T) {
+	for _, want := range []memory.Type{memory.TypeEpisodic, memory.TypeSemantic, memory.TypeProcedural, memory.TypeWorking} {
+		t.Run(string(want), func(t *testing.T) {
+			s := newMemoryTestServer(t)
+
+			_, rErr := s.callStoreMemory(map[string]any{
+				"title":      "roundtrip " + string(want),
+				"content":    "content for " + string(want),
+				"type":       string(want),
+				"context":    "roundtrip-ctx",
+				"tags":       []any{"alpha", "beta"},
+				"importance": 0.7,
+			})
+			if rErr != nil {
+				t.Fatalf("callStoreMemory(%s) error = %v", want, rErr)
+			}
+
+			memories, err := s.memoryStore.List(context.Background(), memory.Filters{}, 10)
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(memories) != 1 {
+				t.Fatalf("len(memories) = %d, want 1", len(memories))
+			}
+			got := memories[0]
+
+			if got.Type != want {
+				t.Errorf("type = %q, want %q", got.Type, want)
+			}
+			if got.Importance != 0.7 {
+				t.Errorf("importance = %v, want 0.7", got.Importance)
+			}
+			if got.Context != "roundtrip-ctx" {
+				t.Errorf("context = %q, want %q", got.Context, "roundtrip-ctx")
+			}
+			if got.Title != "roundtrip "+string(want) {
+				t.Errorf("title = %q, want %q", got.Title, "roundtrip "+string(want))
+			}
+			if len(got.Tags) != 2 || got.Tags[0] != "alpha" || got.Tags[1] != "beta" {
+				t.Errorf("tags = %v, want [alpha beta]", got.Tags)
+			}
+
+			// The type must also be visible through the filter the caller would
+			// use to find the entry again.
+			filtered, err := s.memoryStore.List(context.Background(), memory.Filters{Type: want}, 10)
+			if err != nil {
+				t.Fatalf("List(type=%s): %v", want, err)
+			}
+			if len(filtered) != 1 {
+				t.Errorf("List(type=%s) returned %d entries, want 1", want, len(filtered))
+			}
+		})
+	}
+}
