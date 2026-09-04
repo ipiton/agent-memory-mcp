@@ -166,6 +166,9 @@ type vecServiceConfig struct {
 	// See config.RAGConfig.Fusion (T124).
 	Fusion string
 	RRFK   int
+	// MaxChunksPerDoc caps how many chunks of one document may occupy the
+	// result list. See config.RAGConfig.MaxChunksPerDoc (T127).
+	MaxChunksPerDoc int
 }
 
 type document struct {
@@ -281,16 +284,17 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	}
 
 	vecSvc, err := newVectorService(vecServiceConfig{
-		IndexPath:     cfg.RAG.IndexPath,
-		Embedder:      emb,
-		MaxResults:    cfg.RAG.MaxResults,
-		Reranker:      rerankProv,
-		RerankTopN:    cfg.Rerank.TopN,
-		RerankTimeout: cfg.Rerank.Timeout,
-		RerankerName:  cfg.Rerank.Provider,
-		Strict:        cfg.RetrievalStrict,
-		Fusion:        cfg.RAG.Fusion,
-		RRFK:          cfg.RAG.RRFK,
+		IndexPath:       cfg.RAG.IndexPath,
+		Embedder:        emb,
+		MaxResults:      cfg.RAG.MaxResults,
+		Reranker:        rerankProv,
+		RerankTopN:      cfg.Rerank.TopN,
+		RerankTimeout:   cfg.Rerank.Timeout,
+		RerankerName:    cfg.Rerank.Provider,
+		Strict:          cfg.RetrievalStrict,
+		Fusion:          cfg.RAG.Fusion,
+		RRFK:            cfg.RAG.RRFK,
+		MaxChunksPerDoc: cfg.RAG.MaxChunksPerDoc,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {

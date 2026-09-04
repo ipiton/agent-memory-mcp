@@ -41,6 +41,10 @@ type HarnessConfig struct {
 	Fusion string
 	RRFK   int
 
+	// MaxChunksPerDoc is the per-document cap arm (T127). 0 keeps the
+	// production default (no cap), for the same reason Fusion does.
+	MaxChunksPerDoc int
+
 	// Embeddings, when non-nil, replaces the deterministic fixture encoder
 	// with a real provider. T119: the fixture is a hash of ASCII tokens — it
 	// carries no semantics at all, and on a Russian corpus it produces no
@@ -115,16 +119,17 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 		// reranker's name, and the aggregate would never show it.
 		RetrievalStrict: true,
 		RAG: config.RAGConfig{
-			Enabled:      true,
-			IndexPath:    indexDir,
-			MaxResults:   50,
-			IndexDirs:    []string{corpusAbs},
-			ChunkSize:    2000,
-			ChunkOverlap: 200,
-			AutoIndex:    false,
-			FileWatcher:  false,
-			Fusion:       config.NormalizeFusion(cfg.Fusion),
-			RRFK:         cfg.RRFK,
+			Enabled:         true,
+			IndexPath:       indexDir,
+			MaxResults:      50,
+			IndexDirs:       []string{corpusAbs},
+			ChunkSize:       2000,
+			ChunkOverlap:    200,
+			AutoIndex:       false,
+			FileWatcher:     false,
+			Fusion:          config.NormalizeFusion(cfg.Fusion),
+			RRFK:            cfg.RRFK,
+			MaxChunksPerDoc: cfg.MaxChunksPerDoc,
 		},
 		Embeddings: embeddings,
 	}

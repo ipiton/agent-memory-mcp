@@ -88,3 +88,28 @@ func TestLoadFlagPrecedence(t *testing.T) {
 		}
 	})
 }
+
+// TestMaxChunksPerDocDefault (T127) pins the per-document cap's default and its
+// off switch: the cap ships on at one chunk per document, and 0 restores the
+// uncapped ranking for anyone who wants the old shape back.
+func TestMaxChunksPerDocDefault(t *testing.T) {
+	hermeticDotEnv(t)
+	t.Setenv("MCP_ROOT", ".")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.RAG.MaxChunksPerDoc != DefaultMaxChunksPerDoc {
+		t.Errorf("MaxChunksPerDoc = %d, want the default %d", cfg.RAG.MaxChunksPerDoc, DefaultMaxChunksPerDoc)
+	}
+
+	t.Setenv("MCP_RAG_MAX_CHUNKS_PER_DOC", "0")
+	cfg, err = LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.RAG.MaxChunksPerDoc != 0 {
+		t.Errorf("MaxChunksPerDoc = %d, want 0 (cap disabled)", cfg.RAG.MaxChunksPerDoc)
+	}
+}
