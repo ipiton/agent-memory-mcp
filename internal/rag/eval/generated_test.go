@@ -48,12 +48,23 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 			rrfK = parsed
 		}
 	}
+	// T127: the per-document cap arm. Same reasoning as the fusion arm — which
+	// cap ran is a property of the run, and the arms have to differ in exactly
+	// this one thing. Unset means the production default, so a run that says
+	// nothing about the cap measures what a deployment does.
+	maxPerDoc := config.DefaultMaxChunksPerDoc
+	if raw := os.Getenv("MCP_RAG_MAX_CHUNKS_PER_DOC"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			maxPerDoc = parsed
+		}
+	}
 	cfg := eval.HarnessConfig{
-		CorpusDir: filepath.Join(outDir, corpusName),
-		QAPath:    qaPath,
-		K:         5,
-		Fusion:    fusion,
-		RRFK:      rrfK,
+		CorpusDir:       filepath.Join(outDir, corpusName),
+		QAPath:          qaPath,
+		K:               5,
+		Fusion:          fusion,
+		RRFK:            rrfK,
+		MaxChunksPerDoc: maxPerDoc,
 	}
 	if emb := liveEmbeddings(); emb != nil {
 		cfg.Embeddings = emb
@@ -68,7 +79,7 @@ func TestRetrievalEvalGenerated(t *testing.T) {
 		t.Fatalf("run all: %v", err)
 	}
 
-	t.Logf("corpus=%s fusion=%s k=%d HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", corpusName, fusion, rrfK, cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
+	t.Logf("corpus=%s fusion=%s k=%d max_chunks_per_doc=%d HitRateAtK@%d=%.4f MRR=%.4f (N=%d)", corpusName, fusion, rrfK, maxPerDoc, cfg.K, metrics.HitRateAtK, metrics.MRR, metrics.TotalQueries)
 	misses := 0
 	for _, r := range results {
 		if !r.Hit {
