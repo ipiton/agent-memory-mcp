@@ -2,8 +2,13 @@ BINARY_NAME=agent-memory-mcp
 
 .PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
 
+# Build next to the binary and rename over it. Writing in place while the
+# launchd instances run it leaves macOS with a stale code-signature cache for
+# that inode: every later launch is killed (OS_REASON_CODESIGNING). A rename
+# gives the new binary its own inode.
 build:
-	go build -o bin/$(BINARY_NAME) ./cmd/agent-memory-mcp
+	go build -o bin/$(BINARY_NAME).new ./cmd/agent-memory-mcp
+	mv -f bin/$(BINARY_NAME).new bin/$(BINARY_NAME)
 
 run:
 	go run ./cmd/agent-memory-mcp
