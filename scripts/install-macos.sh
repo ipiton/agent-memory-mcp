@@ -60,10 +60,13 @@ build_binary() {
     fi
 
     cd "$PROJECT_ROOT"
-    if ! go build -o "$BINARY_DST" ./cmd/agent-memory-mcp; then
+    # Build aside and rename: overwriting a binary that is running leaves
+    # macOS a stale code-signature cache and later launches are killed.
+    if ! go build -o "$BINARY_DST.new" ./cmd/agent-memory-mcp; then
         log_error "Failed to build binary"
         exit 1
     fi
+    mv -f "$BINARY_DST.new" "$BINARY_DST"
 
     log_success "Binary built: $BINARY_DST"
 }
