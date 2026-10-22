@@ -1,5 +1,7 @@
 # agent-memory-mcp
 
+[![Agent Memory MCP on mcprush](https://mcprush.com/badge/ipiton-agent-memory-mcp/score.svg)](https://mcprush.com/to/ipiton-agent-memory-mcp?ref=badge)
+
 A memory, docs, and repo context layer for engineering agents.
 
 `agent-memory-mcp` helps agents work with live engineering context, not just isolated notes. It combines typed memory, document retrieval, and repository-aware tools so Claude, Cursor, Codex, and other MCP clients can recall decisions, search runbooks, inspect project docs, and reuse operational knowledge across sessions.
