@@ -33,9 +33,17 @@ func NewGuard(cfg config.Config) (*Guard, error) {
 		paths = []string{"."}
 	}
 
+	// Корень раскрывается так же, как разрешённые пути ниже: иначе при
+	// MCP_ROOT-симлинке RelPath считает от симлинка до реального пути и
+	// выдаёт "../...", который Resolve потом отвергает как traversal.
+	root := cfg.RootPath
+	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = realRoot
+	}
+
 	allowed := make([]AllowedPath, 0, len(paths))
 	for _, rel := range paths {
-		abs := filepath.Join(cfg.RootPath, rel)
+		abs := filepath.Join(root, rel)
 		abs = filepath.Clean(abs)
 		if realPath, err := filepath.EvalSymlinks(abs); err == nil {
 			abs = realPath
@@ -51,7 +59,7 @@ func NewGuard(cfg config.Config) (*Guard, error) {
 			IsFile: isFile,
 		})
 	}
-	return &Guard{root: cfg.RootPath, allowed: allowed}, nil
+	return &Guard{root: root, allowed: allowed}, nil
 }
 
 // Resolve converts a relative path to an absolute path and validates access.

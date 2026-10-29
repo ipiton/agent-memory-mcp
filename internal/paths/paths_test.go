@@ -79,3 +79,43 @@ func TestGuardResolve(t *testing.T) {
 		t.Fatalf("expected file path to be rejected")
 	}
 }
+
+// Корень-симлинк: разрешённые пути раскрываются через EvalSymlinks, поэтому
+// и корень должен быть раскрыт, иначе RelPath выдаёт "../<реальный путь>".
+func TestGuardSymlinkRoot(t *testing.T) {
+	real := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(real, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "docs", "readme.md"), []byte("docs"), 0o644); err != nil {
+		t.Fatalf("write docs: %v", err)
+	}
+	root := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, root); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+
+	guard, err := NewGuard(config.Config{RootPath: root, AllowedPaths: []string{"docs"}})
+	if err != nil {
+		t.Fatalf("guard: %v", err)
+	}
+
+	abs, err := guard.Resolve("docs/readme.md")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !guard.IsAllowed(abs) {
+		t.Fatalf("IsAllowed(%q) = false", abs)
+	}
+	rel, err := guard.RelPath(abs)
+	if err != nil {
+		t.Fatalf("rel: %v", err)
+	}
+	if rel != "docs/readme.md" {
+		t.Fatalf("RelPath = %q, want %q", rel, "docs/readme.md")
+	}
+	// Путь из выдачи должен снова читаться через Resolve.
+	if _, err := guard.Resolve(rel); err != nil {
+		t.Fatalf("resolve round-trip: %v", err)
+	}
+}
