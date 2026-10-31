@@ -20,6 +20,9 @@ func (s *MCPServer) storeEngineeringMemory(args map[string]any, entityType memor
 	service := mustString(args, "service")
 	severity := mustString(args, "severity")
 	status := mustString(args, "status")
+	if err := memory.CheckCallerMetadata(map[string]string{memory.MetadataStatus: status}); err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+	}
 	importance := defaultImportance
 	v, ok, impErr := getImportance(args)
 	if impErr != nil {
