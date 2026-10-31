@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A caller could make a record trusted without `promote_to_canonical`** — the T77 promotion gate trusts `provenance` = `verified`/`external`, but `provenance` was an ordinary metadata key: `update_memory` merged any map, and `close_session` / `analyze_session` / `review_session_changes` / `accept_session_changes` copied theirs into the records they write. Setting `canonical=true`, `knowledge_layer=canonical`, or a `lifecycle_status`/`status` of `canonical`, which `store_decision`, `store_incident` and the other engineering tools also accept through `status`, made a record canonical outright, so it never reached the gate. One call was enough, and an agent could be talked into it by an instruction planted in a page. These tools now refuse to set server-owned trust keys (`provenance`, `canonical`, `knowledge_layer`, `canonical_promoted_at`, `last_verified_at`) or a canonical status, and the error says why. Removing such a key with an empty value in `update_memory` still works, because removal only lowers trust. Measured on the three live banks before the fix: no `external` provenance anywhere, and every canonical record carries the `canonical_promoted_at` stamp of a real promotion. No legitimate writer is broken, and no record needs cleanup.
+
 ## [0.13.4] - 2026-09-25
 
 Two ways a vector went missing, and one way the RAG index went out of date

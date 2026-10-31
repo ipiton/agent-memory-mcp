@@ -76,6 +76,45 @@ func ProvenanceIsTrusted(provenance string) bool {
 	}
 }
 
+// serverOwnedTrustKeys are metadata keys only the server writes: the promotion
+// gate and trust scoring read them, so a caller that could set them would pick
+// its own trust level (T156).
+var serverOwnedTrustKeys = map[string]bool{
+	MetadataProvenance:      true,
+	MetadataKnowledgeLayer:  true,
+	MetadataLastVerifiedAt:  true,
+	"canonical":             true,
+	"canonical_promoted_at": true,
+}
+
+// CheckCallerMetadata rejects caller-supplied metadata that would raise a
+// record's trust without going through PromoteToCanonical (T156).
+//
+// T77 gated auto-promotion on provenance, but provenance was an ordinary key:
+// update_memory merges any map, close_session copies its map into candidates,
+// and a record carrying canonical=true / knowledge_layer=canonical, or a status
+// of "canonical", is canonical by lifecycle derivation without ever meeting the
+// gate. An agent following an instruction planted in a page needed one call.
+// Empty values pass: on update_memory they remove a key, which only lowers
+// trust (the T96 correction path). Keys are trimmed the way NormalizeMetadata
+// trims them on the way into the store, so " canonical" is the same key here.
+func CheckCallerMetadata(metadata map[string]string) error {
+	const hint = "is set by the server, not the caller: use promote_to_canonical (human-confirmed) to make a record canonical"
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if serverOwnedTrustKeys[key] {
+			return &ErrValidation{Message: fmt.Sprintf("metadata key %q %s", key, hint)}
+		}
+		if (key == MetadataLifecycleStatus || key == MetadataStatus) && normalizeLifecycleStatus(value) == LifecycleCanonical {
+			return &ErrValidation{Message: fmt.Sprintf("%s %q %s", key, strings.TrimSpace(value), hint)}
+		}
+	}
+	return nil
+}
+
 const (
 	RecordKindSessionSummary    = "session_summary"
 	RecordKindSessionCheckpoint = "session_checkpoint"

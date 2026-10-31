@@ -75,6 +75,10 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
 	}
+	sessionMetadata := getStringMap(args, "metadata")
+	if err := memory.CheckCallerMetadata(sessionMetadata); err != nil {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+	}
 
 	saveRaw, saveRawProvided := getBool(args, "save_raw")
 	autoApplyLowRisk, autoApplyProvided := getBool(args, "auto_apply_low_risk")
@@ -109,7 +113,7 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 			StartedAt: startedAt,
 			EndedAt:   endedAt,
 			Tags:      userio.NormalizeTags(getStringSlice(args, "tags")),
-			Metadata:  getStringMap(args, "metadata"),
+			Metadata:  sessionMetadata,
 		},
 		DryRun:           dryRun,
 		SaveRaw:          saveRaw,

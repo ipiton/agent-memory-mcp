@@ -255,6 +255,9 @@ func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {
 	// remove. The store has merged-with-empty-value-removes semantics already
 	// (updateLocked), so this is the missing edge, not new policy.
 	if metadata := metadataPatchFromArgs(args); len(metadata) > 0 {
+		if err := memory.CheckCallerMetadata(metadata); err != nil {
+			return nil, &rpcError{Code: rpcErrInvalidParams, Message: err.Error()}
+		}
 		updates.Metadata = metadata
 	}
 
