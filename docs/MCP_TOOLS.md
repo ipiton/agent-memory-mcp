@@ -1,8 +1,125 @@
-# MCP Tools — JSON Examples
+# MCP Tools
 
 This document shows concrete `tools/call` request payloads and example responses for the most common `agent-memory-mcp` tools. Use it as a copy-paste reference when integrating from a custom MCP client, debugging via raw JSON-RPC, or writing agent prompts.
 
-For the full tool catalog see [README — MCP tools reference](../README.md#mcp-tools-reference).
+The catalog comes first; JSON examples for the most common tools follow it.
+
+## MCP tools reference
+
+### Memory tools
+
+| Tool | Description |
+|------|-------------|
+| `store_memory` | Store a memory with content, type, tags, and importance |
+| `recall_memory` | Recall memories by semantic/text query with optional filters and trust-aware ranking |
+| `update_memory` | Update an existing memory by ID |
+| `delete_memory` | Delete a memory by ID |
+| `list_memories` | List all memories with optional type/context filtering |
+| `memory_stats` | Get memory statistics (counts by type) |
+| `merge_duplicates` | Merge duplicate memories into a primary entry and archive the rest |
+| `mark_outdated` | Mark a memory as outdated or superseded so trust-aware recall downranks it |
+| `promote_to_canonical` | Promote a memory to canonical knowledge and boost its trust ranking |
+| `conflicts_report` | Report duplicate candidates, conflicting statuses, and multiple canonical entries |
+| `list_canonical_knowledge` | List canonical knowledge entries projected from confirmed memories |
+| `recall_canonical_knowledge` | Recall canonical knowledge only, excluding raw memories from results |
+| `recall_multihop` | Multi-hop graph-walk recall over the (subj, rel, obj) triple corpus — returns memories ranked by aggregated path score with the chain of triples that reached each result. Use for cross-memory reasoning queries that single-hop search cannot trace. Requires `MCP_TRIPLE_EXTRACTOR_*` populated; backfill via `index-triples` CLI. |
+
+### RAG tools
+
+| Tool | Description |
+|------|-------------|
+| `semantic_search` | Hybrid search across indexed documents with optional `source_type`, trust metadata, and `debug` explain mode |
+| `index_documents` | Re-index documents for RAG search |
+
+### File tools
+
+| Tool | Description |
+|------|-------------|
+| `repo_list` | List files and folders under allowlisted paths |
+| `repo_read` | Read a file from allowlisted paths |
+| `repo_search` | Text search across allowlisted paths |
+
+### Engineering workflow tools
+
+| Tool | Description |
+|------|-------------|
+| `store_decision` | Store an engineering decision with rationale, status, and consequences |
+| `store_incident` | Store an incident with impact, root cause, resolution, service, and severity |
+| `store_runbook` | Store a runbook with procedure, trigger, verification, and rollback notes |
+| `store_postmortem` | Store a postmortem with root cause and action items |
+| `close_session` | Analyze a finished session into raw summary metadata, candidate knowledge items, and review-safe consolidation actions |
+| `analyze_session` | Compatibility alias for `close_session` with the same planning and reporting behavior |
+| `review_session_changes` | Render the explainable review report for a finished session without forcing writes |
+| `accept_session_changes` | Persist the raw summary and auto-apply only low-risk consolidation actions |
+| `resolve_review_item` | Resolve a pending review queue item so it disappears from the active inbox while keeping an audit trail |
+| `search_runbooks` | Search runbook memories plus indexed runbook docs |
+| `recall_similar_incidents` | Recall similar incidents from memory and indexed postmortems |
+| `end_task` | Consolidate memory for an archived task slug: outdate working/procedural entries, route high-importance ones to the review queue |
+| `sweep_archive` | Pull-mode scan over `MCP_TASK_ARCHIVE_ROOTS` that runs `end_task` on every archived slug |
+| `store_dead_end` | Record an attempted approach that failed (plus the why and the alternative used) so retrieval can surface it as a pitfall warning on related queries. **Use this** for standalone failures with no decision context. **Use `store_decision -avoided-dead-end-id <id>`** when the dead end is part of a larger architectural decision and you want to link both records into one rationale chain (T46) |
+| `promote_sediment` | Promote a memory to a higher sediment layer (surface → episodic → semantic → character). See `docs/SEDIMENTATION.md` |
+| `demote_sediment` | Demote a memory one sediment layer down |
+| `sediment_cycle` | Run the sediment transition cycle — auto-applies trivial promotions, routes non-trivial ones to the review queue |
+| `summarize_project_context` | Summarize recent decisions, runbooks, incidents, and related docs |
+| `project_bank_view` | Show a structured project bank view for canonical knowledge, decisions, runbooks, incidents, caveats, migrations, the review queue, or sediment promotion candidates |
+
+### Stewardship tools
+
+| Tool | Description |
+|------|-------------|
+| `steward_run` | Run a knowledge stewardship cycle: scan for duplicates, conflicts, stale entries, and canonical promotion candidates |
+| `steward_report` | Retrieve the latest stewardship report or a specific one by run ID |
+| `steward_policy` | Get or update the stewardship policy that controls detection thresholds, auto-apply rules, and scheduling |
+| `steward_status` | Show current stewardship status: policy mode, last run summary, pending review count, next scheduled run |
+| `drift_scan` | Compare memory entries against live sources (repo files, docs) to detect drift, missing references, and stale unverified knowledge |
+| `verification_candidates` | List memories that need verification, ranked by urgency |
+| `verify_entry` | Mark a memory as verified, updating its verification metadata |
+| `steward_inbox` | List stewardship inbox items — review-required actions from maintenance runs, drift scans, and session consolidation |
+| `steward_inbox_resolve` | Resolve a steward inbox item by applying an action: merge, mark_outdated, promote, verify, suppress, or defer |
+
+### Temporal knowledge tools
+
+| Tool | Description |
+|------|-------------|
+| `recall_as_of` | Retrieve knowledge that was valid at a specific point in time, filtering by temporal validity |
+| `knowledge_timeline` | Show the chronological evolution of knowledge on a topic — how entries were created, superseded, and replaced over time |
+
+### Tool grouping mode (token efficiency)
+
+Every MCP client loads the full JSON schema of every tool at `initialize` time —
+before your first message. With ~40 tools that schema payload alone can occupy
+tens of KB of the model's context window on every session. Two secondary costs
+compound it: LLMs get measurably worse at picking the right tool as the count
+climbs past ~20–40, and frequent session reloads re-pay the whole cost.
+
+Set `MCP_TOOL_GROUPING=true` to collapse the core toolset into a handful of
+**grouped meta-tools**, each dispatching by a required `action` discriminator:
+
+```jsonc
+// Grouped form                          // Equivalent legacy form
+{ "name": "memory",                      { "name": "store_memory",
+  "arguments": {                           "arguments": { "content": "…" } }
+    "action": "store", "content": "…" } }
+```
+
+Groups: `repo` · `memory` · `memory_admin` · `engineering` · `search` ·
+`session`, plus the `index_documents` and `project_bank_view` singletons — the
+default surface drops from **41 tools to 8** (~42% smaller schema payload).
+
+- **Opt-in, zero regression.** Default is `false`; the flag only changes what
+  `tools/list` returns.
+- **Both call forms always work.** `tools/call` accepts the grouped form
+  (`memory` + `action=store`) *and* the legacy name (`store_memory`) regardless
+  of the flag, so existing scripts never break.
+- **Administrative & steward tools stay individual.** Rarely listed in
+  high-volume agent runs, and `steward_inbox_resolve` already uses its own
+  `action` argument — grouping deliberately leaves them ungrouped.
+
+Trade-off: each grouped call carries a slightly larger per-call schema (the union
+of its actions' arguments). Prefer grouping for **high-volume agent runs** where
+discovery cost dominates; leave it off for **interactive debugging** where seeing
+each tool by name is clearer. Policy reference: [`docs/concepts/lifecycle.md`](concepts/lifecycle.md)
+covers the related archive-sweep surface.
 
 ## Calling convention
 
@@ -572,7 +689,7 @@ Returns memories ranked by aggregated path score plus the chain of `(subj, rel, 
 
 See also:
 
-- [README — Recommended Workflow Snippets](../README.md#recommended-workflow-snippets)
+- [Recommended Workflows](WORKFLOWS.md)
 - [docs/HOOKS.md](HOOKS.md)
 - [docs/STEWARDSHIP.md](STEWARDSHIP.md)
 - [docs/SEDIMENTATION.md](SEDIMENTATION.md)

@@ -37,7 +37,7 @@ func TestGenerateClientConfigClaudeDesktop(t *testing.T) {
 	if server.Args[0] != "-lc" {
 		t.Fatalf("args[0] = %q, want -lc", server.Args[0])
 	}
-	if want := "cd '/tmp/project' && exec '/usr/local/bin/agent-memory-mcp'"; server.Args[1] != want {
+	if want := "cd '/tmp/project' && MCP_HTTP_MODE=stdio exec '/usr/local/bin/agent-memory-mcp'"; server.Args[1] != want {
 		t.Fatalf("args[1] = %q, want %q", server.Args[1], want)
 	}
 }
@@ -61,7 +61,7 @@ func TestGenerateClientConfigCodex(t *testing.T) {
 	if !strings.Contains(snippet, `command = "/bin/sh"`) {
 		t.Fatalf("snippet = %q, want shell command", snippet)
 	}
-	if !strings.Contains(snippet, `args = ["-lc", "cd '/tmp/project' && exec 'agent-memory-mcp'"]`) {
+	if !strings.Contains(snippet, `args = ["-lc", "cd '/tmp/project' && MCP_HTTP_MODE=stdio exec 'agent-memory-mcp'"]`) {
 		t.Fatalf("snippet = %q, want launcher args", snippet)
 	}
 }

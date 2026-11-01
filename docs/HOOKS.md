@@ -183,6 +183,6 @@ If the path is `agent-memory-mcp` (no leading `/`) and Claude Code can't find it
 
 ## See also
 
-- [README — Recommended Workflow Snippets](../README.md#recommended-workflow-snippets) — what to paste into `CLAUDE.md` so the agent uses these tools well
-- [README — CLI commands](../README.md#cli-commands) — full reference for `setup`, `hooks-config`, `context-inject`, `auto-capture`, `checkpoint`
+- [Recommended Workflows](WORKFLOWS.md) — what to paste into `CLAUDE.md` so the agent uses these tools well
+- [CLI commands](CLI.md#cli-commands) — full reference for `setup`, `hooks-config`, `context-inject`, `auto-capture`, `checkpoint`
 - [docs/MCP_TOOLS.md](MCP_TOOLS.md) — JSON examples for the underlying memory tools
