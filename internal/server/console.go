@@ -36,7 +36,7 @@ type consoleQueryResponse struct {
 	Results     any    `json:"results"`
 }
 
-func buildHTTPMux(server *MCPServer) *http.ServeMux {
+func buildHTTPMux(server *MCPServer) http.Handler {
 	mux := http.NewServeMux()
 	authToken := server.config.HTTP.AuthToken
 
@@ -225,7 +225,7 @@ func buildHTTPMux(server *MCPServer) *http.ServeMux {
 		}
 	})
 
-	return mux
+	return requireTrustedOrigin(server, mux)
 }
 
 // sseKeepAliveInterval is the cadence of keepalive comments on the GET /mcp

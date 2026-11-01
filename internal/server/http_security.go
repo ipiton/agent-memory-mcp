@@ -3,6 +3,8 @@ package server
 import (
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -65,6 +67,48 @@ func logHTTPExposurePolicy(server *MCPServer) {
 			zap.Int("port", server.config.HTTP.Port),
 		)
 	}
+}
+
+// requireTrustedOrigin (T147) rejects requests a browser was tricked into
+// sending, as the MCP transport spec requires. A page on a name rebound to
+// 127.0.0.1 is same-origin with the server, so CORS does not stop it: on an
+// open loopback bind the Host must be a loopback name too. With a token that
+// page has nothing to send, and a reverse proxy may forward a public Host.
+// An Origin, when present, must name the Host; non-browser clients send none.
+func requireTrustedOrigin(server *MCPServer, next http.Handler) http.Handler {
+	checkHost := isLoopbackHost(server.config.HTTP.Host) && strings.TrimSpace(server.config.HTTP.AuthToken) == ""
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reason := ""
+		origin := r.Header.Get("Origin")
+		if checkHost && !isLoopbackHost((&url.URL{Host: r.Host}).Hostname()) {
+			reason = "Host is not a loopback name"
+		} else if origin != "" && !originMatchesHost(origin, r.Host) {
+			reason = "Origin does not match Host"
+		}
+		if reason == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if server.fileLogger != nil {
+			server.fileLogger.Warn("HTTP request rejected",
+				zap.String("reason", reason),
+				zap.String("host", r.Host),
+				zap.String("origin", origin),
+				zap.String("path", r.URL.Path),
+			)
+		}
+		http.Error(w, "Forbidden: "+reason, http.StatusForbidden)
+	})
+}
+
+// originMatchesHost compares names without ports: a proxy forwarding $host drops
+// the port the browser kept. It also rejects the opaque Origin "null" (sandboxed
+// frames, file:// pages), which parses to an empty name.
+func originMatchesHost(origin, host string) bool {
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Hostname() != "" && strings.EqualFold(parsed.Hostname(), (&url.URL{Host: host}).Hostname())
 }
 
 func isLoopbackHost(host string) bool {
