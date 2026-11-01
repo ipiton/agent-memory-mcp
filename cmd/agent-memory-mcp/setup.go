@@ -10,7 +10,12 @@ import (
 )
 
 // runSetup automatically configures Claude Code hooks in ~/.claude/settings.json.
+// With an agent name first (`setup codex --yes`) it registers the MCP server in
+// that agent's config instead — see setup_agents.go.
 func runSetup(args []string) error {
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		return runSetupAgent(args[0], args[1:])
+	}
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	command := fs.String("command", defaultConfigCommand(), "Path to agent-memory-mcp binary")
 	dryRun := fs.Bool("dry-run", false, "Show what would be written without modifying files")

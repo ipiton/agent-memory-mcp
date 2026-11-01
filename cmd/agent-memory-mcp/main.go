@@ -235,6 +235,8 @@ Commands:
 
 Setup:
   setup           Auto-configure Claude Code hooks in ~/.claude/settings.json
+  setup <agent>   Register the MCP server in an agent's config (dry run; --yes writes)
+                  agents: claude-code, codex, cursor, gemini, opencode, vscode, windsurf
 
 Hooks (for Claude Code integration):
   hooks-config    Generate Claude Code hooks configuration (manual)

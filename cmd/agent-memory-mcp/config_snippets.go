@@ -121,8 +121,13 @@ func codexConfigSnippet(serverName string, launcher string) string {
 	return b.String()
 }
 
+// buildShellLauncher pins MCP_HTTP_MODE=stdio: an agent always talks to this
+// process over stdio, but the config chain merges the Homebrew config.env,
+// which sets MCP_HTTP_MODE=http for the background service — so the launched
+// process used to bind :18080, collide with that service and never answer the
+// agent (T159). The environment beats every config file.
 func buildShellLauncher(projectRoot string, command string) string {
-	return fmt.Sprintf("cd %s && exec %s", shellQuote(projectRoot), shellQuote(command))
+	return fmt.Sprintf("cd %s && MCP_HTTP_MODE=stdio exec %s", shellQuote(projectRoot), shellQuote(command))
 }
 
 func shellQuote(value string) string {
