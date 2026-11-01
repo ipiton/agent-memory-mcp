@@ -57,6 +57,7 @@ Reference docs:
 
 - `MCP_HTTP_MODE=http` enables the HTTP MCP endpoint
 - `MCP_HTTP_HOST` defaults to `127.0.0.1`, so a quick local HTTP run stays loopback-only by default
+- every route answers 403 when `Origin` does not name the `Host`; a loopback bind without a token also answers 403 to a non-loopback `Host`, which is what stops DNS rebinding
 - for shared deployments set `MCP_HTTP_HOST=0.0.0.0` and `MCP_HTTP_AUTH_TOKEN`; requests to `/mcp` must then send `Authorization: Bearer <token>`
 - the server refuses to start on a non-loopback host without `MCP_HTTP_AUTH_TOKEN`, unless you explicitly set `MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED=true`
 - The server intentionally listens on plain HTTP; terminate TLS at a reverse proxy or load balancer

@@ -28,6 +28,13 @@ The RAG index belongs to another project: this run shares its `MCP_DATA_PATH` an
 - to keep both indexes, give this project its own `MCP_DATA_PATH` (in its `.env`)
 - to replace the index on purpose, run `agent-memory-mcp index --allow-root-change`
 
+### 403 "Host is not a loopback name" or "Origin does not match Host"
+
+The server rejected a request that looks like it came from a web page on a foreign name (DNS rebinding protection).
+
+- `Host is not a loopback name`: a loopback instance without a token is reachable only as `localhost` or `127.0.0.1`. Use one of those, or set `MCP_HTTP_AUTH_TOKEN` if you reach it through a custom name or a reverse proxy
+- `Origin does not match Host`: a browser client is on a different name than the server. If a reverse proxy rewrites `Host`, forward the original one (`proxy_set_header Host $host`, as in `deploy/nginx/agent-memory-mcp.conf`)
+
 ### "address already in use" — port `18080` taken
 
 Another `agent-memory-mcp` (or unrelated service) holds the port:

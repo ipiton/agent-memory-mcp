@@ -28,7 +28,14 @@ func newTestServer(t *testing.T, authToken string) *MCPServer {
 }
 
 func buildMux(s *MCPServer) http.Handler {
-	return buildHTTPMux(s)
+	mux := buildHTTPMux(s)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// httptest.NewRequest defaults to a Host no loopback client would send.
+		if r.Host == "example.com" {
+			r.Host = "127.0.0.1"
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func newMemoryTestServer(t *testing.T) *MCPServer {
