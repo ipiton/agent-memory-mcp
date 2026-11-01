@@ -122,11 +122,12 @@ type Engine struct {
 	// without this mutex the two could race and hit SQLITE_BUSY (RC5 in
 	// 06-planning/2026-05-05-sqlite-busy-incident.md). Foreground callers wait
 	// here and then index for real, rather than being skipped.
-	indexMu        sync.Mutex
-	lastIndexCheck time.Time
-	stopWatcher    chan struct{}
-	stopOnce       sync.Once
-	bgWG           sync.WaitGroup // tracks background goroutines for clean shutdown
+	indexMu         sync.Mutex
+	allowRootChange bool // guarded by indexMu; see checkIndexRoot
+	lastIndexCheck  time.Time
+	stopWatcher     chan struct{}
+	stopOnce        sync.Once
+	bgWG            sync.WaitGroup // tracks background goroutines for clean shutdown
 }
 
 type docServiceConfig struct {
@@ -199,6 +200,7 @@ const (
 	indexStateDirty       = "dirty"
 	indexStateReady       = "ready"
 	indexStartedAtKey     = "index_started_at"
+	indexRootMetadataKey  = "index_root"
 )
 
 // NewEngine creates a new Engine with the given configuration and optional file logger.

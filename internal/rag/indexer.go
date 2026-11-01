@@ -67,6 +67,10 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		indexedFiles = make(map[string]*vectorstore.IndexedFileInfo)
 	}
 
+	if err := re.checkIndexRoot(allDocs, indexedFiles); err != nil {
+		return err
+	}
+
 	if len(allDocs) == 0 && len(indexedFiles) == 0 && !needsRebuild {
 		return fmt.Errorf("no documents found to index")
 	}
@@ -258,6 +262,7 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 
 	finalMetadata := map[string]string{
 		"chunker_version":     chunkerVersion,
+		indexRootMetadataKey:  re.repoRoot,
 		indexStateMetadataKey: indexStateReady,
 		indexStartedAtKey:     startTime.Format(time.RFC3339),
 		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
@@ -292,6 +297,41 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// AllowRootChange lets the next indexing runs replace an index built from
+// another root. Only an explicit operator request should set it.
+func (re *Engine) AllowRootChange() {
+	re.indexMu.Lock()
+	defer re.indexMu.Unlock()
+	re.allowRootChange = true
+}
+
+// checkIndexRoot (T161) refuses a run that would wipe an index built from
+// another root. Indexed paths are relative to the root, so another project's
+// files look deleted, and a server merely started there would remove them.
+//
+// A changed root alone is not enough: a moved repository keeps its relative
+// paths and has nothing to lose. An index with no recorded root predates the
+// stamp and is judged the same way.
+func (re *Engine) checkIndexRoot(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
+	if re.allowRootChange {
+		return nil
+	}
+	oldRoot, _ := re.vecService.store.GetMetadata(indexRootMetadataKey)
+	if oldRoot == re.repoRoot {
+		return nil
+	}
+	_, toRemove := re.calculateIndexChanges(currentDocs, indexedFiles, false)
+	if len(toRemove)*2 <= len(indexedFiles) {
+		return nil
+	}
+	if oldRoot == "" {
+		oldRoot = "an unrecorded root"
+	}
+	return fmt.Errorf("refusing to index %s: the index was built from %s and this run would remove %d of its %d files; "+
+		"give this project its own MCP_DATA_PATH, or run `agent-memory-mcp index --allow-root-change` to replace the index",
+		re.repoRoot, oldRoot, len(toRemove), len(indexedFiles))
 }
 
 func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) (toAdd []document, toRemove []string) {

@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Starting the server in another project silently wiped the RAG index** — indexed paths are relative to the root and the root itself was not recorded, so with a shared `MCP_DATA_PATH` another project's files looked deleted. `index` removed them, and so did the auto-index run of a server that was merely started there, with no error either way. The index now records its root (`index_root`), and a run from a different or unrecorded root that would remove more than half of the indexed files is refused, with both roots named. A moved repository keeps its relative paths and passes; deleting documents under the same root is unaffected. `index --allow-root-change` replaces the index deliberately.
 - **A launched server could bind the background service's port instead of talking to the agent** — the client launcher (`config`, and now `setup <agent>`) ran the binary from the project root, where the config chain also merges the Homebrew `config.env`, which sets `MCP_HTTP_MODE=http` for the service. The agent's process then tried to bind `:18080`, collided with the service, and never answered over stdio. The launcher now sets `MCP_HTTP_MODE=stdio` in the environment, which wins over every config file.
 
 ### Security

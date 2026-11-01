@@ -346,6 +346,7 @@ func runSearch(args []string) error {
 // runIndex handles the "index" subcommand (RAG reindex).
 func runIndex(args []string) error {
 	ctx := newCommandCtx("index", args)
+	allowRootChange := ctx.fs.Bool("allow-root-change", false, "Replace an index built from another root")
 	if err := ctx.parse(args); err != nil {
 		return err
 	}
@@ -355,6 +356,9 @@ func runIndex(args []string) error {
 		return err
 	}
 	defer engine.Stop()
+	if *allowRootChange {
+		engine.AllowRootChange()
+	}
 
 	fmt.Println("Indexing documents...")
 	start := time.Now()

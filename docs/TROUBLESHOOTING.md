@@ -21,6 +21,13 @@ agent-memory-mcp reembed          # re-embed stored memories
 agent-memory-mcp stats -json      # check how many memories still belong to older models
 ```
 
+### "refusing to index … the index was built from …"
+
+The RAG index belongs to another project: this run shares its `MCP_DATA_PATH` and would remove most of its files. Nothing was changed. While it is refused, search in this project still returns the other project's documents.
+
+- to keep both indexes, give this project its own `MCP_DATA_PATH` (in its `.env`)
+- to replace the index on purpose, run `agent-memory-mcp index --allow-root-change`
+
 ### "address already in use" — port `18080` taken
 
 Another `agent-memory-mcp` (or unrelated service) holds the port:
