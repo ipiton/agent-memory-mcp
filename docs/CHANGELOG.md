@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`setup <agent>` registers the server in the agent's own config** — `claude-code`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`. Before, `setup` only wrote Claude Code hooks and `config` printed a snippet for three clients to paste by hand. It is a dry run by default and prints the entry it would add; `--yes` writes. The existing file keeps its other servers, keys and key order, a timestamped backup is written next to it, and a second run reports "already configured". An entry with the same name that launches something else is left alone unless `--force`, which replaces only its launch command and keeps the rest, such as Codex per-tool approval modes. JSON with comments is refused rather than rewritten. A bare `setup` still installs the Claude Code hooks.
+
+### Changed
+
+- **README is a one-page overview** (1445 → 142 lines): what it is, how it differs, install, `setup <agent>`, three examples, and links. The reference moved to `docs/` verbatim: `INSTALLATION.md`, `CONFIGURATION.md`, `CLI.md`, `WORKFLOWS.md`, `FEATURES.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`; the tool catalog joined the JSON examples in `MCP_TOOLS.md`. A section for the comparison with other memory servers is reserved until it is measured.
+
+### Fixed
+
+- **A launched server could bind the background service's port instead of talking to the agent** — the client launcher (`config`, and now `setup <agent>`) ran the binary from the project root, where the config chain also merges the Homebrew `config.env`, which sets `MCP_HTTP_MODE=http` for the service. The agent's process then tried to bind `:18080`, collided with the service, and never answered over stdio. The launcher now sets `MCP_HTTP_MODE=stdio` in the environment, which wins over every config file.
+
 ### Security
 
 - **A caller could make a record trusted without `promote_to_canonical`** — the T77 promotion gate trusts `provenance` = `verified`/`external`, but `provenance` was an ordinary metadata key: `update_memory` merged any map, and `close_session` / `analyze_session` / `review_session_changes` / `accept_session_changes` copied theirs into the records they write. Setting `canonical=true`, `knowledge_layer=canonical`, or a `lifecycle_status`/`status` of `canonical`, which `store_decision`, `store_incident` and the other engineering tools also accept through `status`, made a record canonical outright, so it never reached the gate. One call was enough, and an agent could be talked into it by an instruction planted in a page. These tools now refuse to set server-owned trust keys (`provenance`, `canonical`, `knowledge_layer`, `canonical_promoted_at`, `last_verified_at`) or a canonical status, and the error says why. Removing such a key with an empty value in `update_memory` still works, because removal only lowers trust. Measured on the three live banks before the fix: no `external` provenance anywhere, and every canonical record carries the `canonical_promoted_at` stamp of a real promotion. No legitimate writer is broken, and no record needs cleanup.
