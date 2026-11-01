@@ -29,10 +29,38 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+  # T160: первый запуск опубликованного архива, а не собранного из исходников.
+  # Красная джоба не отменяет релиз и формулу в тапе, но не пускает его в реестр.
+  smoke-published:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download the published archive and verify its checksum
+        run: |
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          mkdir published
+          gh release download "$GITHUB_REF_NAME" --dir published \
+            --pattern "agent-memory-mcp-*-$OS-$ARCH.tar.gz" --pattern '*_checksums.txt'
+          (cd published && grep -- "-$OS-$ARCH.tar.gz" ./*_checksums.txt | shasum -a 256 -c -)
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: First run of the archive
+        run: ./scripts/release-smoke.sh published/agent-memory-mcp-*.tar.gz
+
   # Публикация записи в официальном MCP-реестре (registry.modelcontextprotocol.io).
   # Namespace io.github.ipiton/* подтверждается через GitHub OIDC — секреты не нужны.
   publish-registry:
-    needs: release
+    needs: smoke-published
     runs-on: ubuntu-latest
     permissions:
       id-token: write

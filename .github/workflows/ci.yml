@@ -56,3 +56,33 @@ jobs:
           install-only: true
       - name: Fail on an unexpected release-config deprecation
         run: ./scripts/check-goreleaser-deprecations.sh
+
+  # T160: first run of the archive goreleaser would publish, before there is a
+  # tag. A broken artifact caught after the tag is already in the Homebrew tap.
+  release-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Build snapshot artifacts
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+          args: release --snapshot --clean
+
+      - name: First run of the archive
+        run: |
+          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+          ./scripts/release-smoke.sh dist/agent-memory-mcp-*-"$OS"-"$ARCH".tar.gz

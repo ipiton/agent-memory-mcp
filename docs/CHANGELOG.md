@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`setup <agent>` registers the server in the agent's own config** — `claude-code`, `codex`, `cursor`, `gemini`, `opencode`, `vscode`, `windsurf`. Before, `setup` only wrote Claude Code hooks and `config` printed a snippet for three clients to paste by hand. It is a dry run by default and prints the entry it would add; `--yes` writes. The existing file keeps its other servers, keys and key order, a timestamped backup is written next to it, and a second run reports "already configured". An entry with the same name that launches something else is left alone unless `--force`, which replaces only its launch command and keeps the rest, such as Codex per-tool approval modes. JSON with comments is refused rather than rewritten. A bare `setup` still installs the Claude Code hooks.
 
+- **A release artifact is now run from scratch before and after the tag** — `scripts/release-smoke.sh` unpacks an archive into an empty environment, runs `setup`, then stores a record over stdio in one process and recalls it in the next, local-only and without a network. CI runs it on a goreleaser snapshot, and the release workflow on the published archive on macOS and Linux; a failure there holds back the MCP Registry entry.
+
 ### Changed
 
 - **README is a one-page overview** (1445 → 142 lines): what it is, how it differs, install, `setup <agent>`, three examples, and links. The reference moved to `docs/` verbatim: `INSTALLATION.md`, `CONFIGURATION.md`, `CLI.md`, `WORKFLOWS.md`, `FEATURES.md`, `ARCHITECTURE.md`, `TROUBLESHOOTING.md`; the tool catalog joined the JSON examples in `MCP_TOOLS.md`. A section for the comparison with other memory servers is reserved until it is measured.
