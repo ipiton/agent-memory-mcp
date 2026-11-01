@@ -57,7 +57,7 @@ When no command is given (or flags start with `-`), the binary starts the MCP se
 | `list` | List memories (`-type`, `-context`, `-limit`, `-json`) |
 | `delete` | Delete a memory by ID (positional) |
 | `search` | RAG hybrid search with trust metadata (positional query, `-limit`, `-source-type`, `-debug`, `-json`) |
-| `index` | Re-index documents for RAG |
+| `index` | Re-index documents for RAG (`--allow-root-change` replaces an index built from another root) |
 | `close-session` | Analyze an end-of-session summary and produce a close-session report (`-summary`, `-stdin`, `-mode`, `-context`, `-service`, `-tags`, `-metadata`, `-started-at`, `-ended-at`, `-raw-only`, `-json`) |
 | `review-session` | Review-oriented alias for `close-session` with the same inputs and report surface |
 | `accept-session` | Save the raw summary and auto-apply low-risk session changes (`-summary`, `-stdin`, `-mode`, `-context`, `-service`, `-tags`, `-metadata`, `-started-at`, `-ended-at`, `-raw-only`, `-json`) |
