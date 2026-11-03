@@ -113,3 +113,18 @@ func TestMaxChunksPerDocDefault(t *testing.T) {
 		t.Errorf("MaxChunksPerDoc = %d, want 0 (cap disabled)", cfg.RAG.MaxChunksPerDoc)
 	}
 }
+
+func TestToolProfileMustBeKnown(t *testing.T) {
+	t.Setenv("MCP_TOOL_PROFILE", "cor")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("a misspelled profile was accepted")
+	}
+	t.Setenv("MCP_TOOL_PROFILE", " Core ")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if cfg.ToolProfile != ToolProfileCore {
+		t.Fatalf("ToolProfile = %q", cfg.ToolProfile)
+	}
+}

@@ -35,6 +35,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_MAX_SEARCH_RESULTS` | `200` | Hard cap for `repo_search` result count |
 | `MCP_MAX_DEPTH` | `3` | Max directory recursion depth for `repo_list` |
 | `MCP_STDIO_MODE` | `line` | Stdio framing: `line` (newline-delimited) or `lsp` (Content-Length headers) |
+| `MCP_TOOL_PROFILE` | `full` | `core` offers and accepts 17 tools chosen from real usage: search, memory, typed memory and session review. A call to anything else is refused on the server, not only hidden from `tools/list`. `full` is every tool. The Claude Code plugin sets `core` |
 | `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (~42% smaller, 41→8 tools). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. See [Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency) |
 | `MCP_MEMORY_ENABLED` | `true` | Enable memory tools |
 | `MCP_MEMORY_PREVIEW_RUNES` | `0` | Override the per-surface truncation cap (rune-based) for memory content/summary fields in MCP tool responses (`recall_memory`, `list_memories`, `search_runbooks`, …). `0` keeps the built-in caps (150/220/300); a positive value forces that single cap on all surfaces; a negative value disables truncation (full text). |

@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/stats"
 )
 
@@ -57,6 +58,35 @@ var hybridTools = map[string]bool{
 	"search_runbooks":           true,
 	"recall_similar_incidents":  true,
 	"summarize_project_context": true,
+}
+
+// coreTools is the core profile (T166), taken from 10 269 calls in agent
+// transcripts on 2026-11-03: everything agents reach for regularly, minus the
+// steward and bank-maintenance tools that scheduled jobs call. store_incident,
+// update_memory and promote_to_canonical are rare but keep the set whole, without
+// them a recall or an edit in the set would have nothing to work on.
+var coreTools = map[string]bool{
+	"semantic_search":            true,
+	"index_documents":            true,
+	"store_memory":               true,
+	"recall_memory":              true,
+	"update_memory":              true,
+	"delete_memory":              true,
+	"list_memories":              true,
+	"memory_stats":               true,
+	"store_decision":             true,
+	"store_incident":             true,
+	"recall_similar_incidents":   true,
+	"search_runbooks":            true,
+	"recall_canonical_knowledge": true,
+	"promote_to_canonical":       true,
+	"close_session":              true,
+	"review_session_changes":     true,
+	"accept_session_changes":     true,
+}
+
+func (s *MCPServer) toolInProfile(name string) bool {
+	return s.config.ToolProfile != config.ToolProfileCore || coreTools[name]
 }
 
 type toolHandler func(args map[string]any) (any, *rpcError)
@@ -148,6 +178,11 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	handler, ok := s.toolHandlers[name]
 	if !ok {
 		rErr := &rpcError{Code: rpcErrMethodNotFound, Message: fmt.Sprintf("unknown tool: %s", name)}
+		s.logToolEvent(name, req.Arguments, start, rErr)
+		return nil, rErr
+	}
+	if !s.toolInProfile(name) {
+		rErr := &rpcError{Code: rpcErrMethodNotFound, Message: fmt.Sprintf("tool %s is not in the %s profile; set MCP_TOOL_PROFILE=%s to use it", name, s.config.ToolProfile, config.ToolProfileFull)}
 		s.logToolEvent(name, req.Arguments, start, rErr)
 		return nil, rErr
 	}

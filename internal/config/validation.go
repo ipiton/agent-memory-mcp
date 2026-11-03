@@ -34,6 +34,11 @@ func validateResolvedConfig(cfg Config) error {
 	if cfg.Embeddings.MaxRetries < 0 {
 		return fmt.Errorf("MCP_EMBEDDING_MAX_RETRIES must be 0 or greater")
 	}
+	// Refused rather than defaulted: a typo must not silently widen the set of
+	// tools a restricted installation exposes.
+	if cfg.ToolProfile != "" && cfg.ToolProfile != ToolProfileFull && cfg.ToolProfile != ToolProfileCore {
+		return fmt.Errorf("MCP_TOOL_PROFILE must be %q or %q: %q", ToolProfileCore, ToolProfileFull, cfg.ToolProfile)
+	}
 	if err := validateAllowedPaths(cfg.RootPath, cfg.AllowedPaths); err != nil {
 		return err
 	}
