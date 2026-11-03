@@ -2,8 +2,11 @@ package embedder
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.uber.org/zap"
@@ -38,7 +41,7 @@ func (a ollamaAdapter) embed(ctx context.Context, text, _ string) ([]float32, er
 		var response ollamaEmbeddingResponse
 		err := a.embedder.postJSON(ctx, a.singleEndpoint(), nil, payload, &response)
 		if err != nil {
-			if attempt < a.embedder.config.MaxRetries {
+			if attempt < a.embedder.config.MaxRetries && modelMayBeLoading(err) {
 				continue
 			}
 			return nil, fmt.Errorf("ollama %s request failed: %w", a.model, err)
@@ -90,7 +93,7 @@ func (a ollamaAdapter) embedSubBatch(ctx context.Context, texts []string) ([][]f
 		var response ollamaBatchEmbeddingResponse
 		err := a.embedder.postJSON(ctx, a.batchEndpoint(), nil, payload, &response)
 		if err != nil {
-			if attempt < a.embedder.config.MaxRetries {
+			if attempt < a.embedder.config.MaxRetries && modelMayBeLoading(err) {
 				continue
 			}
 			return nil, fmt.Errorf("ollama %s batch request failed: %w", a.model, err)
@@ -125,6 +128,17 @@ func (a ollamaAdapter) singleEndpoint() string {
 
 func (a ollamaAdapter) batchEndpoint() string {
 	return strings.TrimRight(a.embedder.config.OllamaBaseURL, "/") + "/api/embed"
+}
+
+// modelMayBeLoading tells a failure worth waiting out from one that will not pass
+// by itself: nothing listening, or a server without this model. On a machine with
+// no model, waiting would delay every write and search that goes on without vectors.
+func modelMayBeLoading(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return false
+	}
+	var status *providerStatusError
+	return !errors.As(err, &status) || status.status != http.StatusNotFound
 }
 
 func (a ollamaAdapter) waitRetry(ctx context.Context, message string, attempt int) error {

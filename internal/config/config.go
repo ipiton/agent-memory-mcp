@@ -130,6 +130,11 @@ type RAGConfig struct {
 	// result list, so a top-5 does not collapse into two files (T127).
 	// 0 disables the cap. MCP_RAG_MAX_CHUNKS_PER_DOC.
 	MaxChunksPerDoc int
+	// KeywordFallback lets the index and search work without any embedding model:
+	// a fresh index stores text only and queries fall back to keywords. Off by
+	// default, because an outage must not replace good vectors on an installation
+	// that has a model. MCP_RAG_KEYWORD_FALLBACK.
+	KeywordFallback bool
 }
 
 // EmbeddingsConfig holds embedding provider + transport settings.
@@ -361,6 +366,7 @@ type envValues struct {
 	ragFusion                        string
 	ragRRFK                          int
 	ragMaxChunksPerDoc               int
+	ragKeywordFallback               bool
 	tripleExtractorEnabled           bool
 	tripleExtractorBaseURL           string
 	tripleExtractorAPIKey            string
@@ -462,6 +468,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		ragFusion:                        s.String("MCP_RAG_FUSION", "weighted"),
 		ragRRFK:                          s.Int("MCP_RAG_RRF_K", 60),
 		ragMaxChunksPerDoc:               s.Int("MCP_RAG_MAX_CHUNKS_PER_DOC", DefaultMaxChunksPerDoc),
+		ragKeywordFallback:               s.Bool("MCP_RAG_KEYWORD_FALLBACK", false),
 		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
 		tripleExtractorBaseURL:           s.String("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
 		tripleExtractorAPIKey:            s.String("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
@@ -629,6 +636,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			Fusion:            NormalizeFusion(ev.ragFusion),
 			RRFK:              ev.ragRRFK,
 			MaxChunksPerDoc:   ev.ragMaxChunksPerDoc,
+			KeywordFallback:   ev.ragKeywordFallback,
 		},
 
 		Embeddings: EmbeddingsConfig{

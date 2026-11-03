@@ -24,7 +24,7 @@ import (
 // startup — then drops every chunk whose file is not tracked. The first version
 // of this repair did exactly that and took 746 documents out of search until
 // someone happened to re-index. Keeping the row keeps the old chunks answering
-// queries (sanitized by loadChunksToMemory) until the new ones replace them.
+// queries (sanitized when read) until the new ones replace them.
 //
 // Gated on PRAGMA user_version so it runs once.
 
@@ -34,24 +34,25 @@ import (
 const utf8ChunkRepairVersion = 1
 
 // markInvalidUTF8DocumentsForReindexOnce forces a re-chunk of every document
-// holding an invalid-UTF-8 chunk, once. Returns the number of documents marked.
-func markInvalidUTF8DocumentsForReindexOnce(db *sql.DB) (int, error) {
+// holding an invalid-UTF-8 chunk, once. Returns the number of documents marked
+// and of invalid chunks found.
+func markInvalidUTF8DocumentsForReindexOnce(db *sql.DB) (int, int, error) {
 	var version int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if version >= utf8ChunkRepairVersion {
-		return 0, nil
+		return 0, 0, nil
 	}
 
-	marked, err := markInvalidUTF8DocumentsForReindex(db)
+	marked, invalid, err := markInvalidUTF8DocumentsForReindex(db)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, utf8ChunkRepairVersion)); err != nil {
-		return marked, err
+		return marked, invalid, err
 	}
-	return marked, nil
+	return marked, invalid, nil
 }
 
 // markInvalidUTF8DocumentsForReindex clears the stored hash of documents with at
@@ -59,53 +60,55 @@ func markInvalidUTF8DocumentsForReindexOnce(db *sql.DB) (int, error) {
 // them. It collects the paths and closes the cursor before writing: modernc
 // SQLite cannot write while a SELECT cursor is open on the same connection (the
 // same constraint T87 hit).
-func markInvalidUTF8DocumentsForReindex(db *sql.DB) (int, error) {
+func markInvalidUTF8DocumentsForReindex(db *sql.DB) (int, int, error) {
 	rows, err := db.Query(`SELECT doc_path, content, title FROM chunks`)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	affected := make(map[string]struct{})
+	invalid := 0
 	for rows.Next() {
 		var docPath, content string
 		var title sql.NullString
 		if err := rows.Scan(&docPath, &content, &title); err != nil {
 			_ = rows.Close()
-			return 0, err
+			return 0, 0, err
 		}
 		if utf8.ValidString(content) && (!title.Valid || utf8.ValidString(title.String)) {
 			continue
 		}
+		invalid++
 		affected[docPath] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, err
+		return 0, 0, err
 	}
 	if err := rows.Close(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if len(affected) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	tx, err := db.Begin()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	stmt, err := tx.Prepare(`UPDATE indexed_files SET hash = '' WHERE file_path = ?`)
 	if err != nil {
 		_ = tx.Rollback()
-		return 0, err
+		return 0, 0, err
 	}
 	defer func() { _ = stmt.Close() }()
 	for docPath := range affected {
 		if _, err := stmt.Exec(docPath); err != nil {
 			_ = tx.Rollback()
-			return 0, err
+			return 0, 0, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return len(affected), nil
+	return len(affected), invalid, nil
 }
