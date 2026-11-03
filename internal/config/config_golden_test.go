@@ -137,6 +137,7 @@ func serializeConfigForGolden(c Config) string {
 	p("RAG.ChunkSize", c.RAG.ChunkSize)
 	p("RAG.ChunkOverlap", c.RAG.ChunkOverlap)
 	p("RAG.KeepNoise", c.RAG.KeepNoise)
+	p("RAG.IndexRoot", c.RAG.IndexRoot)
 	p("RAG.KeywordFallback", c.RAG.KeywordFallback)
 	p("RAG.AutoIndex", c.RAG.AutoIndex)
 	p("RAG.FileWatcher", c.RAG.FileWatcher)

@@ -23,7 +23,7 @@ func keywordIDs(t *testing.T, s *SQLiteStore, query string) []string {
 
 func keywordRowCounts(t *testing.T, s *SQLiteStore) (chunks, indexed int) {
 	t.Helper()
-	if err := s.db.QueryRow(keywordCountsQuery).Scan(&chunks, &indexed); err != nil {
+	if err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM chunks), (SELECT COUNT(*) FROM `+ftsTable+`_docsize)`).Scan(&chunks, &indexed); err != nil {
 		t.Fatalf("count rows: %v", err)
 	}
 	return chunks, indexed
@@ -89,6 +89,36 @@ func TestKeywordIndexIsRebuiltWhenCountsDisagree(t *testing.T) {
 	defer func() { _ = reopened.Close() }()
 	if ids := keywordIDs(t, reopened, "missed"); len(ids) != 1 || ids[0] != "b" {
 		t.Fatalf("got %v, want [b]", ids)
+	}
+}
+
+func TestKeywordIndexIsRebuiltAfterOneForOneReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	first, err := NewSQLiteStore(path, 3, zap.NewNop())
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := first.Upsert([]Chunk{{ID: "a", DocPath: "a.md", Content: "before", Embedding: []float32{1, 0, 0}}}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	// An old binary re-indexes a document: the count stays, the row is new.
+	if _, err := first.db.Exec(`INSERT OR REPLACE INTO chunks (id, doc_path, content, embedding) VALUES ('a', 'a.md', 'after', x'')`); err != nil {
+		t.Fatalf("replace behind the index: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(path, 3, zap.NewNop())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if ids := keywordIDs(t, reopened, "after"); len(ids) != 1 {
+		t.Errorf("new text not found: %v", ids)
+	}
+	if ids := keywordIDs(t, reopened, "before"); len(ids) != 0 {
+		t.Errorf("old text still found: %v", ids)
 	}
 }
 
