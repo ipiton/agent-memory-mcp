@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -406,5 +407,33 @@ func TestOllamaNotDefaultedWhenLlamaCPPConfigured(t *testing.T) {
 	}
 	if e2.config.OllamaBaseURL != defaultOllamaBaseURL {
 		t.Fatalf("Ollama should default when no other backend is set, got %q", e2.config.OllamaBaseURL)
+	}
+}
+
+func TestAbsentModelIsNotRetried(t *testing.T) {
+	refused := httptest.NewServer(http.NotFoundHandler())
+	refused.Close()
+	noModel := httptest.NewServer(http.NotFoundHandler())
+	defer noModel.Close()
+
+	for name, url := range map[string]string{"nothing listening": refused.URL, "server without the model": noModel.URL} {
+		t.Run(name, func(t *testing.T) {
+			emb, err := New(Config{OllamaBaseURL: url, Mode: "local-only", MaxRetries: 2, Dimension: 2, Timeout: time.Second}, zap.NewNop())
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+
+			began := time.Now()
+			if _, err := emb.EmbedDetailed(context.Background(), "text"); err == nil {
+				t.Fatal("embedding succeeded")
+			}
+			if _, err := emb.BatchEmbedDetailed(context.Background(), []string{"text"}); err == nil {
+				t.Fatal("batch embedding succeeded")
+			}
+			// The first retry alone would wait two seconds.
+			if elapsed := time.Since(began); elapsed > time.Second {
+				t.Fatalf("took %s, retried", elapsed)
+			}
+		})
 	}
 }

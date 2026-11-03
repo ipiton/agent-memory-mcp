@@ -127,9 +127,24 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 }
 
 // RunStdio runs the server in stdio mode, reading JSON-RPC requests from stdin.
-func RunStdio(server *MCPServer) error {
-	reader := bufio.NewReader(os.Stdin)
-	writer := bufio.NewWriter(os.Stdout)
+// It returns when stdin closes or ctx is cancelled, whichever comes first. A
+// read on stdin cannot be interrupted, so the loop runs in its own goroutine
+// and is abandoned on cancellation: the caller is about to exit anyway, and
+// waiting for it would keep a client's SIGTERM from reaching Shutdown (T172).
+func RunStdio(ctx context.Context, server *MCPServer) error {
+	done := make(chan error, 1)
+	go func() { done <- serveStdio(server, os.Stdin, os.Stdout) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
+	reader := bufio.NewReader(in)
+	writer := bufio.NewWriter(out)
 
 	for {
 		payload, mode, err := readMessage(reader)

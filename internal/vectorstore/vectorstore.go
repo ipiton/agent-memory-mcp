@@ -75,25 +75,35 @@ type IndexStateUpdate struct {
 	DeleteFilePaths []string
 }
 
-// SQLiteStore implements Store using SQLite with in-memory cosine similarity search.
+// SQLiteStore implements Store using SQLite, FTS5 for keywords and in-memory
+// cosine similarity for vectors. Only the vectors live in memory, and only once
+// a vector search has asked for them: a process that answers keyword queries, or
+// runs without a model, never pays for them (T163).
 type SQLiteStore struct {
-	db                 *sql.DB
-	logger             *zap.Logger
-	mu                 sync.RWMutex
-	chunks             map[string]*Chunk
-	keywordDocs        map[string]keywordDocStats
-	keywordPostings    map[string]map[string]int
-	totalKeywordTokens int
-	// invalidUTF8Chunks counts chunks sanitized at load because they were cut
-	// mid-rune by the pre-T118 splitter. Reported so the next such share is
-	// found by a number rather than by accident.
+	db     *sql.DB
+	logger *zap.Logger
+	mu     sync.RWMutex
+	// chunks holds vectors and identity for semantic search, without Content:
+	// the text is read from disk for the chunks a search returns.
+	chunks        map[string]*Chunk
+	vectorsLoaded bool
+	// invalidUTF8Chunks counts chunks cut mid-rune by the pre-T118 splitter,
+	// found by the one-time sweep. Reported so the next such share is found by a
+	// number rather than by accident.
 	invalidUTF8Chunks int
-	// loadedIndexVersion is the index version the in-memory maps were built
-	// from, so a process can tell whether someone else has re-indexed since.
+	// loadedIndexVersion is the index version this process last caught up with,
+	// so it can tell whether someone else has re-indexed since.
 	loadedIndexVersion string
-	// refreshMu serializes the check-and-reload in RefreshIfStale so parallel
-	// searches do not each rebuild the same maps.
+	// refreshMu serializes loading the vectors and the check-and-reload in
+	// RefreshIfStale so parallel searches do not each rebuild the same map.
 	refreshMu sync.Mutex
+	// ftsReady closes once the keyword index is usable; ftsErr is set before that
+	// if it could not be built.
+	ftsReady chan struct{}
+	ftsErr   error
+	// backfill tracks the background build so Close does not pull the database
+	// out from under it.
+	backfill sync.WaitGroup
 }
 
 // indexVersionKey is the metadata key the indexer stamps in the same
@@ -148,31 +158,33 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 	}
 
 	store := &SQLiteStore{
-		db:              db,
-		logger:          logger,
-		chunks:          make(map[string]*Chunk),
-		keywordDocs:     make(map[string]keywordDocStats),
-		keywordPostings: make(map[string]map[string]int),
+		db:       db,
+		logger:   logger,
+		chunks:   make(map[string]*Chunk),
+		ftsReady: make(chan struct{}),
 	}
 
 	if err := store.validateDimension(dimension); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	store.loadedIndexVersion = store.readIndexVersion()
 
-	if err := store.loadChunksToMemory(); err != nil {
+	keywordIndexReady, err := store.prepareKeywordIndex()
+	if err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("failed to load chunks: %w", err)
+		return nil, fmt.Errorf("failed to prepare keyword index: %w", err)
 	}
 
 	// T118: documents whose chunks were cut mid-rune are queued for re-chunking
 	// before the orphan sweep, so one index pass fixes both.
-	if marked, err := markInvalidUTF8DocumentsForReindexOnce(db); err != nil {
+	if marked, invalid, err := markInvalidUTF8DocumentsForReindexOnce(db); err != nil {
 		logger.Warn("Failed to queue invalid-UTF-8 documents for re-index", zap.Error(err))
 	} else if marked > 0 {
+		store.invalidUTF8Chunks = invalid
 		logger.Info("Queued documents for re-chunking after the T118 rune fix",
 			zap.Int("documents", marked),
-			zap.Int("invalid_chunks", store.InvalidUTF8Chunks()),
+			zap.Int("invalid_chunks", invalid),
 		)
 	}
 
@@ -182,8 +194,18 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		logger.Info("Startup orphan cleanup", zap.Int("removed", orphans))
 	}
 
+	// The first build after an upgrade takes tens of seconds on a large index.
+	// It runs behind the open so the MCP handshake is not held up by it; searches
+	// and writes wait on ftsReady instead.
+	if keywordIndexReady {
+		close(store.ftsReady)
+	} else {
+		store.backfill.Add(1)
+		go store.runKeywordBackfill()
+	}
+
 	logger.Info("Vector store initialized",
-		zap.Int("chunks_loaded", len(store.chunks)),
+		zap.Int("chunks", store.Count()),
 		zap.Int("dimension", dimension),
 	)
 
@@ -205,6 +227,15 @@ func (s *SQLiteStore) validateDimension(dimension int) error {
 	}
 
 	if storedDim != dimension {
+		// A keyword-only index holds no vectors, so its recorded dimension binds
+		// nothing: a model configured later must not be refused because of it.
+		var hasVectors bool
+		if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM chunks WHERE length(embedding) > 0)`).Scan(&hasVectors); err != nil {
+			return fmt.Errorf("failed to check stored vectors: %w", err)
+		}
+		if !hasVectors {
+			return s.SetMetadata("embedding_dimension", strconv.Itoa(dimension))
+		}
 		return fmt.Errorf(
 			"embedding dimension mismatch: index was built with %d dimensions but MCP_EMBEDDING_DIMENSION=%d. "+
 				"Either set MCP_EMBEDDING_DIMENSION=%d to match existing data, "+
@@ -216,7 +247,9 @@ func (s *SQLiteStore) validateDimension(dimension int) error {
 	return nil
 }
 
-func (s *SQLiteStore) loadChunksToMemory() error {
+// loadVectors reads the vectors into memory. Chunks without a vector (a
+// keyword-only index) stay out of the map and out of semantic search.
+func (s *SQLiteStore) loadVectors() error {
 	// Read the version before the rows. If an indexing run commits in between,
 	// the stamp kept here is the older one and the next search reloads once
 	// more; the reverse order would record a version newer than the data and
@@ -224,37 +257,27 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 	version := s.readIndexVersion()
 
 	rows, err := s.db.Query(`
-		SELECT id, doc_path, content, title, last_modified, embedding
+		SELECT id, doc_path, title, last_modified, embedding
 		FROM chunks
+		WHERE length(embedding) > 0
 	`)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.chunks = make(map[string]*Chunk)
-	invalid := 0
-	s.keywordDocs = make(map[string]keywordDocStats)
-	s.keywordPostings = make(map[string]map[string]int)
-	s.totalKeywordTokens = 0
-
+	loaded := make(map[string]*Chunk)
 	for rows.Next() {
 		var chunk Chunk
 		var embeddingBlob []byte
+		var title sql.NullString
 		var lastModified sql.NullTime
 
-		err := rows.Scan(
-			&chunk.ID, &chunk.DocPath, &chunk.Content, &chunk.Title,
-			&lastModified, &embeddingBlob,
-		)
-		if err != nil {
+		if err := rows.Scan(&chunk.ID, &chunk.DocPath, &title, &lastModified, &embeddingBlob); err != nil {
 			s.logger.Warn("Failed to scan chunk", zap.Error(err))
 			continue
 		}
-
+		chunk.Title = sanitizeUTF8(title.String)
 		if lastModified.Valid {
 			chunk.LastModified = lastModified.Time
 		}
@@ -264,29 +287,45 @@ func (s *SQLiteStore) loadChunksToMemory() error {
 			s.logger.Warn("Failed to decode embedding", zap.String("id", chunk.ID), zap.Error(err))
 			continue
 		}
-		if len(embedding) == 0 {
-			s.logger.Warn("Chunk has no embedding", zap.String("id", chunk.ID))
-			continue
-		}
 		chunk.Embedding = embedding
-
-		// T118 backstop: a store that has not been re-indexed since the
-		// rune-aware splitter landed still holds mid-rune chunks. Hand search a
-		// readable string, and count them — the 4.3% that were in the live index
-		// went unnoticed because nothing ever reported the number.
-		if !utf8.ValidString(chunk.Content) || !utf8.ValidString(chunk.Title) {
-			chunk.Content = sanitizeUTF8(chunk.Content)
-			chunk.Title = sanitizeUTF8(chunk.Title)
-			invalid++
-		}
-
-		s.chunks[chunk.ID] = &chunk
-		s.indexChunkKeywordsLocked(&chunk)
+		loaded[chunk.ID] = &chunk
 	}
-	s.invalidUTF8Chunks = invalid
-	s.loadedIndexVersion = version
+	if err := rows.Err(); err != nil {
+		return err
+	}
 
-	return rows.Err()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chunks = loaded
+	s.vectorsLoaded = true
+	s.loadedIndexVersion = version
+	return nil
+}
+
+// ensureVectors loads the vectors on the first semantic search.
+func (s *SQLiteStore) ensureVectors() error {
+	s.mu.RLock()
+	loaded := s.vectorsLoaded
+	s.mu.RUnlock()
+	if loaded {
+		return nil
+	}
+
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	s.mu.RLock()
+	loaded = s.vectorsLoaded
+	s.mu.RUnlock()
+	if loaded {
+		return nil
+	}
+	began := time.Now()
+	if err := s.loadVectors(); err != nil {
+		return fmt.Errorf("failed to load vectors: %w", err)
+	}
+	s.logger.Info("Vectors loaded", zap.Duration("took", time.Since(began)))
+	return nil
 }
 
 // readIndexVersion returns the version stamped by the last completed indexing
@@ -338,11 +377,12 @@ func (s *SQLiteStore) adoptIndexVersionLocked(before, after string) {
 	}
 }
 
-// RefreshIfStale reloads the in-memory copy when another process has re-indexed
-// since this one loaded it, and reports whether a reload happened.
+// RefreshIfStale catches up when another process has re-indexed since this one
+// last looked, and reports whether it did. Keyword search reads the disk and is
+// always current; what needs reloading are the vectors, if they are in memory.
 //
-// Search answers from maps built when the store was opened, but the database is
-// written by a different process — the indexing run the git hook starts after a
+// Semantic search answers from a map, but the database is written by a different
+// process — the indexing run the git hook starts after a
 // commit. Without this check a long-lived process (an MCP session, the resident
 // HTTP instance) keeps answering from the snapshot it started with: the commit
 // is in vectors.db, absent from the results, and nothing says so. Signals could
@@ -359,17 +399,25 @@ func (s *SQLiteStore) RefreshIfStale() (bool, error) {
 
 	s.mu.RLock()
 	loaded := s.loadedIndexVersion
+	vectorsLoaded := s.vectorsLoaded
 	s.mu.RUnlock()
 
 	if current == loaded {
 		return false, nil
 	}
 
-	if err := s.loadChunksToMemory(); err != nil {
-		return false, fmt.Errorf("failed to reload chunks after index change: %w", err)
+	if !vectorsLoaded {
+		s.mu.Lock()
+		s.loadedIndexVersion = current
+		s.mu.Unlock()
+		return true, nil
 	}
 
-	s.logger.Info("Reloaded in-memory index after external re-indexing",
+	if err := s.loadVectors(); err != nil {
+		return false, fmt.Errorf("failed to reload vectors after index change: %w", err)
+	}
+
+	s.logger.Info("Reloaded vectors after external re-indexing",
 		zap.String("previous_version", loaded),
 		zap.String("current_version", current),
 		zap.Int("chunks", s.Count()),
@@ -387,9 +435,9 @@ func sanitizeUTF8(s string) string {
 	return strings.ToValidUTF8(s, "�")
 }
 
-// InvalidUTF8Chunks reports how many loaded chunks carried invalid UTF-8 and
-// were sanitized for search (T118). Non-zero means the index predates the
-// rune-aware splitter and those documents are queued for re-chunking.
+// InvalidUTF8Chunks reports how many chunks the one-time sweep found with invalid
+// UTF-8 (T118). Non-zero means the index predates the rune-aware splitter and
+// those documents are queued for re-chunking; results are sanitized when read.
 func (s *SQLiteStore) InvalidUTF8Chunks() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -400,6 +448,9 @@ func (s *SQLiteStore) InvalidUTF8Chunks() int {
 func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 	if len(chunks) == 0 {
 		return nil
+	}
+	if err := s.waitKeywordIndex(); err != nil {
+		return err
 	}
 
 	tx, err := s.db.Begin()
@@ -419,14 +470,29 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 	defer func() { _ = stmt.Close() }()
 
 	for _, chunk := range chunks {
-		embeddingBlob := dbutil.EncodeEmbedding(chunk.Embedding)
+		// REPLACE gives the row a new rowid, so the old keyword row has to go
+		// first, while it can still be found.
+		if err := deleteKeywordRowByChunkID(tx, chunk.ID); err != nil {
+			return fmt.Errorf("failed to replace keyword row of chunk %s: %w", chunk.ID, err)
+		}
 
-		_, err = stmt.Exec(
+		embeddingBlob := dbutil.EncodeEmbedding(chunk.Embedding)
+		if embeddingBlob == nil {
+			embeddingBlob = []byte{} // a keyword-only chunk: empty, but NOT NULL holds
+		}
+		res, err := stmt.Exec(
 			chunk.ID, chunk.DocPath, chunk.Content, chunk.Title,
 			chunk.LastModified, embeddingBlob,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to upsert chunk %s: %w", chunk.ID, err)
+		}
+		rowid, err := res.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("failed to read rowid of chunk %s: %w", chunk.ID, err)
+		}
+		if err := insertKeywordRow(tx, rowid, chunk.Title, chunk.DocPath, chunk.Content); err != nil {
+			return fmt.Errorf("failed to index keywords of chunk %s: %w", chunk.ID, err)
 		}
 	}
 
@@ -437,14 +503,17 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if !s.vectorsLoaded {
+		return nil
+	}
 	for _, chunk := range chunks {
-		if _, exists := s.chunks[chunk.ID]; exists {
-			s.removeChunkKeywordsLocked(chunk.ID)
+		if len(chunk.Embedding) == 0 {
+			delete(s.chunks, chunk.ID)
+			continue
 		}
-
 		chunkCopy := chunk
+		chunkCopy.Content = ""
 		s.chunks[chunk.ID] = &chunkCopy
-		s.indexChunkKeywordsLocked(&chunkCopy)
 	}
 
 	return nil
@@ -452,6 +521,10 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 
 // DeleteByDocPath removes all chunks associated with the given document path.
 func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
+	if err := s.waitKeywordIndex(); err != nil {
+		return err
+	}
+
 	rows, err := s.db.Query("SELECT id FROM chunks WHERE doc_path = ?", docPath)
 	if err != nil {
 		return fmt.Errorf("failed to query chunks: %w", err)
@@ -472,14 +545,24 @@ func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
 		return nil
 	}
 
-	_, err = s.db.Exec("DELETE FROM chunks WHERE doc_path = ?", docPath)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("failed to begin delete transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM `+ftsTable+` WHERE rowid IN (SELECT rowid FROM chunks WHERE doc_path = ?)`, docPath); err != nil {
+		return fmt.Errorf("failed to delete keyword rows: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM chunks WHERE doc_path = ?", docPath); err != nil {
 		return fmt.Errorf("failed to delete chunks: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit delete: %w", err)
 	}
 
 	s.mu.Lock()
 	for _, id := range ids {
-		s.removeChunkKeywordsLocked(id)
 		delete(s.chunks, id)
 	}
 	s.mu.Unlock()
@@ -493,11 +576,22 @@ func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
 
 // Search finds the most similar chunks to the query embedding, ranked by cosine similarity.
 func (s *SQLiteStore) Search(queryEmbedding []float32, limit int) ([]SearchResult, error) {
+	if err := s.ensureVectors(); err != nil {
+		return nil, err
+	}
+	results := s.rankVectors(queryEmbedding, limit)
+	if err := s.loadContent(results); err != nil {
+		return nil, fmt.Errorf("failed to read chunk text: %w", err)
+	}
+	return results, nil
+}
+
+func (s *SQLiteStore) rankVectors(queryEmbedding []float32, limit int) []SearchResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	if len(s.chunks) == 0 {
-		return []SearchResult{}, nil
+		return []SearchResult{}
 	}
 
 	const minScore = 0.1
@@ -544,24 +638,42 @@ func (s *SQLiteStore) Search(queryEmbedding []float32, limit int) ([]SearchResul
 		return results[i].Score > results[j].Score
 	})
 
-	return results, nil
+	return results
 }
 
-// AllChunks returns a snapshot copy of all indexed chunks currently loaded in memory.
-func (s *SQLiteStore) AllChunks() ([]Chunk, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	chunks := make([]Chunk, 0, len(s.chunks))
-	for _, chunk := range s.chunks {
-		chunkCopy := *chunk
-		if chunk.Embedding != nil {
-			chunkCopy.Embedding = append([]float32(nil), chunk.Embedding...)
-		}
-		chunks = append(chunks, chunkCopy)
+// loadContent fills in the text of the chunks a search is returning.
+func (s *SQLiteStore) loadContent(results []SearchResult) error {
+	const batch = 500
+	byID := make(map[string]*SearchResult, len(results))
+	args := make([]any, len(results))
+	for i := range results {
+		byID[results[i].ID] = &results[i]
+		args[i] = results[i].ID
 	}
+	for start := 0; start < len(args); start += batch {
+		end := min(start+batch, len(args))
+		rows, err := s.db.Query(`SELECT id, content FROM chunks WHERE id IN (?`+strings.Repeat(",?", end-start-1)+`)`, args[start:end]...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id, content string
+			if err := rows.Scan(&id, &content); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			byID[id].Content = sanitizeUTF8(content)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-	return chunks, nil
+// AllChunks returns every indexed chunk, read from disk.
+func (s *SQLiteStore) AllChunks() ([]Chunk, error) {
+	return s.queryChunks(`SELECT id, doc_path, content, title, last_modified, embedding FROM chunks`)
 }
 
 // ChunksByDocPath returns every chunk currently indexed for the given
@@ -571,36 +683,63 @@ func (s *SQLiteStore) AllChunks() ([]Chunk, error) {
 // for completeness but most callers that just want to reassemble the source
 // text can ignore them.
 func (s *SQLiteStore) ChunksByDocPath(docPath string) ([]Chunk, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var chunks []Chunk
-	for _, chunk := range s.chunks {
-		if chunk.DocPath != docPath {
-			continue
-		}
-		chunkCopy := *chunk
-		if chunk.Embedding != nil {
-			chunkCopy.Embedding = append([]float32(nil), chunk.Embedding...)
-		}
-		chunks = append(chunks, chunkCopy)
+	chunks, err := s.queryChunks(`SELECT id, doc_path, content, title, last_modified, embedding FROM chunks WHERE doc_path = ?`, docPath)
+	if err != nil {
+		return nil, err
 	}
-
 	sort.Slice(chunks, func(i, j int) bool {
 		return chunks[i].ID < chunks[j].ID
 	})
 	return chunks, nil
 }
 
-// Count returns the number of chunks currently loaded in memory.
+func (s *SQLiteStore) queryChunks(query string, args ...any) ([]Chunk, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var chunks []Chunk
+	for rows.Next() {
+		var chunk Chunk
+		var title sql.NullString
+		var lastModified sql.NullTime
+		var embeddingBlob []byte
+		if err := rows.Scan(&chunk.ID, &chunk.DocPath, &chunk.Content, &title, &lastModified, &embeddingBlob); err != nil {
+			return nil, err
+		}
+		chunk.Content = sanitizeUTF8(chunk.Content)
+		chunk.Title = sanitizeUTF8(title.String)
+		if lastModified.Valid {
+			chunk.LastModified = lastModified.Time
+		}
+		if len(embeddingBlob) > 0 {
+			embedding, err := dbutil.DecodeEmbedding(embeddingBlob)
+			if err != nil {
+				s.logger.Warn("Failed to decode embedding", zap.String("id", chunk.ID), zap.Error(err))
+			} else {
+				chunk.Embedding = embedding
+			}
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, rows.Err()
+}
+
+// Count returns the number of indexed chunks.
 func (s *SQLiteStore) Count() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return len(s.chunks)
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM chunks`).Scan(&count); err != nil {
+		s.logger.Warn("Failed to count chunks", zap.Error(err))
+		return 0
+	}
+	return count
 }
 
 // Close closes the underlying SQLite database connection.
 func (s *SQLiteStore) Close() error {
+	s.backfill.Wait()
 	return s.db.Close()
 }
 

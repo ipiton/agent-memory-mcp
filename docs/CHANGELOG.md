@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code plugin** — `/plugin install agent-memory --marketplace ipiton/agent-memory-mcp` gives memory, search and session hooks with no Homebrew, model or service. The first server start downloads the release archive and checks it against checksums shipped with the plugin. Sets `MCP_DATA_SCOPE=project`, `MCP_TOOL_PROFILE=core` and `MCP_RAG_KEYWORD_FALLBACK=true`, and reads only its own config, so it never touches the bank of a Homebrew install. Hooks from `setup` take priority over the plugin's, which keeps a session from being captured twice. See [PLUGIN.md](PLUGIN.md).
+- **Search without an embedding model** — `MCP_RAG_KEYWORD_FALLBACK=true` indexes text only and answers by keywords, with `retrieval.keyword_only` and `retrieval.degraded` set. The index is rebuilt with vectors on the first start with a reachable model. Off by default.
+- **One database per project in the user directory** — `MCP_DATA_SCOPE=project` keeps data, logs and stats in `~/.local/share/agent-memory-mcp/projects/<name>-<hash>`, keyed by the repository's common `.git`. Worktrees share it, the data survives deleting a clone, and nothing is written into the repository. Unset keeps `<root>/data`.
+- **Tool profiles** — `MCP_TOOL_PROFILE=core` offers and accepts 17 tools chosen from 10 269 real calls. The default `full` is every tool.
+- **Credentials are checked on the write path** — provider tokens are refused and other credentials masked before a memory is stored.
+
+### Changed
+
+- **Keyword search moved to an FTS5 index, and vectors load on demand.** On a 110 000-chunk index a started server idles at 48 MB, down from hundreds of MB, and answers `initialize` in 0.2 s. The first vector query loads the vectors, about 2 s and 500 MB, and a project searched only by keywords never does. The first start after upgrading builds the keyword index in the background, holding the write lock for about 20 s on that index. Hit Rate@5 on the real corpus is unchanged at 0.964.
+
+### Fixed
+
+- **A stdio server stayed alive after SIGTERM while stdin was open**, and could outlive the agent that started it.
+- **A prompt injection could survive transcript summaries** when it shared a message with real text; such blocks are now dropped one by one.
+- **`context-inject` reported an error in a project's first session**, before anything had created the bank. It now prints nothing.
+- **An absent embedding model was retried as if it were still loading**, which delayed every search by the full retry budget. A refused connection and a 404 now fail at once.
+
 ## [0.14.0] - 2026-11-01
 
 ### Added

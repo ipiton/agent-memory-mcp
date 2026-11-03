@@ -135,6 +135,9 @@ func (s *MCPServer) availableToolDefs() []tool {
 	re := s.getRagEngine()
 	filtered := make([]tool, 0, len(tools))
 	for _, t := range tools {
+		if !s.toolInProfile(t.Name) {
+			continue
+		}
 		if re == nil && ragTools[t.Name] {
 			continue
 		}

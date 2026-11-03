@@ -43,6 +43,7 @@ func h13GoldenEnv(t *testing.T) {
 		"MCP_CHUNK_SIZE":                          "1500",
 		"MCP_CHUNK_OVERLAP":                       "150",
 		"MCP_RAG_KEEP_NOISE":                      "true",
+		"MCP_RAG_KEYWORD_FALLBACK":                "true",
 		"MCP_TRIPLE_EXTRACTOR_ENABLED":            "true",
 		"MCP_TRIPLE_EXTRACTOR_BASE_URL":           "http://te.local",
 		"MCP_TRIPLE_EXTRACTOR_API_KEY":            "te-key",
@@ -120,6 +121,7 @@ func serializeConfigForGolden(c Config) string {
 	p("DataPath", c.DataPath)
 	p("LogPath", c.LogPath)
 	p("ToolGrouping", c.ToolGrouping)
+	p("ToolProfile", c.ToolProfile)
 	p("Stats.Enabled", c.Stats.Enabled)
 	p("Stats.Path", c.Stats.Path)
 	p("Stats.SampleRate", c.Stats.SampleRate)
@@ -136,6 +138,8 @@ func serializeConfigForGolden(c Config) string {
 	p("RAG.ChunkSize", c.RAG.ChunkSize)
 	p("RAG.ChunkOverlap", c.RAG.ChunkOverlap)
 	p("RAG.KeepNoise", c.RAG.KeepNoise)
+	p("RAG.IndexRoot", c.RAG.IndexRoot)
+	p("RAG.KeywordFallback", c.RAG.KeywordFallback)
 	p("RAG.AutoIndex", c.RAG.AutoIndex)
 	p("RAG.FileWatcher", c.RAG.FileWatcher)
 	p("RAG.WatchInterval", c.RAG.WatchInterval)

@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/ipiton/agent-memory-mcp/internal/secrets"
 	"go.uber.org/zap"
 )
 
 // Store saves a new memory, generating an ID and embedding if not provided.
 func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	if err := m.Validate(); err != nil {
+		return err
+	}
+	if err := checkSecrets(&m.Content, m.Title, m.Context); err != nil {
 		return err
 	}
 
@@ -80,8 +84,28 @@ func (ms *Store) Store(ctx context.Context, m *Memory) error {
 	return nil
 }
 
+// ErrSecretDetected refuses a write that carries a provider token. The check runs
+// before the embedding call: a remote provider must not see the value either.
+var ErrSecretDetected = errors.New("memory content contains a secret")
+
+// checkSecrets refuses provider tokens anywhere in the text fields and masks
+// credential-shaped assignments in the content. The error names the provider and
+// never the value (T145).
+func checkSecrets(content *string, fields ...string) error {
+	for _, text := range append([]string{*content}, fields...) {
+		if name := secrets.FindProviderToken(text); name != "" {
+			return fmt.Errorf("%w: %s; remove it and store a reference to where it lives", ErrSecretDetected, name)
+		}
+	}
+	*content = secrets.RedactNote(*content)
+	return nil
+}
+
 // Update modifies an existing memory identified by id with the provided field updates.
 func (ms *Store) Update(ctx context.Context, id string, updates Update) error {
+	if err := checkSecrets(&updates.Content, updates.Title, updates.Context); err != nil {
+		return err
+	}
 	// T90 M1: re-embed before taking the write lock — see Store. The new
 	// content comes from the caller, so the provider call needs no lock, and
 	// holding one across it stalled every other writer.

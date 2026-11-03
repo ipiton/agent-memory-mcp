@@ -171,7 +171,7 @@ func runServe(args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "Server stopped gracefully\n")
 	} else {
-		if err := server.RunStdio(srv); err != nil {
+		if err := server.RunStdio(ctx, srv); err != nil {
 			return fmt.Errorf("mcp server stopped: %w", err)
 		}
 	}

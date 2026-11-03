@@ -1,0 +1,2 @@
+# Pinned by scripts/plugin-pin.sh from the checksums of the release named in
+# .claude-plugin/plugin.json. Empty until that release is published.

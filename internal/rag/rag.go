@@ -62,6 +62,9 @@ type RetrievalPath struct {
 	// EmbeddingFallbacks names the providers that failed before it.
 	EmbeddingProvider  string   `json:"embedding_provider,omitempty"`
 	EmbeddingFallbacks []string `json:"embedding_fallbacks,omitempty"`
+	// KeywordOnly is true when the semantic arm had nothing to contribute: the
+	// query could not be embedded, or the index was built without a model.
+	KeywordOnly bool `json:"keyword_only,omitempty"`
 	// Reranker is set when reranking actually reordered the results;
 	// RerankSkipped carries the reason when it did not.
 	Reranker      string `json:"reranker,omitempty"`
@@ -144,6 +147,9 @@ type docServiceConfig struct {
 	KeepNoise bool
 }
 
+// keywordOnlyMetadataKey marks an index built without an embedding model.
+const keywordOnlyMetadataKey = "keyword_only"
+
 type vecServiceConfig struct {
 	IndexPath  string
 	Embedder   embedder.Service
@@ -163,6 +169,9 @@ type vecServiceConfig struct {
 	// Strict makes every fallback on this path an error instead. See
 	// config.Config.RetrievalStrict (T99).
 	Strict bool
+	// KeywordFallback allows working without an embedding model. See
+	// config.RAGConfig.KeywordFallback.
+	KeywordFallback bool
 	// Fusion / RRFK select how the semantic and keyword arms are merged.
 	// See config.RAGConfig.Fusion (T124).
 	Fusion string
@@ -213,6 +222,9 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	}
 
 	repoRoot := cfg.RootPath
+	if cfg.RAG.IndexRoot != "" {
+		repoRoot = cfg.RAG.IndexRoot
+	}
 
 	indexDirs := cfg.RAG.IndexDirs
 	if len(indexDirs) == 0 {
@@ -297,6 +309,7 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		Fusion:          cfg.RAG.Fusion,
 		RRFK:            cfg.RAG.RRFK,
 		MaxChunksPerDoc: cfg.RAG.MaxChunksPerDoc,
+		KeywordFallback: cfg.RAG.KeywordFallback,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {

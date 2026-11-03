@@ -288,6 +288,40 @@ docker compose --env-file .env.shared up -d --build
 The MCP HTTP endpoint will be available at `http://localhost:18080/mcp`.
 
 By default, bare-metal HTTP mode now binds to `127.0.0.1`. For shared/container deployments, set `MCP_HTTP_HOST=0.0.0.0` and a bearer token.
+## Connect your agent
+
+Run this from the repository the agent should remember:
+
+| Agent | Command | Writes to |
+|---|---|---|
+| Claude Code | `agent-memory-mcp setup claude-code --yes` | `~/.claude.json` |
+| Codex | `agent-memory-mcp setup codex --yes` | `~/.codex/config.toml` |
+| Cursor | `agent-memory-mcp setup cursor --yes` | `~/.cursor/mcp.json` |
+| Gemini CLI | `agent-memory-mcp setup gemini --yes` | `~/.gemini/settings.json` |
+| OpenCode | `agent-memory-mcp setup opencode --yes` | `~/.config/opencode/opencode.json` |
+| VS Code | `agent-memory-mcp setup vscode --yes` | user `mcp.json` |
+| Windsurf | `agent-memory-mcp setup windsurf --yes` | `~/.codeium/windsurf/mcp_config.json` |
+
+Without `--yes` the command is a dry run and prints the entry it would add:
+
+```text
+$ agent-memory-mcp setup claude-code
+Claude Code: would create the file with server "memory" in /Users/you/.claude.json
++ {
++   "args": [
++     "-lc",
++     "cd '/path/to/repo' && MCP_HTTP_MODE=stdio exec '/opt/homebrew/bin/agent-memory-mcp'"
++   ],
++   "command": "/bin/sh",
++   "type": "stdio"
++ }
+Dry run: nothing written. Re-run with --yes to apply.
+```
+
+The existing config is kept as it is, other servers and keys included, and a timestamped backup is written next to it. Running the command again changes nothing. If a server with the same name already launches something else, the command stops; `--force` replaces only its launch command. Other flags: `--name`, `--root`, `--command`. Restart the agent afterwards.
+
+For Claude Code, `agent-memory-mcp setup` (no agent name) also installs the session hooks that capture knowledge automatically; see [Hooks](HOOKS.md).
+
 ## MCP client configuration
 
 Use the built-in generator to produce a project-local config that starts the server from your repo root.

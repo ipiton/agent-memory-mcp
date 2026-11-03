@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -78,6 +79,12 @@ func runContextInject(args []string) error {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
 		return err
+	}
+
+	// A project's first session starts before anything created its bank: there is
+	// nothing to inject, and a read-only open would report that as an error.
+	if _, err := os.Stat(cfg.Memory.DBPath); errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
 
 	// T89 M11: goes through dbutil so the reader gets busy_timeout. The old

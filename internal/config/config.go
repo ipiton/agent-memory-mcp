@@ -32,7 +32,7 @@ type Config struct {
 	MaxSearchResults int
 	MaxDepth         int
 	OutputMode       string
-	DataPath         string // Base path for all data (default: {RootPath}/data)
+	DataPath         string // Base path for all data (default: {RootPath}/data; with MCP_DATA_SCOPE=project, a per-repository directory under the user's)
 	LogPath          string // Path to diagnostic log file (default: {RootPath}/logs/mcp-diagnostics.log)
 
 	// ToolGrouping opts into the grouped MCP tool surface (T67). When true,
@@ -41,6 +41,10 @@ type Config struct {
 	// a client loads at initialize time. tools/call always accepts both legacy
 	// names and the grouped form regardless of this flag. Env: MCP_TOOL_GROUPING.
 	ToolGrouping bool
+	// ToolProfile limits the tools the server offers and accepts (T166): "core"
+	// keeps memory, search and session work, "full" (the default) is everything.
+	// MCP_TOOL_PROFILE.
+	ToolProfile string
 
 	// RetrievalStrict turns every silent degradation on the read path into a
 	// failed call: an embedding provider falling through to the next one, a
@@ -107,6 +111,7 @@ type RAGConfig struct {
 	Enabled           bool
 	MaxResults        int
 	IndexPath         string   // Path to RAG vector index (default: {DataPath}/rag-index)
+	IndexRoot         string   // Tree the index covers when it is not RootPath: the main checkout in project scope (T165)
 	IndexDirs         []string // Directories and files to index for RAG (relative to RootPath or absolute)
 	IndexExcludeDirs  []string // Directory names or repo-relative paths to exclude from RAG indexing
 	IndexExcludeGlobs []string // Glob patterns matched against slash-separated repo-relative paths
@@ -130,6 +135,11 @@ type RAGConfig struct {
 	// result list, so a top-5 does not collapse into two files (T127).
 	// 0 disables the cap. MCP_RAG_MAX_CHUNKS_PER_DOC.
 	MaxChunksPerDoc int
+	// KeywordFallback lets the index and search work without any embedding model:
+	// a fresh index stores text only and queries fall back to keywords. Off by
+	// default, because an outage must not replace good vectors on an installation
+	// that has a model. MCP_RAG_KEYWORD_FALLBACK.
+	KeywordFallback bool
 }
 
 // EmbeddingsConfig holds embedding provider + transport settings.
@@ -348,6 +358,8 @@ type envValues struct {
 	memoryEnabled                    bool
 	memoryPreviewRunes               int
 	dataPath                         string
+	dataScope                        string
+	xdgDataHome                      string
 	ragIndexPath                     string
 	memoryDBPath                     string
 	logPath                          string
@@ -361,6 +373,7 @@ type envValues struct {
 	ragFusion                        string
 	ragRRFK                          int
 	ragMaxChunksPerDoc               int
+	ragKeywordFallback               bool
 	tripleExtractorEnabled           bool
 	tripleExtractorBaseURL           string
 	tripleExtractorAPIKey            string
@@ -416,6 +429,7 @@ type envValues struct {
 	recallHalfLifeDays               float64
 	recallDecayTypes                 string
 	toolGrouping                     bool
+	toolProfile                      string
 	retrievalStrict                  bool
 	recallCentered                   bool
 }
@@ -449,6 +463,8 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		memoryEnabled:                    s.Bool("MCP_MEMORY_ENABLED", true),
 		memoryPreviewRunes:               s.Int("MCP_MEMORY_PREVIEW_RUNES", 0),
 		dataPath:                         s.String("MCP_DATA_PATH", ""),
+		dataScope:                        s.String("MCP_DATA_SCOPE", ""),
+		xdgDataHome:                      s.String("XDG_DATA_HOME", ""),
 		ragIndexPath:                     s.String("MCP_RAG_INDEX_PATH", ""),
 		memoryDBPath:                     s.String("MCP_MEMORY_DB_PATH", ""),
 		logPath:                          s.String("MCP_LOG_PATH", ""),
@@ -462,6 +478,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		ragFusion:                        s.String("MCP_RAG_FUSION", "weighted"),
 		ragRRFK:                          s.Int("MCP_RAG_RRF_K", 60),
 		ragMaxChunksPerDoc:               s.Int("MCP_RAG_MAX_CHUNKS_PER_DOC", DefaultMaxChunksPerDoc),
+		ragKeywordFallback:               s.Bool("MCP_RAG_KEYWORD_FALLBACK", false),
 		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
 		tripleExtractorBaseURL:           s.String("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
 		tripleExtractorAPIKey:            s.String("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
@@ -517,6 +534,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 0),
 		recallDecayTypes:                 s.String("MCP_RECALL_DECAY_TYPES", "working"),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
+		toolProfile:                      s.String("MCP_TOOL_PROFILE", ToolProfileFull),
 		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
 		recallCentered:                   s.Bool("MCP_RECALL_CENTERED", true),
 	}
@@ -545,7 +563,18 @@ func resolvePaths(ev envValues) (Config, error) {
 
 	allowed := splitAllowlist(ev.allow)
 
+	// Nothing in project scope may land in the repository by default.
+	projectScope := strings.EqualFold(ev.dataScope, DataScopeProject)
+	ragIndexRoot := ""
 	dataPath := ev.dataPath
+	if projectScope {
+		home, _ := os.UserHomeDir()
+		project := resolveProjectData(root, ev.xdgDataHome, home)
+		ragIndexRoot = project.indexRoot
+		if dataPath == "" {
+			dataPath = project.dataPath
+		}
+	}
 	if dataPath == "" {
 		dataPath = filepath.Join(root, "data")
 	} else if !filepath.IsAbs(dataPath) {
@@ -569,11 +598,17 @@ func resolvePaths(ev envValues) (Config, error) {
 	statsPath := ev.statsPath
 	if ev.statsEnabled && statsPath == "" {
 		statsPath = filepath.Join(root, "logs", "mcp-usage.jsonl")
+		if projectScope {
+			statsPath = filepath.Join(dataPath, "logs", "mcp-usage.jsonl")
+		}
 	}
 
 	logPath := ev.logPath
 	if logPath == "" {
 		logPath = filepath.Join(root, "logs", "mcp-diagnostics.log")
+		if projectScope {
+			logPath = filepath.Join(dataPath, "logs", "mcp-diagnostics.log")
+		}
 	} else if !filepath.IsAbs(logPath) {
 		logPath = filepath.Join(root, logPath)
 	}
@@ -596,6 +631,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		DataPath:         dataPath,
 		LogPath:          logPath,
 		ToolGrouping:     ev.toolGrouping,
+		ToolProfile:      strings.ToLower(strings.TrimSpace(ev.toolProfile)),
 		RetrievalStrict:  ev.retrievalStrict,
 		RecallCentered:   ev.recallCentered,
 
@@ -615,6 +651,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			Enabled:           ev.ragEnabled,
 			MaxResults:        ev.ragMaxResults,
 			IndexPath:         ragIndexPath,
+			IndexRoot:         ragIndexRoot,
 			IndexDirs:         indexDirsList,
 			IndexExcludeDirs:  indexExcludeDirs,
 			IndexExcludeGlobs: indexExcludeGlobs,
@@ -629,6 +666,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			Fusion:            NormalizeFusion(ev.ragFusion),
 			RRFK:              ev.ragRRFK,
 			MaxChunksPerDoc:   ev.ragMaxChunksPerDoc,
+			KeywordFallback:   ev.ragKeywordFallback,
 		},
 
 		Embeddings: EmbeddingsConfig{
@@ -1013,6 +1051,12 @@ const DefaultMaxChunksPerDoc = 1
 
 // NormalizeFusion maps MCP_RAG_FUSION onto the three modes the ranker knows,
 // falling back to the blended default the way every other enum here does.
+// Values of MCP_TOOL_PROFILE.
+const (
+	ToolProfileFull = "full"
+	ToolProfileCore = "core"
+)
+
 func NormalizeFusion(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "rrf":
