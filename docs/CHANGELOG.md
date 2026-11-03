@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-03
+
 ### Fixed
 
 - **Keyword search no longer breaks for good when another process holds the database.** The first-time index build gave up after 50 s of waiting for a write lock, and keyword search then failed until a restart. It showed up on the upgrade to 0.15.0 on a loaded machine, where several processes share one database. The build now waits for as long as the lock is held, and stops when the service stops. Other errors still end it at once.
