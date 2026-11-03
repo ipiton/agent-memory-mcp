@@ -44,7 +44,12 @@ const ftsSchema = `CREATE VIRTUAL TABLE IF NOT EXISTS ` + ftsTable + ` USING fts
 	tokenize='unicode61 remove_diacritics 0'
 )`
 
-const keywordCountsQuery = `SELECT (SELECT COUNT(*) FROM chunks), (SELECT COUNT(*) FROM ` + ftsTable + `_docsize)`
+// keywordIndexInStepQuery tells whether the table still matches chunks. Counts
+// alone would miss a build without the table replacing rows one for one, but every
+// replacement takes a new rowid, so the highest rowids part ways as well.
+const keywordIndexInStepQuery = `SELECT
+	(SELECT COUNT(*) FROM chunks) = (SELECT COUNT(*) FROM ` + ftsTable + `_docsize)
+	AND COALESCE((SELECT MAX(rowid) FROM chunks), 0) = COALESCE((SELECT MAX(id) FROM ` + ftsTable + `_docsize), 0)`
 
 type sqlExecer interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -201,8 +206,7 @@ func deleteKeywordRowByChunkID(q sqlExecer, id string) error {
 
 // prepareKeywordIndex creates the FTS table and returns false when it still has
 // to be filled from chunks: on the first open after an upgrade, after a change of
-// tokenization, or when the row counts disagree because a build that predates
-// the table wrote to chunks.
+// tokenization, or when a build that predates the table wrote to chunks.
 func (s *SQLiteStore) prepareKeywordIndex() (bool, error) {
 	if _, err := s.db.Exec(ftsSchema); err != nil {
 		return false, fmt.Errorf("create keyword index: %w", err)
@@ -211,14 +215,17 @@ func (s *SQLiteStore) prepareKeywordIndex() (bool, error) {
 	if err != nil && !errors.Is(err, ErrMetadataNotFound) {
 		return false, err
 	}
-	var chunks, indexed int
-	if err := s.db.QueryRow(keywordCountsQuery).Scan(&chunks, &indexed); err != nil {
+	var empty, inStep bool
+	if err := s.db.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM chunks)`).Scan(&empty); err != nil {
 		return false, err
 	}
-	if chunks == 0 && indexed == 0 {
+	if err := s.db.QueryRow(keywordIndexInStepQuery).Scan(&inStep); err != nil {
+		return false, err
+	}
+	if empty && inStep {
 		return true, s.SetMetadata(keywordIndexVersionKey, keywordIndexVersion)
 	}
-	return stored == keywordIndexVersion && chunks == indexed, nil
+	return stored == keywordIndexVersion && inStep, nil
 }
 
 // backfillKeywordIndex fills the table from chunks in one transaction, so a crash
@@ -238,11 +245,11 @@ func (s *SQLiteStore) backfillKeywordIndex() error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	var chunks, indexed int
-	if err := tx.QueryRow(keywordCountsQuery).Scan(&chunks, &indexed); err != nil {
+	var inStep bool
+	if err := tx.QueryRow(keywordIndexInStepQuery).Scan(&inStep); err != nil {
 		return err
 	}
-	if version == keywordIndexVersion && chunks == indexed {
+	if version == keywordIndexVersion && inStep {
 		return nil // another process finished it while this one waited for the lock
 	}
 	if _, err := tx.Exec(`DELETE FROM ` + ftsTable); err != nil {
