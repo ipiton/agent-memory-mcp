@@ -175,7 +175,10 @@ func textBlocks(raw json.RawMessage) string {
 	}
 	parts := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+		// Judged per block, not on the joined body: a reminder next to real
+		// text would otherwise pass, because the body starts with the text (T157).
+		trimmed := strings.TrimSpace(block.Text)
+		if block.Type == "text" && trimmed != "" && !isInjectedContext(trimmed) {
 			parts = append(parts, block.Text)
 		}
 	}

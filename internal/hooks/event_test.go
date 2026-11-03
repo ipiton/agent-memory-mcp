@@ -96,6 +96,30 @@ func TestSummarizeTranscriptKeepsTheConversation(t *testing.T) {
 	}
 }
 
+// T157: an injected block beside real text goes, the text stays. The joined body
+// starts with the text, so a check on the body alone lets the block through.
+func TestSummarizeTranscriptDropsInjectedBlocksInMixedMessage(t *testing.T) {
+	for _, injected := range []string{
+		"<system-reminder>injected context</system-reminder>",
+		"  <corpus-search>results</corpus-search>",
+	} {
+		path := writeTranscript(t, []map[string]any{{
+			"type": "user",
+			"message": map[string]any{"content": []map[string]any{
+				{"type": "text", "text": "the real question"},
+				{"type": "text", "text": injected},
+			}},
+		}})
+		got, err := SummarizeTranscript(path)
+		if err != nil {
+			t.Fatalf("SummarizeTranscript: %v", err)
+		}
+		if got != "User: the real question" {
+			t.Errorf("summary = %q, want only the real question", got)
+		}
+	}
+}
+
 // Everything a session record must NOT carry: sidechain turns, attachments,
 // injected context blocks, and the non-text blocks of a mixed content array —
 // tool payloads and thinking signatures are larger than the conversation and
