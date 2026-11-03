@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-03
+
 ### Added
 
 - **Claude Code plugin** — `/plugin install agent-memory --marketplace ipiton/agent-memory-mcp` gives memory, search and session hooks with no Homebrew, model or service. The first server start downloads the release archive and checks it against checksums shipped with the plugin. Sets `MCP_DATA_SCOPE=project`, `MCP_TOOL_PROFILE=core` and `MCP_RAG_KEYWORD_FALLBACK=true`, and reads only its own config, so it never touches the bank of a Homebrew install. Hooks from `setup` take priority over the plugin's, which keeps a session from being captured twice. See [PLUGIN.md](PLUGIN.md).
@@ -17,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Keyword search moved to an FTS5 index, and vectors load on demand.** On a 110 000-chunk index a started server idles at 48 MB, down from hundreds of MB, and answers `initialize` in 0.2 s. The first vector query loads the vectors, about 2 s and 500 MB, and a project searched only by keywords never does. The first start after upgrading builds the keyword index in the background, holding the write lock for about 20 s on that index. Hit Rate@5 on the real corpus is unchanged at 0.964.
+- **Memory use is optimized.** The keyword index moved out of RAM into FTS5, and vectors load only when a vector query needs them. On a 110 000-chunk index a started server now idles at 48 MB instead of hundreds of MB and answers `initialize` in 0.2 s. The first vector query after a start loads the vectors, about 2 s and 500 MB; a project searched only by keywords never does. The first start after upgrading builds the keyword index in the background and blocks writes to that index meanwhile, about 20 s at this size. Hit Rate@5 on the real corpus is unchanged at 0.964.
+- **README is shorter** (151 → 67 lines): install, what it does, links. Agent setup moved to `INSTALLATION.md`, output examples to `FEATURES.md`.
 
 ### Fixed
 
