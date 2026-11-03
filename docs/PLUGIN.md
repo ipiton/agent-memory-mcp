@@ -56,7 +56,7 @@ The two can sit on one machine and do not mix. The plugin always passes its own 
 
 The plugin names one release, and that release has to exist first:
 
-1. Publish the release as usual, from a tag. Until step 2 the plugin in the repository still names the previous version.
+1. Publish the release as usual, from a tag. Until step 2 the plugin in the repository still names the previous version. Before the first release it names one with no checksums, and installing it stops with that message.
 2. `make plugin-pin VERSION=x.y.z` writes the release's checksums to `plugin/checksums.txt` and the version to `plugin.json`.
 3. Commit and push. That commit is what users receive.
 
