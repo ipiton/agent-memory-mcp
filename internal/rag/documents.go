@@ -8,11 +8,11 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/paths"
+	"github.com/ipiton/agent-memory-mcp/internal/secrets"
 	"go.uber.org/zap"
 )
 
@@ -23,12 +23,6 @@ type documentService struct {
 
 // defaultIndexExcludeDirs uses the shared exclude list from paths package.
 var defaultIndexExcludeDirs = paths.DefaultExcludeDirs
-
-var privateKeyBlockPattern = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-var inlineSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)([^\s]+)`),
-	regexp.MustCompile(`(?i)(\b(?:api[_-]?key|secret|token|password|passwd|client_secret|access_key)\b\s*[:=]\s*)(.+)$`),
-}
 
 func calculateFileHash(content string) string {
 	h := sha256.Sum256([]byte(content))
@@ -321,13 +315,5 @@ func (ds *documentService) getFileModTime(path string) time.Time {
 }
 
 func redactSensitiveContent(content string) string {
-	redacted := privateKeyBlockPattern.ReplaceAllString(content, "[REDACTED PRIVATE KEY]")
-	lines := strings.Split(redacted, "\n")
-	for i, line := range lines {
-		for _, pattern := range inlineSecretPatterns {
-			line = pattern.ReplaceAllString(line, "${1}[REDACTED]")
-		}
-		lines[i] = line
-	}
-	return strings.Join(lines, "\n")
+	return secrets.RedactDocument(content)
 }

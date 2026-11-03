@@ -9,6 +9,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/hooks"
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
+	"github.com/ipiton/agent-memory-mcp/internal/secrets"
 )
 
 type ActionKind string
@@ -354,7 +355,12 @@ func isTerminalRecord(m *memory.Memory) bool {
 }
 
 func normalizeSummary(summary memory.SessionSummary, now time.Time) (memory.SessionSummary, error) {
-	summary.Summary = strings.TrimSpace(summary.Summary)
+	// A session summary is captured from a transcript nobody is watching.
+	// Refusing it over one pasted token would lose the whole session without
+	// anyone seeing the error, so here tokens are masked; memory.Store refuses
+	// what reaches it with one still inside (T145).
+	summary.Summary = strings.TrimSpace(secrets.MaskProviderTokens(summary.Summary))
+	summary.Context = secrets.MaskProviderTokens(summary.Context)
 	if summary.Summary == "" {
 		return memory.SessionSummary{}, fmt.Errorf("session summary is required")
 	}
