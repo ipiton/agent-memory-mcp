@@ -10,6 +10,8 @@
 
 Together these turn Claude Code into a memory-aware shell: every session contributes back to the project memory, every new session starts with relevant context surfaced.
 
+The [Claude Code plugin](PLUGIN.md) ships the same hooks. If the hooks from `setup` are in place, the plugin's stand aside, so a session is captured once.
+
 ## Quick install
 
 ```bash

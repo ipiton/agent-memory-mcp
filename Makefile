@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet fmt-check local-smoke eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
+.PHONY: build run test vet fmt-check local-smoke plugin-smoke plugin-pin eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
 
 # Build next to the binary and rename over it. Writing in place while the
 # launchd instances run it leaves macOS with a stale code-signature cache for
@@ -35,6 +35,15 @@ fmt-check:
 
 local-smoke:
 	./scripts/local-smoke.sh
+
+# The Claude Code plugin from a fresh machine, against a local stand-in for
+# GitHub Releases. No Claude Code, no network, no state of this machine.
+plugin-smoke:
+	./scripts/plugin-smoke.sh
+
+# After a release is published: make plugin-pin VERSION=0.15.0, then commit.
+plugin-pin:
+	./scripts/plugin-pin.sh $(VERSION)
 
 # Run the RAG retrieval evaluation harness. Fails if Hit Rate@5 or MRR
 # regress by more than 0.05 from the committed baseline.

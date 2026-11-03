@@ -1,0 +1,10 @@
+{
+  "name": "agent-memory",
+  "version": "0.15.0",
+  "description": "Persistent memory and document search for coding agents. Each project gets its own local database; no external services or models are required.",
+  "author": { "name": "ipiton" },
+  "homepage": "https://github.com/ipiton/agent-memory-mcp",
+  "repository": "https://github.com/ipiton/agent-memory-mcp",
+  "license": "MIT",
+  "keywords": ["memory", "rag", "search", "mcp"]
+}
