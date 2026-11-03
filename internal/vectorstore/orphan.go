@@ -29,15 +29,25 @@ func (s *SQLiteStore) CleanOrphans() (int, error) {
 		}
 	}
 
-	// Collect orphans: present in memory but not in expectedIDs.
-	s.mu.RLock()
+	// Collect orphans: present on disk but not in expectedIDs.
+	rows, err := s.db.Query(`SELECT id FROM chunks`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list chunks: %w", err)
+	}
 	var orphanIDs []string
-	for id := range s.chunks {
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("failed to scan chunk id: %w", err)
+		}
 		if _, ok := expectedIDs[id]; !ok {
 			orphanIDs = append(orphanIDs, id)
 		}
 	}
-	s.mu.RUnlock()
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("failed to close chunk rows: %w", err)
+	}
 
 	if len(orphanIDs) == 0 {
 		return 0, nil
@@ -58,6 +68,9 @@ func (s *SQLiteStore) CleanOrphans() (int, error) {
 	defer func() { _ = stmt.Close() }()
 
 	for _, id := range orphanIDs {
+		if err := deleteKeywordRowByChunkID(tx, id); err != nil {
+			return 0, fmt.Errorf("failed to delete keyword row of orphan %s: %w", id, err)
+		}
 		if _, err := stmt.Exec(id); err != nil {
 			return 0, fmt.Errorf("failed to delete orphan chunk %s: %w", id, err)
 		}
@@ -75,10 +88,9 @@ func (s *SQLiteStore) CleanOrphans() (int, error) {
 		return 0, fmt.Errorf("failed to commit orphan cleanup: %w", err)
 	}
 
-	// Remove from in-memory caches.
+	// Remove from the in-memory vectors.
 	s.mu.Lock()
 	for _, id := range orphanIDs {
-		s.removeChunkKeywordsLocked(id)
 		delete(s.chunks, id)
 	}
 	s.adoptIndexVersionLocked(before, after)

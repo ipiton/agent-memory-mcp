@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ipiton/agent-memory-mcp/internal/embedder"
 	"github.com/ipiton/agent-memory-mcp/internal/reranker"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
@@ -51,35 +52,58 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to refresh index before search: %w", err)
 	}
 
-	queryResult, err := vs.config.Embedder.EmbedQueryDetailed(ctx, query.Query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to embed query: %w", err)
-	}
-
-	path := &RetrievalPath{
-		EmbeddingProvider:  queryResult.Provider,
-		EmbeddingFallbacks: queryResult.Fallbacks,
-	}
-	if len(queryResult.Fallbacks) > 0 {
-		path.Degraded = true
-		if vs.config.Strict {
-			return nil, StrictModeError("embedding", fmt.Sprintf(
-				"provider(s) %s failed and the query was embedded by %s instead",
-				strings.Join(queryResult.Fallbacks, ", "), queryResult.Provider))
-		}
-	}
-
-	storedModel, err := vs.store.GetMetadata("embedding_model")
-	if err == nil && storedModel != "" && storedModel != queryResult.ModelID {
-		return nil, fmt.Errorf("embedding model mismatch: index was built with %s but current query model is %s. Run index_documents to rebuild the index", storedModel, queryResult.ModelID)
-	}
-
+	path := &RetrievalPath{}
+	var semanticResults []vectorstore.SearchResult
 	semanticLimit := max(query.Limit*8, 50)
 	keywordLimit := max(query.Limit*12, 100)
 
-	semanticResults, err := vs.store.Search(queryResult.Embedding, semanticLimit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load semantic candidates: %w", err)
+	// An index built without a model has no vectors to compare with, so asking the
+	// embedder could only cost time. The start-up indexing run is what notices a
+	// model appearing.
+	keywordOnly, _ := vs.store.GetMetadata(keywordOnlyMetadataKey)
+
+	var queryResult *embedder.EmbeddingResult
+	var err error
+	if !vs.config.KeywordFallback || keywordOnly != "true" {
+		queryResult, err = vs.config.Embedder.EmbedQueryDetailed(ctx, query.Query)
+	}
+	switch {
+	case vs.config.KeywordFallback && keywordOnly == "true" && !vs.config.Strict:
+		path.KeywordOnly = true
+		path.Degraded = true
+	case err == nil && queryResult != nil:
+		path.EmbeddingProvider = queryResult.Provider
+		path.EmbeddingFallbacks = queryResult.Fallbacks
+		if len(queryResult.Fallbacks) > 0 {
+			path.Degraded = true
+			if vs.config.Strict {
+				return nil, StrictModeError("embedding", fmt.Sprintf(
+					"provider(s) %s failed and the query was embedded by %s instead",
+					strings.Join(queryResult.Fallbacks, ", "), queryResult.Provider))
+			}
+		}
+
+		storedModel, err := vs.store.GetMetadata("embedding_model")
+		if err == nil && storedModel != "" && storedModel != queryResult.ModelID {
+			return nil, fmt.Errorf("embedding model mismatch: index was built with %s but current query model is %s. Run index_documents to rebuild the index", storedModel, queryResult.ModelID)
+		}
+
+		semanticResults, err = vs.store.Search(queryResult.Embedding, semanticLimit)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load semantic candidates: %w", err)
+		}
+		if keywordOnly == "true" {
+			path.KeywordOnly = true
+			path.Degraded = true
+		}
+	case vs.config.KeywordFallback && !vs.config.Strict:
+		vs.logger.Warn("Query could not be embedded, answering from keywords", zap.Error(err))
+		path.KeywordOnly = true
+		path.Degraded = true
+	case err == nil:
+		return nil, StrictModeError("embedding", "the index was built without an embedding model")
+	default:
+		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
 	keywordResults, err := vs.store.KeywordSearch(query.Query, keywordLimit)
@@ -401,6 +425,28 @@ func (vs *vectorService) indexDocuments(ctx context.Context, docs []document, re
 		}
 	}
 
+	return result, nil
+}
+
+// indexKeywordOnly stores a batch without vectors, for an index built with no
+// embedding model available. Those chunks are found by keywords alone until a
+// model appears and the next indexing run rebuilds them.
+func (vs *vectorService) indexKeywordOnly(docs []document) (*indexResult, error) {
+	result := &indexResult{SuccessIDs: make([]string, 0, len(docs))}
+	chunks := make([]vectorstore.Chunk, 0, len(docs))
+	for _, doc := range docs {
+		chunks = append(chunks, vectorstore.Chunk{
+			ID:           doc.ID,
+			DocPath:      doc.Path,
+			Content:      doc.Content,
+			Title:        doc.Title,
+			LastModified: doc.LastModified,
+		})
+		result.SuccessIDs = append(result.SuccessIDs, doc.ID)
+	}
+	if err := vs.store.Upsert(chunks); err != nil {
+		return result, err
+	}
 	return result, nil
 }
 

@@ -57,6 +57,20 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			needsRebuild = true
 		}
 	}
+	// Without a stored model nothing has been embedded yet, so an unreachable
+	// embedder here means there is no model rather than an outage. A stored model
+	// keeps the error above: its vectors must not be replaced by text alone.
+	keywordOnly := false
+	wasKeywordOnly, _ := store.GetMetadata(keywordOnlyMetadataKey)
+	if re.vecService.config.KeywordFallback && oldModel == "" && len(allDocs) > 0 {
+		if _, err := re.vecService.detectModelID(ctx, allDocs[0].Content); err != nil {
+			re.logger.Warn("No embedding model available, indexing for keyword search only", zap.Error(err))
+			keywordOnly = true
+		} else if wasKeywordOnly == "true" {
+			re.logger.Info("Embedding model is available now, rebuilding the keyword-only index")
+			needsRebuild = true
+		}
+	}
 	if oldChunker != "" && oldChunker != chunkerVersion {
 		re.logger.Warn("Chunker version changed - full rebuild required")
 		needsRebuild = true
@@ -172,7 +186,12 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 				zap.Int("batch", batchNum+1),
 				zap.Int("total", totalBatches))
 
-			result, err := re.vecService.indexDocuments(ctx, batch, reuseEmbeddings)
+			var result *indexResult
+			if keywordOnly {
+				result, err = re.vecService.indexKeywordOnly(batch)
+			} else {
+				result, err = re.vecService.indexDocuments(ctx, batch, reuseEmbeddings)
+			}
 			if err != nil {
 				return fmt.Errorf("failed to index: %w", err)
 			}
@@ -272,6 +291,11 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	}
 	if len(failedFiles) > 0 {
 		finalMetadata[indexStateMetadataKey] = indexStateDirty
+	}
+	if keywordOnly {
+		finalMetadata[keywordOnlyMetadataKey] = "true"
+	} else if wasKeywordOnly != "" {
+		finalMetadata[keywordOnlyMetadataKey] = ""
 	}
 
 	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
@@ -390,7 +414,10 @@ func (re *Engine) autoIndexIfNeeded() {
 		return
 	}
 
-	if re.needsIndexing() {
+	// Asked only on start, not by the watcher: a model appearing is worth one
+	// probe per run, not one per tick.
+	keywordOnly, _ := re.vecService.store.GetMetadata(keywordOnlyMetadataKey)
+	if keywordOnly == "true" || re.needsIndexing() {
 		re.logger.Info("Index needs updating, starting auto-indexing")
 		re.indexWithLock("initial_startup")
 	} else {
