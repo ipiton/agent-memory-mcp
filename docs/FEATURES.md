@@ -76,3 +76,42 @@ This makes it a better fit when the agent needs to answer questions like:
 - **Age-aware recall (opt-in)**: recall scoring can apply an exponential age decay so stale memories sink while canonical knowledge and character/identity stay put — off by default since T121 measured it costing Hit@5 0.7217 → 0.1942 at the old 30-day setting. Enable with `MCP_RECALL_HALFLIFE_DAYS`, and note that `MCP_RECALL_DECAY_TYPES` (default `working`) decides which types age at all — the type axis matters more than the rate
 - **Self-healing duplicate cleanup**: the steward can auto-merge high-confidence, near-identical duplicate groups instead of only queuing them for review — opt-in and guarded by a content-similarity threshold so nothing unique is archived (`auto_merge_duplicate_min_confidence` in `steward_policy`)
 - **No more double session-close records**: closing a task folds the auto-captured session summary into the finalize record instead of writing a second near-identical memory per slug, cutting the duplicate pairs the steward used to flag as false contradictions
+
+## What it looks like
+
+Real output from a demo repository with one runbook, one `deploy/values.yaml`, and one stored decision. Excerpts are trimmed.
+
+**"How many replicas should payments-api run, and why?"** → `recall_memory`
+
+```text
+1. **Why payments-api runs 4 replicas** (relevance: 0.79)
+   Type: Semantic
+   Tags: [decision payments capacity]
+   Trust: layer=raw source=decision confidence=0.96 freshness=1.00 owner=engineering
+   Content: Decision 2026-09-12: payments-api runs 4 replicas, not 2. Two replicas dropped
+   requests during the September card-network spike; the HPA reacts too slowly for
+   30-second bursts. Source: ./deploy/values.yaml. Revisit when queue-based retry lands.
+```
+
+**"How do I roll back a bad payments deploy?"** → `semantic_search` over the indexed docs. The query shares almost no words with the runbook.
+
+```text
+1. **payments-api rollback** (relevance: 0.94)
+   Path: docs/runbooks/payments-rollback.md
+   Source type: runbook
+   1. Find the last good revision: `helm history payments-api -n prod`.
+   2. Roll back: `helm rollback payments-api <rev> -n prod`.
+   3. Verify: `kubectl rollout status deploy/paymen...
+```
+
+**"Is what you remember about payments still true?"** → `drift_scan`, after someone changed `replicas: 4` to `2` in `deploy/values.yaml`
+
+```text
+Drift Scan: 3 memories scanned, 1 findings
+
+1. [source_changed] Why payments-api runs 4 replicas
+   Evidence: File ./deploy/values.yaml modified 2026-10-31 (memory verified 2026-10-31)
+   Suggested: verify (confidence: 0.70)
+```
+
+The steward tools (`drift_scan`, `steward_run`, the review inbox) switch on by themselves only in HTTP mode. For an agent connected through `setup`, add `MCP_STEWARD_ENABLED=true` to the project's `.env`. See [Stewardship](STEWARDSHIP.md).
