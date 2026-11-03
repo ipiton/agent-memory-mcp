@@ -121,6 +121,7 @@ func serializeConfigForGolden(c Config) string {
 	p("DataPath", c.DataPath)
 	p("LogPath", c.LogPath)
 	p("ToolGrouping", c.ToolGrouping)
+	p("ToolProfile", c.ToolProfile)
 	p("Stats.Enabled", c.Stats.Enabled)
 	p("Stats.Path", c.Stats.Path)
 	p("Stats.SampleRate", c.Stats.SampleRate)

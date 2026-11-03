@@ -65,6 +65,7 @@ func restartRequiredChanges(old, next config.Config) []string {
 
 	// The tool list is answered from the flag captured at initialize time.
 	add("MCP_TOOL_GROUPING", old.ToolGrouping != next.ToolGrouping)
+	add("MCP_TOOL_PROFILE", old.ToolProfile != next.ToolProfile)
 
 	// Strict retrieval is pushed into the store and the vector service at
 	// construction (T99).

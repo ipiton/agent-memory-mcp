@@ -41,6 +41,10 @@ type Config struct {
 	// a client loads at initialize time. tools/call always accepts both legacy
 	// names and the grouped form regardless of this flag. Env: MCP_TOOL_GROUPING.
 	ToolGrouping bool
+	// ToolProfile limits the tools the server offers and accepts (T166): "core"
+	// keeps memory, search and session work, "full" (the default) is everything.
+	// MCP_TOOL_PROFILE.
+	ToolProfile string
 
 	// RetrievalStrict turns every silent degradation on the read path into a
 	// failed call: an embedding provider falling through to the next one, a
@@ -425,6 +429,7 @@ type envValues struct {
 	recallHalfLifeDays               float64
 	recallDecayTypes                 string
 	toolGrouping                     bool
+	toolProfile                      string
 	retrievalStrict                  bool
 	recallCentered                   bool
 }
@@ -529,6 +534,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 0),
 		recallDecayTypes:                 s.String("MCP_RECALL_DECAY_TYPES", "working"),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
+		toolProfile:                      s.String("MCP_TOOL_PROFILE", ToolProfileFull),
 		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
 		recallCentered:                   s.Bool("MCP_RECALL_CENTERED", true),
 	}
@@ -625,6 +631,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		DataPath:         dataPath,
 		LogPath:          logPath,
 		ToolGrouping:     ev.toolGrouping,
+		ToolProfile:      strings.ToLower(strings.TrimSpace(ev.toolProfile)),
 		RetrievalStrict:  ev.retrievalStrict,
 		RecallCentered:   ev.recallCentered,
 
@@ -1044,6 +1051,12 @@ const DefaultMaxChunksPerDoc = 1
 
 // NormalizeFusion maps MCP_RAG_FUSION onto the three modes the ranker knows,
 // falling back to the blended default the way every other enum here does.
+// Values of MCP_TOOL_PROFILE.
+const (
+	ToolProfileFull = "full"
+	ToolProfileCore = "core"
+)
+
 func NormalizeFusion(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "rrf":
