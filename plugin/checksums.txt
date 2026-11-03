@@ -1,2 +1,5 @@
-# Pinned by scripts/plugin-pin.sh from the checksums of the release named in
-# .claude-plugin/plugin.json. Empty until that release is published.
+# Pinned by scripts/plugin-pin.sh from the checksums of release v0.15.0.
+cdcb61cebf863b06afc50f10b3112ca30588f959aecc9c1953bac409993c7c08  agent-memory-mcp-0.15.0-darwin-amd64.tar.gz
+459efb26adc65748fea118f8d24859de4fd4ca979ef8dbe44e7af76ecc5d873c  agent-memory-mcp-0.15.0-darwin-arm64.tar.gz
+6e9a0a37828280c2b9e0e34e3e3d41699ffe2292a14c59c8ea24a59cb8f75c09  agent-memory-mcp-0.15.0-linux-amd64.tar.gz
+e5a3e993c8a9fc9c0eb886644bfdd3a40268240f0c8e486ddc6a82cc60e520d8  agent-memory-mcp-0.15.0-linux-arm64.tar.gz
