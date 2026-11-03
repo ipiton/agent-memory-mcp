@@ -33,6 +33,8 @@ PROJECT="$WORK/project"
 RELEASES="$WORK/releases"
 mkdir -p "$HOME_DIR" "$PROJECT/docs" "$DATA"
 cp -R "$ROOT/plugin" "$PLUGIN"
+# The repository pins a real release; the archives here are built locally.
+: >"$PLUGIN/checksums.txt"
 git -C "$PROJECT" init -q
 printf '# Runbook\nrollback the frobnicator safely\n' >"$PROJECT/docs/runbook.md"
 
