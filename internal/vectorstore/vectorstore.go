@@ -102,8 +102,10 @@ type SQLiteStore struct {
 	ftsReady chan struct{}
 	ftsErr   error
 	// backfill tracks the background build so Close does not pull the database
-	// out from under it.
+	// out from under it; stop tells the build to give way.
 	backfill sync.WaitGroup
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // indexVersionKey is the metadata key the indexer stamps in the same
@@ -162,6 +164,7 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		logger:   logger,
 		chunks:   make(map[string]*Chunk),
 		ftsReady: make(chan struct{}),
+		stop:     make(chan struct{}),
 	}
 
 	if err := store.validateDimension(dimension); err != nil {
@@ -195,8 +198,8 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 	}
 
 	// The first build after an upgrade takes tens of seconds on a large index.
-	// It runs behind the open so the MCP handshake is not held up by it; searches
-	// and writes wait on ftsReady instead.
+	// It runs behind the open so the MCP handshake is not held up by it; writes
+	// wait on ftsReady, searches report ErrKeywordIndexBuilding.
 	if keywordIndexReady {
 		close(store.ftsReady)
 	} else {
@@ -739,6 +742,7 @@ func (s *SQLiteStore) Count() int {
 
 // Close closes the underlying SQLite database connection.
 func (s *SQLiteStore) Close() error {
+	s.stopOnce.Do(func() { close(s.stop) })
 	s.backfill.Wait()
 	return s.db.Close()
 }

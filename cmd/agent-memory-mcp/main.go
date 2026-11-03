@@ -131,6 +131,14 @@ func runServe(args []string) error {
 		return fmt.Errorf("failed to build path guard: %w", err)
 	}
 
+	var listener *server.HTTPListener
+	if cfg.HTTP.Mode == "http" {
+		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTP.Host, strconv.Itoa(cfg.HTTP.Port)))
+		if listener, err = server.ListenHTTP(cfg); err != nil {
+			return fmt.Errorf("http server error: %w", err)
+		}
+	}
+
 	srv := server.New(cfg, guard)
 	defer srv.Shutdown()
 
@@ -165,8 +173,7 @@ func runServe(args []string) error {
 	defer stop()
 
 	if cfg.HTTP.Mode == "http" {
-		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTP.Host, strconv.Itoa(cfg.HTTP.Port)))
-		if err := server.RunHTTP(ctx, srv); err != nil {
+		if err := server.RunHTTP(ctx, srv, listener); err != nil {
 			return fmt.Errorf("http server error: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Server stopped gracefully\n")

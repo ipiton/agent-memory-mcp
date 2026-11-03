@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
 	"github.com/kljensen/snowball"
 	"go.uber.org/zap"
@@ -34,9 +35,15 @@ const (
 	minKeywordCandidates = 300
 	titlePathCandidates  = 100
 
-	keywordBackfillBatch   = 2000
-	keywordBackfillRetries = 10
+	keywordBackfillBatch = 2000
+	keywordBackfillPause = time.Second
 )
+
+// ErrKeywordIndexBuilding means the first-time build has not finished. It is not
+// "nothing found": the caller can answer from vectors or ask to try again later.
+var ErrKeywordIndexBuilding = errors.New("keyword index is still being built, try again shortly")
+
+var errKeywordBuildStopped = errors.New("store closed before the keyword index was built")
 
 const ftsSchema = `CREATE VIRTUAL TABLE IF NOT EXISTS ` + ftsTable + ` USING fts5(
 	title, doc_path, content,
@@ -62,8 +69,14 @@ func (s *SQLiteStore) KeywordSearch(query string, limit int) ([]SearchResult, er
 	if len(terms) == 0 {
 		return []SearchResult{}, nil
 	}
-	if err := s.waitKeywordIndex(); err != nil {
-		return nil, err
+	select {
+	case <-s.ftsReady:
+		if s.ftsErr != nil {
+			return nil, s.ftsErr
+		}
+	default:
+		// A build can take minutes on a loaded machine, longer than a client waits.
+		return nil, ErrKeywordIndexBuilding
 	}
 
 	quoted := make([]string, len(terms))
@@ -231,8 +244,9 @@ func (s *SQLiteStore) prepareKeywordIndex() (bool, error) {
 // backfillKeywordIndex fills the table from chunks in one transaction, so a crash
 // leaves no half-built index and a second process waiting for the lock finds the
 // work done. The transaction holds the write lock for the whole build (about 20s
-// on 110k chunks, once per upgrade); writers in this process wait on ftsReady,
-// and another process's write can hit busy_timeout and retry on its next run.
+// on 110k chunks of an idle machine, minutes on a loaded one, once per upgrade);
+// writers in this process wait on ftsReady, and another process's write can hit
+// busy_timeout and retry on its next run.
 func (s *SQLiteStore) backfillKeywordIndex() error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -267,6 +281,12 @@ func (s *SQLiteStore) backfillKeywordIndex() error {
 		rows, err := tx.Query(`SELECT rowid, title, doc_path, content FROM chunks WHERE rowid > ? ORDER BY rowid LIMIT ?`, cursor, keywordBackfillBatch)
 		if err != nil {
 			return err
+		}
+		select {
+		case <-s.stop:
+			_ = rows.Close()
+			return errKeywordBuildStopped
+		default:
 		}
 		page := make([]row, 0, keywordBackfillBatch)
 		for rows.Next() {
@@ -303,22 +323,39 @@ func (s *SQLiteStore) runKeywordBackfill() {
 	defer close(s.ftsReady)
 
 	began := time.Now()
-	var err error
-	// Another process may hold the write lock for its own build for longer than
-	// busy_timeout. It will finish, so keep waiting rather than fail the search.
-	for range keywordBackfillRetries {
-		if err = s.backfillKeywordIndex(); err == nil {
+	loggedBusy := false
+	for {
+		err := s.backfillKeywordIndex()
+		switch {
+		case err == nil:
 			s.logger.Info("Keyword index built", zap.Duration("took", time.Since(began)))
 			return
+		case errors.Is(err, errKeywordBuildStopped):
+			s.ftsErr = err
+			return
+		case !dbutil.IsBusy(err):
+			s.ftsErr = fmt.Errorf("keyword index unavailable: %w", err)
+			s.logger.Error("Keyword index build failed", zap.Error(err))
+			return
 		}
-		s.logger.Warn("Keyword index build failed, retrying", zap.Error(err))
+		// Another process holds the write lock, for its own build or for a long
+		// write. No limit fits how long that takes on a loaded machine, and once
+		// it lets go, the transaction above finds the work done or does it.
+		if !loggedBusy {
+			s.logger.Warn("Keyword index build waits for another process's write lock", zap.Error(err))
+			loggedBusy = true
+		}
+		select {
+		case <-s.stop:
+			s.ftsErr = errKeywordBuildStopped
+			return
+		case <-time.After(keywordBackfillPause):
+		}
 	}
-	s.ftsErr = fmt.Errorf("keyword index unavailable: %w", err)
-	s.logger.Error("Keyword index build gave up", zap.Error(err))
 }
 
-// waitKeywordIndex blocks until the first-time build finished. Searching a
-// half-filled table would answer "nothing found", which reads as a fact.
+// waitKeywordIndex blocks a write until the first-time build finished, which also
+// holds the write lock. Searches do not wait, see ErrKeywordIndexBuilding.
 func (s *SQLiteStore) waitKeywordIndex() error {
 	<-s.ftsReady
 	return s.ftsErr
