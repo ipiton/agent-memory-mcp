@@ -140,7 +140,7 @@ start_service() {
 test_service() {
     log_info "Testing service..."
     sleep 3
-    if curl -s "http://localhost:18080/health" > /dev/null 2>&1; then
+    if curl -fs "http://localhost:18080/health" > /dev/null 2>&1; then
         log_success "Service is responding on port 18080"
     else
         log_warning "Health check failed - it may still be starting up"

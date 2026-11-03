@@ -77,7 +77,7 @@ curl -i \
 
 Expected behavior:
 
-- `/health` responds without auth
+- `/health` responds without auth: `503` with `{"status":"starting"}` while the server starts, `200` once it is ready
 - `/mcp` requires `Authorization: Bearer <token>`
 - startup fails if you bind a non-loopback host without `MCP_HTTP_AUTH_TOKEN`, unless you explicitly set `MCP_HTTP_INSECURE_ALLOW_UNAUTHENTICATED=true`
 

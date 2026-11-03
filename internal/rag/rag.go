@@ -65,6 +65,9 @@ type RetrievalPath struct {
 	// KeywordOnly is true when the semantic arm had nothing to contribute: the
 	// query could not be embedded, or the index was built without a model.
 	KeywordOnly bool `json:"keyword_only,omitempty"`
+	// KeywordSkipped is set when only vectors answered because the keyword index
+	// is not usable yet.
+	KeywordSkipped string `json:"keyword_skipped,omitempty"`
 	// Reranker is set when reranking actually reordered the results;
 	// RerankSkipped carries the reason when it did not.
 	Reranker      string `json:"reranker,omitempty"`

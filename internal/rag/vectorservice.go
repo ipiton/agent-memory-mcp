@@ -107,6 +107,11 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	}
 
 	keywordResults, err := vs.store.KeywordSearch(query.Query, keywordLimit)
+	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !vs.config.Strict {
+		path.KeywordSkipped = "keyword index is still being built"
+		path.Degraded = true
+		keywordResults, err = nil, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to load keyword candidates: %w", err)
 	}

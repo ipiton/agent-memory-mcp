@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Keyword search no longer breaks for good when another process holds the database.** The first-time index build gave up after 50 s of waiting for a write lock, and keyword search then failed until a restart. It showed up on the upgrade to 0.15.0 on a loaded machine, where several processes share one database. The build now waits for as long as the lock is held, and stops when the service stops. Other errors still end it at once.
+
+### Changed
+
+- **Search no longer waits for the first index build.** While it runs, search answers from vectors and marks the result as degraded (`keyword_skipped`). Without vectors, and in strict mode, search reports that the index is still being built instead of hanging until the client times out.
+- **The HTTP port opens before start-up work.** Until the server is ready, every path answers `503` with `{"status":"starting"}` and `Retry-After`, so a slow start is no longer mistaken for a dead service, and a taken port fails at once. Start-up itself is not faster: tools are unavailable until it finishes.
+
+### Notes
+
+- The figures in the 0.15.0 notes were measured on an idle machine. With load above 100 and swap nearly full, the same first start took minutes: 3 minutes to open the port on 31k chunks, 11 minutes on 110k.
+
 ## [0.15.0] - 2026-11-03
 
 ### Added
@@ -19,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Memory use is optimized.** The keyword index moved out of RAM into FTS5, and vectors load only when a vector query needs them. On a 110 000-chunk index a started server now idles at 48 MB instead of hundreds of MB and answers `initialize` in 0.2 s. The first vector query after a start loads the vectors, about 2 s and 500 MB; a project searched only by keywords never does. The first start after upgrading builds the keyword index in the background and blocks writes to that index meanwhile, about 20 s at this size. Hit Rate@5 on the real corpus is unchanged at 0.964.
+- **Memory use is optimized.** The keyword index moved out of RAM into FTS5, and vectors load only when a vector query needs them. On a 110 000-chunk index a started server now idles at 48 MB instead of hundreds of MB and answers `initialize` in 0.2 s. The first vector query after a start loads the vectors, about 2 s and 500 MB; a project searched only by keywords never does. The first start after upgrading builds the keyword index in the background and blocks writes to that index meanwhile, about 20 s at this size on an idle machine (see 0.15.1). Hit Rate@5 on the real corpus is unchanged at 0.964.
 - **README is shorter** (151 → 67 lines): install, what it does, links. Agent setup moved to `INSTALLATION.md`, output examples to `FEATURES.md`.
 
 ### Fixed

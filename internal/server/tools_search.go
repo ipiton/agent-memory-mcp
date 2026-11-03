@@ -174,6 +174,9 @@ func formatDegradedNote(path *rag.RetrievalPath) string {
 		parts = append(parts, fmt.Sprintf("embedding provider(s) %s failed, served by %s",
 			strings.Join(path.EmbeddingFallbacks, ", "), path.EmbeddingProvider))
 	}
+	if path.KeywordSkipped != "" {
+		parts = append(parts, path.KeywordSkipped+" — results come from vectors alone")
+	}
 	if path.RerankSkipped != "" {
 		parts = append(parts, "reranking skipped ("+path.RerankSkipped+") — results are in hybrid order")
 	}

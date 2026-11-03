@@ -21,12 +21,21 @@ package dbutil
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 
 	"go.uber.org/zap"
-	_ "modernc.org/sqlite" // SQLite driver
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+// IsBusy reports whether err means another connection holds the lock, including
+// the extended codes such as SQLITE_BUSY_SNAPSHOT.
+func IsBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY
+}
 
 // buildDSN appends the standard PRAGMA + txlock query parameters to a plain
 // SQLite file path. The parameters are applied per-connection by the driver,

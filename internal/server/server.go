@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
@@ -180,47 +182,75 @@ func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
 	}
 }
 
-// RunHTTP runs the server in HTTP mode, blocking until ctx is cancelled
-// and then gracefully shutting down.
-func RunHTTP(ctx context.Context, server *MCPServer) error {
-	if err := validateHTTPExposure(server.config); err != nil {
-		return err
+// HTTPListener is the port of a server that may still be starting. Opening the
+// indexes and loading the memory cache took 11 minutes on a machine out of memory,
+// and a closed port for that long cannot be told from a dead service.
+type HTTPListener struct {
+	listener net.Listener
+	server   *http.Server
+	handler  atomic.Pointer[http.Handler]
+	errCh    chan error
+}
+
+// ListenHTTP binds the port and answers 503 until RunHTTP takes over. A port that
+// is taken now fails before the start-up work rather than after it.
+func ListenHTTP(cfg config.Config) (*HTTPListener, error) {
+	if err := validateHTTPExposure(cfg); err != nil {
+		return nil, err
+	}
+	addr := httpListenAddr(cfg)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("http server failed: %w", err)
 	}
 
-	mux := buildHTTPMux(server)
-	addr := httpListenAddr(server.config)
-	logHTTPExposurePolicy(server)
-
-	if server.fileLogger != nil {
-		server.fileLogger.Info("Starting HTTP server",
-			zap.String("address", addr),
-			zap.String("mode", server.config.HTTP.Mode),
-		)
-	}
-
-	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
+	l := &HTTPListener{listener: listener, errCh: make(chan error, 1)}
+	var starting http.Handler = http.HandlerFunc(serveStarting)
+	l.handler.Store(&starting)
+	l.server = &http.Server{
+		Addr: addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			(*l.handler.Load()).ServeHTTP(w, r)
+		}),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-
-	errCh := make(chan error, 1)
 	go func() {
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errCh <- err
+		if err := l.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			l.errCh <- err
 		}
-		close(errCh)
+		close(l.errCh)
 	}()
+	return l, nil
+}
+
+func serveStarting(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Retry-After", "5")
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "starting"})
+}
+
+// RunHTTP serves server on the listener, blocking until ctx is cancelled
+// and then gracefully shutting down.
+func RunHTTP(ctx context.Context, server *MCPServer, l *HTTPListener) error {
+	var mux http.Handler = buildHTTPMux(server)
+	logHTTPExposurePolicy(server)
+
+	if server.fileLogger != nil {
+		server.fileLogger.Info("Starting HTTP server",
+			zap.String("address", l.server.Addr),
+			zap.String("mode", server.config.HTTP.Mode),
+		)
+	}
+	l.handler.Store(&mux)
 
 	select {
-	case err := <-errCh:
+	case err := <-l.errCh:
 		return fmt.Errorf("http server failed: %w", err)
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		if err := l.server.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("http server shutdown failed: %w", err)
 		}
 		return nil

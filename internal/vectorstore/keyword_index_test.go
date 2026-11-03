@@ -10,6 +10,7 @@ import (
 
 func keywordIDs(t *testing.T, s *SQLiteStore, query string) []string {
 	t.Helper()
+	<-s.ftsReady
 	results, err := s.KeywordSearch(query, 10)
 	if err != nil {
 		t.Fatalf("KeywordSearch(%q): %v", query, err)
