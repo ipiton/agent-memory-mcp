@@ -57,6 +57,24 @@ jobs:
       - name: Fail on an unexpected release-config deprecation
         run: ./scripts/check-goreleaser-deprecations.sh
 
+  # T167: the plugin from a fresh machine, against a local release stand-in.
+  plugin-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+
+      - name: Plugin smoke
+        run: make plugin-smoke
+
   # T160: first run of the archive goreleaser would publish, before there is a
   # tag. A broken artifact caught after the tag is already in the Homebrew tap.
   release-smoke:

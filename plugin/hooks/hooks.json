@@ -1,0 +1,14 @@
+{
+  "description": "Inject project memory at session start, capture the session at its end and before compaction.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh hook context-inject" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh hook auto-capture --hook-event" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh hook checkpoint --hook-event" }] }
+    ]
+  }
+}

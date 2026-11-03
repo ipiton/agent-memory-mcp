@@ -1,0 +1,11 @@
+{
+  "name": "agent-memory-mcp",
+  "owner": { "name": "ipiton" },
+  "plugins": [
+    {
+      "name": "agent-memory",
+      "source": "./plugin",
+      "description": "Persistent memory and document search for coding agents, one local database per project."
+    }
+  ]
+}

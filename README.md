@@ -16,6 +16,14 @@ Your agent remembers why a decision was made, finds the runbook that matches an 
 
 ## Install
 
+Claude Code, with nothing else to set up. One local database per project, search by keywords until you add a model ([details](docs/PLUGIN.md)):
+
+```text
+/plugin install agent-memory --marketplace ipiton/agent-memory-mcp
+```
+
+Any agent, as a standalone server:
+
 ```bash
 brew tap ipiton/tap
 brew install agent-memory-mcp
@@ -112,6 +120,7 @@ A comparison with other memory servers, measured on a public corpus, is in prepa
 | All MCP tools, with JSON examples | [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md) |
 | CLI | [docs/CLI.md](docs/CLI.md) |
 | Configuration and environment variables | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) |
+| Claude Code plugin | [docs/PLUGIN.md](docs/PLUGIN.md) |
 | Claude Code hooks | [docs/HOOKS.md](docs/HOOKS.md) |
 | Stewardship, sedimentation, memory lifecycle | [docs/STEWARDSHIP.md](docs/STEWARDSHIP.md), [docs/SEDIMENTATION.md](docs/SEDIMENTATION.md), [docs/concepts/lifecycle.md](docs/concepts/lifecycle.md) |
 | Architecture and embedding providers | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |

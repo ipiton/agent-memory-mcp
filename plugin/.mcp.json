@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agent-memory": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh",
+      "args": ["serve"],
+      "env": {
+        "AMM_PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}",
+        "AMM_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}
