@@ -1,0 +1,29 @@
+name: Plugin published
+
+# T167: what a user gets from the default branch, on a machine that has never seen it.
+# Pinning a release is the commit that changes what users receive.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - plugin/checksums.txt
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.311
+
+      - name: Install the plugin from the marketplace
+        run: make plugin-install-check

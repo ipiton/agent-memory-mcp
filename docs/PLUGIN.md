@@ -58,7 +58,7 @@ The plugin names one release, and that release has to exist first:
 
 1. Publish the release as usual, from a tag. Until step 2 the plugin in the repository still names the previous version. Before the first release it names one with no checksums, and installing it stops with that message.
 2. `make plugin-pin VERSION=x.y.z` writes the release's checksums to `plugin/checksums.txt` and the version to `plugin.json`.
-3. Commit and push. That commit is what users receive.
+3. Commit and push to `main`. That commit is what users receive, and it starts the `Plugin published` workflow: on empty macOS and Linux runners it installs the plugin from this repository with the real Claude Code and checks that the server connects. `make plugin-install-check` does the same on any machine, in a throwaway `HOME`.
 
 `make plugin-smoke` runs the launcher as a new machine would, against a local stand-in for GitHub Releases. CI runs it on macOS and Linux. To try a local build in real Claude Code:
 

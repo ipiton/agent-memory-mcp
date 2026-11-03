@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet fmt-check local-smoke plugin-smoke plugin-pin eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
+.PHONY: build run test vet fmt-check local-smoke plugin-smoke plugin-pin plugin-install-check eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
 
 # Build next to the binary and rename over it. Writing in place while the
 # launchd instances run it leaves macOS with a stale code-signature cache for
@@ -40,6 +40,10 @@ local-smoke:
 # GitHub Releases. No Claude Code, no network, no state of this machine.
 plugin-smoke:
 	./scripts/plugin-smoke.sh
+
+# The published plugin through the real installer, in a throwaway HOME.
+plugin-install-check:
+	./scripts/plugin-install-check.sh
 
 # After a release is published: make plugin-pin VERSION=0.15.0, then commit.
 plugin-pin:

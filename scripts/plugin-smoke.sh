@@ -189,4 +189,14 @@ session_end second >/dev/null 2>&1
 [ "$(raw_summaries)" -eq "$BEFORE" ] || { echo "FAIL: plugin hooks ran next to the hooks of setup" >&2; exit 1; }
 echo "ok: plugin hooks yield to the hooks of setup"
 
+# The same files through the real installer, where Claude Code is around. CI has its
+# own job for this against the published plugin.
+if command -v claude >/dev/null 2>&1; then
+	mkdir -p "$WORK/marketplace"
+	cp -R "$ROOT/.claude-plugin" "$PLUGIN" "$WORK/marketplace/"
+	AMM_PLUGIN_RELEASE_BASE="http://127.0.0.1:$PORT" "$ROOT/scripts/plugin-install-check.sh" "$WORK/marketplace"
+else
+	echo "skipped: no claude on PATH, the installer was not run"
+fi
+
 echo "plugin smoke passed"
