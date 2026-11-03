@@ -222,6 +222,9 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 	}
 
 	repoRoot := cfg.RootPath
+	if cfg.RAG.IndexRoot != "" {
+		repoRoot = cfg.RAG.IndexRoot
+	}
 
 	indexDirs := cfg.RAG.IndexDirs
 	if len(indexDirs) == 0 {

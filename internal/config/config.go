@@ -32,7 +32,7 @@ type Config struct {
 	MaxSearchResults int
 	MaxDepth         int
 	OutputMode       string
-	DataPath         string // Base path for all data (default: {RootPath}/data)
+	DataPath         string // Base path for all data (default: {RootPath}/data; with MCP_DATA_SCOPE=project, a per-repository directory under the user's)
 	LogPath          string // Path to diagnostic log file (default: {RootPath}/logs/mcp-diagnostics.log)
 
 	// ToolGrouping opts into the grouped MCP tool surface (T67). When true,
@@ -107,6 +107,7 @@ type RAGConfig struct {
 	Enabled           bool
 	MaxResults        int
 	IndexPath         string   // Path to RAG vector index (default: {DataPath}/rag-index)
+	IndexRoot         string   // Tree the index covers when it is not RootPath: the main checkout in project scope (T165)
 	IndexDirs         []string // Directories and files to index for RAG (relative to RootPath or absolute)
 	IndexExcludeDirs  []string // Directory names or repo-relative paths to exclude from RAG indexing
 	IndexExcludeGlobs []string // Glob patterns matched against slash-separated repo-relative paths
@@ -353,6 +354,8 @@ type envValues struct {
 	memoryEnabled                    bool
 	memoryPreviewRunes               int
 	dataPath                         string
+	dataScope                        string
+	xdgDataHome                      string
 	ragIndexPath                     string
 	memoryDBPath                     string
 	logPath                          string
@@ -455,6 +458,8 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		memoryEnabled:                    s.Bool("MCP_MEMORY_ENABLED", true),
 		memoryPreviewRunes:               s.Int("MCP_MEMORY_PREVIEW_RUNES", 0),
 		dataPath:                         s.String("MCP_DATA_PATH", ""),
+		dataScope:                        s.String("MCP_DATA_SCOPE", ""),
+		xdgDataHome:                      s.String("XDG_DATA_HOME", ""),
 		ragIndexPath:                     s.String("MCP_RAG_INDEX_PATH", ""),
 		memoryDBPath:                     s.String("MCP_MEMORY_DB_PATH", ""),
 		logPath:                          s.String("MCP_LOG_PATH", ""),
@@ -552,7 +557,18 @@ func resolvePaths(ev envValues) (Config, error) {
 
 	allowed := splitAllowlist(ev.allow)
 
+	// Nothing in project scope may land in the repository by default.
+	projectScope := strings.EqualFold(ev.dataScope, DataScopeProject)
+	ragIndexRoot := ""
 	dataPath := ev.dataPath
+	if projectScope {
+		home, _ := os.UserHomeDir()
+		project := resolveProjectData(root, ev.xdgDataHome, home)
+		ragIndexRoot = project.indexRoot
+		if dataPath == "" {
+			dataPath = project.dataPath
+		}
+	}
 	if dataPath == "" {
 		dataPath = filepath.Join(root, "data")
 	} else if !filepath.IsAbs(dataPath) {
@@ -576,11 +592,17 @@ func resolvePaths(ev envValues) (Config, error) {
 	statsPath := ev.statsPath
 	if ev.statsEnabled && statsPath == "" {
 		statsPath = filepath.Join(root, "logs", "mcp-usage.jsonl")
+		if projectScope {
+			statsPath = filepath.Join(dataPath, "logs", "mcp-usage.jsonl")
+		}
 	}
 
 	logPath := ev.logPath
 	if logPath == "" {
 		logPath = filepath.Join(root, "logs", "mcp-diagnostics.log")
+		if projectScope {
+			logPath = filepath.Join(dataPath, "logs", "mcp-diagnostics.log")
+		}
 	} else if !filepath.IsAbs(logPath) {
 		logPath = filepath.Join(root, logPath)
 	}
@@ -622,6 +644,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			Enabled:           ev.ragEnabled,
 			MaxResults:        ev.ragMaxResults,
 			IndexPath:         ragIndexPath,
+			IndexRoot:         ragIndexRoot,
 			IndexDirs:         indexDirsList,
 			IndexExcludeDirs:  indexExcludeDirs,
 			IndexExcludeGlobs: indexExcludeGlobs,
