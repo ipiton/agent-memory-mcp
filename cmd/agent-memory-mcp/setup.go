@@ -98,74 +98,124 @@ func hooksAlreadyConfigured(settings map[string]any, currentCommand string) bool
 		return false
 	}
 
-	found := 0
 	for _, event := range []string{"SessionStart", "SessionEnd", "PreCompact"} {
-		entries, ok := hooksMap[event]
-		if !ok {
-			continue
-		}
-		arr, ok := entries.([]any)
-		if !ok || len(arr) == 0 {
-			continue
-		}
-		for _, entry := range arr {
-			m, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			cmd, ok := m["command"].(string)
-			if !ok {
-				continue
-			}
-			ours, current := isOurHookCommand(cmd, currentCommand)
-			if ours {
-				// Hook exists but points to a different binary — needs update.
-				if !current {
-					return false
+		found := false
+		entries, _ := hooksMap[event].([]any)
+		for _, entry := range entries {
+			group, _ := entry.(map[string]any)
+			// A flat entry from an older setup is not looked at: Claude Code skips it.
+			inner, _ := group["hooks"].([]any)
+			for _, hook := range inner {
+				m, _ := hook.(map[string]any)
+				cmd, _ := m["command"].(string)
+				ours, current := isOurHookCommand(cmd, currentCommand)
+				if ours {
+					// Hook exists but points to a different binary — needs update.
+					if !current {
+						return false
+					}
+					found = true
 				}
-				found++
 			}
+		}
+		if !found {
+			return false
 		}
 	}
-	return found >= 3
+	return true
 }
 
-func mergeHooks(settings map[string]any, hooks map[string][]hookEntry) {
+func mergeHooks(settings map[string]any, hooks map[string][]hookGroup) {
 	existing, _ := settings["hooks"].(map[string]any)
 	if existing == nil {
 		existing = make(map[string]any)
 	}
 
-	for event, entries := range hooks {
-		// Convert hookEntry to map[string]any for JSON.
-		jsonEntries := make([]any, len(entries))
-		for i, e := range entries {
-			jsonEntries[i] = map[string]any{
-				"type":    e.Type,
-				"command": e.Command,
+	for event, groups := range hooks {
+		merged := withoutOurHooks(existing[event])
+		for _, group := range groups {
+			inner := make([]any, len(group.Hooks))
+			for i, e := range group.Hooks {
+				inner[i] = map[string]any{
+					"type":    e.Type,
+					"command": e.Command,
+				}
 			}
+			merged = append(merged, map[string]any{"hooks": inner})
 		}
-		existing[event] = jsonEntries
+		existing[event] = merged
 	}
 
 	settings["hooks"] = existing
 }
 
+// withoutOurHooks returns an event's entries minus this binary's hooks, flat ones
+// from an older setup included. Everything else in the event stays as it was.
+func withoutOurHooks(entries any) []any {
+	arr, _ := entries.([]any)
+	kept := make([]any, 0, len(arr))
+	for _, entry := range arr {
+		group, ok := entry.(map[string]any)
+		if !ok {
+			kept = append(kept, entry)
+			continue
+		}
+		if cmd, ok := group["command"].(string); ok {
+			if ours, _ := isOurHookCommand(cmd, ""); !ours {
+				kept = append(kept, entry)
+			}
+			continue
+		}
+		inner, ok := group["hooks"].([]any)
+		if !ok {
+			kept = append(kept, entry)
+			continue
+		}
+		rest := make([]any, 0, len(inner))
+		for _, hook := range inner {
+			m, _ := hook.(map[string]any)
+			cmd, _ := m["command"].(string)
+			if ours, _ := isOurHookCommand(cmd, ""); !ours {
+				rest = append(rest, hook)
+			}
+		}
+		if len(rest) > 0 {
+			group["hooks"] = rest
+			kept = append(kept, group)
+		}
+	}
+	return kept
+}
+
 // isOurHookCommand parses a hook command line (e.g.
 // "/usr/local/bin/agent-memory-mcp hook session-start") and reports:
 //   - ours:    the first token's basename is exactly "agent-memory-mcp"
-//   - current: ours == true AND the first token equals currentCommand
+//   - current: ours == true AND the first token is currentCommand
 //
 // Strict basename match avoids false positives like "agent-memory-mcp-old"
 // or "/path/to/something-else/agent-memory-mcp" buried mid-string.
 func isOurHookCommand(cmd, currentCommand string) (ours bool, current bool) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return false, false
-	}
-	bin := parts[0]
+	bin := hookCommandBinary(cmd)
 	if filepath.Base(bin) != "agent-memory-mcp" {
 		return false, false
 	}
-	return true, bin == currentCommand
+	// buildHooksConfig writes an absolute path whatever it was given.
+	absolute, err := filepath.Abs(currentCommand)
+	return true, bin == currentCommand || (err == nil && bin == absolute)
+}
+
+// hookCommandBinary returns a command line's first token, without the single quotes
+// buildHooksConfig puts around it.
+func hookCommandBinary(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if rest, ok := strings.CutPrefix(cmd, "'"); ok {
+		if end := strings.IndexByte(rest, '\''); end >= 0 {
+			return rest[:end]
+		}
+	}
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
 }

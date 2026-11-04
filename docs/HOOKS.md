@@ -46,24 +46,38 @@ This prints a JSON fragment ready to merge into the `hooks` block. Example outpu
 {
   "SessionStart": [
     {
-      "type": "command",
-      "command": "/usr/local/bin/agent-memory-mcp context-inject"
+      "hooks": [
+        {
+          "type": "command",
+          "command": "'/usr/local/bin/agent-memory-mcp' context-inject; '/usr/local/bin/agent-memory-mcp' compile --detach"
+        }
+      ]
     }
   ],
   "SessionEnd": [
     {
-      "type": "command",
-      "command": "/usr/local/bin/agent-memory-mcp auto-capture --hook-event"
+      "hooks": [
+        {
+          "type": "command",
+          "command": "'/usr/local/bin/agent-memory-mcp' auto-capture --hook-event; '/usr/local/bin/agent-memory-mcp' compile --detach"
+        }
+      ]
     }
   ],
   "PreCompact": [
     {
-      "type": "command",
-      "command": "/usr/local/bin/agent-memory-mcp checkpoint --hook-event"
+      "hooks": [
+        {
+          "type": "command",
+          "command": "'/usr/local/bin/agent-memory-mcp' checkpoint --hook-event"
+        }
+      ]
     }
   ]
 }
 ```
+
+⚠️ Before this format, `setup` and `hooks-config` wrote each hook straight into the event's array. Claude Code skips such an entry, with a warning at startup, so those hooks never ran. Run `agent-memory-mcp setup` again: it replaces them without `--force`.
 
 The `setup` subcommand is just `hooks-config` plus a JSON merge into `~/.claude/settings.json` — they produce the same hook entries.
 
@@ -77,6 +91,20 @@ Lightweight read-only path: opens `MCP_MEMORY_DB_PATH` in WAL `mode=ro` and prin
 2. **Pending session summaries** — raw `session_summary` records that are not yet tagged `compiled`. Includes inline instructions for the agent to extract reusable knowledge with `store_decision` / `store_memory` and tag the source as `compiled` once processed.
 
 Why: Claude Code injects stdout into the system prompt, so the agent starts the session already aware of recent work.
+
+With `MCP_COMPILE_BACKGROUND=true` the second section becomes one line with the number of pending summaries, and nothing asks the session's model to process them.
+
+### Background compilation
+
+`agent-memory-mcp compile` does for pending summaries what the second section above asks the main model to do, outside its context: one headless `claude -p` per summary, with no tools, MCP servers or session history. The answer must be JSON with `decision`, `fact`, `procedure`, `dead_end` and `noise` items. Everything but noise is stored like the matching `store_*` tool would store it, with the summary's id in `derived_from` and `conversational` provenance, and the summary gets the tag `compiled`.
+
+- **Hooks.** The plugin and `setup` run `compile --detach` after `auto-capture` on `SessionEnd`, and after `context-inject` on `SessionStart` in case an earlier run did not finish. `--detach` returns at once. It starts nothing if `MCP_COMPILE_BACKGROUND` is off or the queue is empty. The plugin turns the variable on; with `setup` it stays off until you set it.
+- **One run at a time.** A lock in the data directory makes a second run exit. A run takes 10 summaries, newest first (`--limit`), so a long backlog drains over several sessions.
+- **Failures.** A summary whose answer is not valid stays pending and is tried again on later runs; after 3 bad answers it gets the tag `compile-failed` and leaves the queue. If `claude` itself fails, the run stops with no attempt counted. A background run writes to `compile.log` next to the diagnostics log.
+- **No recursion.** The child runs with `AMM_COMPILING=1`, and `context-inject`, `auto-capture`, `checkpoint` and `compile` exit at once when they see it.
+- **Cost.** Each summary is one call on your Claude account, about 7 s with `haiku`. With the plugin's hooks that is up to 20 calls per session while a backlog lasts.
+- **Old summaries.** A run skips summaries older than 7 days, and the line in `context-inject` does not count them, so turning this on over an old bank does not spend a call on each. They stay pending: `compile --max-age 0` takes them, 10 per run unless `--limit` says otherwise. The cutoff goes by calendar date.
+- **`claude` not found.** Hooks of an app started from the GUI may have a short `PATH`. Set `MCP_COMPILE_CLAUDE_BIN` to the full path.
 
 ### What a hook receives on stdin
 
@@ -174,7 +202,7 @@ Memory data itself is unaffected — `MCP_MEMORY_DB_PATH` keeps everything captu
 **Hooks run but nothing appears in memory.** Check the binary path is correct and resolves from Claude Code's `$PATH`:
 
 ```bash
-agent-memory-mcp setup --dry-run | jq '.hooks.SessionStart[0].command'
+agent-memory-mcp setup --dry-run | jq '.hooks.SessionStart[0].hooks[0].command'
 ```
 
 If the path is `agent-memory-mcp` (no leading `/`) and Claude Code can't find it, re-run `agent-memory-mcp setup --force --command "$(which agent-memory-mcp)"`.

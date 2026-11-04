@@ -45,6 +45,9 @@ type Config struct {
 	// keeps memory, search and session work, "full" (the default) is everything.
 	// MCP_TOOL_PROFILE.
 	ToolProfile string
+	// Compile moves the compilation of session summaries out of the main model's
+	// context into a headless claude (T181).
+	Compile CompileConfig
 
 	// RetrievalStrict turns every silent degradation on the read path into a
 	// failed call: an embedding provider falling through to the next one, a
@@ -92,6 +95,16 @@ type StatsConfig struct {
 	Enabled    bool
 	Path       string
 	SampleRate float64
+}
+
+// CompileConfig holds the settings of `agent-memory-mcp compile`.
+type CompileConfig struct {
+	// Background hands pending summaries to `compile --detach`; context-inject
+	// then stops asking the session's model to process them.
+	// MCP_COMPILE_BACKGROUND.
+	Background bool
+	Model      string // MCP_COMPILE_MODEL
+	ClaudeBin  string // MCP_COMPILE_CLAUDE_BIN, for a claude that is not on the hook's PATH
 }
 
 // MemoryConfig holds typed-memory store settings.
@@ -429,6 +442,9 @@ type envValues struct {
 	recallHalfLifeDays               float64
 	recallDecayTypes                 string
 	toolGrouping                     bool
+	compileBackground                bool
+	compileModel                     string
+	compileClaudeBin                 string
 	toolProfile                      string
 	retrievalStrict                  bool
 	recallCentered                   bool
@@ -534,6 +550,9 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		recallHalfLifeDays:               s.Float("MCP_RECALL_HALFLIFE_DAYS", 0),
 		recallDecayTypes:                 s.String("MCP_RECALL_DECAY_TYPES", "working"),
 		toolGrouping:                     s.Bool("MCP_TOOL_GROUPING", false),
+		compileBackground:                s.Bool("MCP_COMPILE_BACKGROUND", false),
+		compileModel:                     s.String("MCP_COMPILE_MODEL", "haiku"),
+		compileClaudeBin:                 s.String("MCP_COMPILE_CLAUDE_BIN", "claude"),
 		toolProfile:                      s.String("MCP_TOOL_PROFILE", ToolProfileFull),
 		retrievalStrict:                  s.Bool("MCP_RETRIEVAL_STRICT", false),
 		recallCentered:                   s.Bool("MCP_RECALL_CENTERED", true),
@@ -634,6 +653,12 @@ func resolvePaths(ev envValues) (Config, error) {
 		ToolProfile:      strings.ToLower(strings.TrimSpace(ev.toolProfile)),
 		RetrievalStrict:  ev.retrievalStrict,
 		RecallCentered:   ev.recallCentered,
+
+		Compile: CompileConfig{
+			Background: ev.compileBackground,
+			Model:      ev.compileModel,
+			ClaudeBin:  ev.compileClaudeBin,
+		},
 
 		Stats: StatsConfig{
 			Enabled:    ev.statsEnabled,

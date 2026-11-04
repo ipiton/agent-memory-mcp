@@ -21,8 +21,9 @@ A plugin cannot ship a binary per platform, so the first server start downloads 
 
 ## What it sets up
 
-- **Server `agent-memory`** over stdio, with the `core` profile of 17 tools ([MCP_TOOL_PROFILE](CONFIGURATION.md)).
+- **Server `agent-memory`** over stdio, with the `core` profile of 17 tools ([MCP_TOOL_PROFILE](CONFIGURATION.md)), offered as 6 grouped tools: about 9 KB of schema instead of 14 KB ([MCP_TOOL_GROUPING](CONFIGURATION.md)). The 17 legacy names keep working in `tools/call`.
 - **Hooks**: `SessionStart` injects the project's memory, `SessionEnd` captures the session, `PreCompact` saves a checkpoint ([Hooks](HOOKS.md)).
+- **Background compilation**: after `SessionEnd`, and at `SessionStart` if anything is left, `agent-memory-mcp compile` turns captured sessions into decisions, facts, procedures and dead ends with a headless `claude -p --model haiku`, one call per summary ([Background compilation](HOOKS.md#background-compilation)).
 - **One database per project**, in `~/.local/share/agent-memory-mcp/projects/<name>-<hash>` ([MCP_DATA_SCOPE](CONFIGURATION.md)). Worktrees of a repository share it, and nothing is written into the repository.
 - **Search by keywords**, with no model ([MCP_RAG_KEYWORD_FALLBACK](CONFIGURATION.md)). Results are marked as a degraded retrieval path because they are not semantic.
 
@@ -36,7 +37,9 @@ To add vectors, point at a local embedding server. On the next server start the 
 LLAMACPP_BASE_URL=http://127.0.0.1:8090/v1
 ```
 
-`MCP_TOOL_PROFILE=full` offers every tool.
+`MCP_TOOL_PROFILE=full` offers every tool, `MCP_TOOL_GROUPING=false` lists them one by one. Keep the second one in mind if your permission rules, hooks or subagents name this server's tools: they see only the grouped names ([Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency)).
+
+Background compilation runs on your Claude account; `MCP_COMPILE_BACKGROUND=false` stops them and returns the work to the session's own model, and `MCP_COMPILE_MODEL` picks another model.
 
 ## With a Homebrew install
 

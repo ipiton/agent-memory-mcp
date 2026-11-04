@@ -96,6 +96,9 @@ func h13GoldenEnv(t *testing.T) {
 		"MCP_SEDIMENT_SCHEDULE_INTERVAL":          "20m",
 		"MCP_RECALL_HALFLIFE_DAYS":                "15",
 		"MCP_TOOL_GROUPING":                       "true",
+		"MCP_COMPILE_BACKGROUND":                  "true",
+		"MCP_COMPILE_MODEL":                       "compile-model",
+		"MCP_COMPILE_CLAUDE_BIN":                  "/opt/claude",
 	}
 	for k, v := range set {
 		t.Setenv(k, v)
@@ -122,6 +125,9 @@ func serializeConfigForGolden(c Config) string {
 	p("LogPath", c.LogPath)
 	p("ToolGrouping", c.ToolGrouping)
 	p("ToolProfile", c.ToolProfile)
+	p("Compile.Background", c.Compile.Background)
+	p("Compile.Model", c.Compile.Model)
+	p("Compile.ClaudeBin", c.Compile.ClaudeBin)
 	p("Stats.Enabled", c.Stats.Enabled)
 	p("Stats.Path", c.Stats.Path)
 	p("Stats.SampleRate", c.Stats.SampleRate)
@@ -197,6 +203,14 @@ func serializeConfigForGolden(c Config) string {
 // TestConfigResolvedValuesGolden pins every resolved config value against a
 // golden file, proving the H13 sub-struct split preserved all values.
 func TestConfigResolvedValuesGolden(t *testing.T) {
+	// Repo-relative testdata so the golden is portable across machines and CI
+	// (a prior version hardcoded a per-session scratchpad path that only the
+	// authoring session could read). Resolved before h13GoldenEnv, which moves
+	// the test into an empty directory.
+	goldenPath, err := filepath.Abs(filepath.Join("testdata", "config_golden.txt"))
+	if err != nil {
+		t.Fatalf("golden path: %v", err)
+	}
 	h13GoldenEnv(t)
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -204,10 +218,6 @@ func TestConfigResolvedValuesGolden(t *testing.T) {
 	}
 	got := serializeConfigForGolden(cfg)
 
-	// Repo-relative testdata so the golden is portable across machines and CI
-	// (a prior version hardcoded a per-session scratchpad path that only the
-	// authoring session could read).
-	goldenPath := filepath.Join("testdata", "config_golden.txt")
 	want, err := os.ReadFile(goldenPath)
 	// Bootstrap on first run (missing golden) or explicit -update-golden: write
 	// the current resolved config as the new golden and pass.

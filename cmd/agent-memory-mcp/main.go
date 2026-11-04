@@ -95,6 +95,8 @@ func run(argv []string) error {
 		return runAutoCapture(args)
 	case "checkpoint":
 		return runCheckpoint(args)
+	case "compile":
+		return runCompile(args)
 	case "sweep-archive":
 		return runSweepArchive(args)
 	case "end-task":
@@ -250,6 +252,7 @@ Hooks (for Claude Code integration):
   context-inject  Output recent memories for session start injection
   auto-capture    Capture session knowledge from transcript (stdin)
   checkpoint      Save a session checkpoint (pre-compact or manual)
+  compile         Extract knowledge from pending session summaries with headless claude
 
 Task lifecycle (T47):
   sweep-archive   Mark working memories tied to archived task slugs as outdated

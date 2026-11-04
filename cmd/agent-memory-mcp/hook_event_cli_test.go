@@ -150,11 +150,12 @@ func TestGeneratedHooksConfigUsesTheEventContract(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("%s: %d entries, want 1", hook, len(entries))
 		}
-		if !strings.Contains(entries[0].Command, "--hook-event") {
-			t.Errorf("%s command = %q, want --hook-event", hook, entries[0].Command)
+		command := entries[0].Hooks[0].Command
+		if !strings.Contains(command, "--hook-event") {
+			t.Errorf("%s command = %q, want --hook-event", hook, command)
 		}
-		if strings.Contains(entries[0].Command, "--stdin") {
-			t.Errorf("%s command still passes --stdin: %q", hook, entries[0].Command)
+		if strings.Contains(command, "--stdin") {
+			t.Errorf("%s command still passes --stdin: %q", hook, command)
 		}
 	}
 }

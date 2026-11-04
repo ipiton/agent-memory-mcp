@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
@@ -75,6 +76,9 @@ func runContextInject(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if compilingSession() {
+		return nil
+	}
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -127,9 +131,22 @@ func runContextInject(args []string) error {
 		}
 	}
 
+	// With background compilation the main model has nothing to do here: one line
+	// says the queue exists, and the summaries stay out of the session's context.
+	if cfg.Compile.Background {
+		count, err := countPending(ctx, db, *memContext, compileSince(defaultCompileMaxAge))
+		if err != nil {
+			return fmt.Errorf("counting pending: %w", err)
+		}
+		if count > 0 {
+			fmt.Printf("%d session summaries are waiting for background compilation.\n", count)
+		}
+		return nil
+	}
+
 	// Output pending raw summaries with compilation instructions.
 	if *pendingLimit > 0 {
-		pending, err := queryPending(ctx, db, *pendingLimit, *memContext)
+		pending, err := queryPending(ctx, db, *pendingLimit, *memContext, time.Time{})
 		if err != nil {
 			return fmt.Errorf("querying pending: %w", err)
 		}
@@ -190,25 +207,41 @@ func queryKnowledge(ctx context.Context, db *sql.DB, limit int, memContext, serv
 	return queryRows(ctx, db, query, params)
 }
 
-// queryPending returns uncompiled session summary records.
-func queryPending(ctx context.Context, db *sql.DB, limit int, memContext string) ([]contextInjectRow, error) {
-	var conditions []string
+// queryPending returns uncompiled session summary records, created since the given
+// time if it is set.
+func queryPending(ctx context.Context, db *sql.DB, limit int, memContext string, since time.Time) ([]contextInjectRow, error) {
+	where, params := pendingWhere(memContext, since)
+	query := "SELECT id, COALESCE(title,''), content, COALESCE(context,''), COALESCE(tags,'') FROM memories WHERE " +
+		where + " ORDER BY created_at DESC LIMIT ?"
+	return queryRows(ctx, db, query, append(params, limit))
+}
+
+// countPending is queryPending without a limit: how long the queue really is.
+func countPending(ctx context.Context, db *sql.DB, memContext string, since time.Time) (int, error) {
+	where, params := pendingWhere(memContext, since)
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memories WHERE "+where, params...).Scan(&count)
+	return count, err
+}
+
+func pendingWhere(memContext string, since time.Time) (string, []any) {
+	conditions := []string{
+		"json_extract(metadata, '$.record_kind') = 'session_summary'",
+		`tags NOT LIKE '%"` + tagCompiled + `"%'`,
+		`tags NOT LIKE '%"` + tagCompileFailed + `"%'`,
+	}
 	var params []any
-
-	conditions = append(conditions, "json_extract(metadata, '$.record_kind') = 'session_summary'")
-	conditions = append(conditions, `tags NOT LIKE '%"compiled"%'`)
-
 	if memContext != "" {
 		conditions = append(conditions, "context = ?")
 		params = append(params, memContext)
 	}
-
-	query := "SELECT id, COALESCE(title,''), content, COALESCE(context,''), COALESCE(tags,'') FROM memories WHERE " +
-		strings.Join(conditions, " AND ") +
-		" ORDER BY created_at DESC LIMIT ?"
-	params = append(params, limit)
-
-	return queryRows(ctx, db, query, params)
+	if !since.IsZero() {
+		// By date: created_at holds Go's time.String(), which SQLite's date functions
+		// cannot parse. All that its forms have in common is the leading date.
+		conditions = append(conditions, "substr(created_at, 1, 10) >= ?")
+		params = append(params, since.Format(time.DateOnly))
+	}
+	return strings.Join(conditions, " AND "), params
 }
 
 func queryRows(ctx context.Context, db *sql.DB, query string, params []any) ([]contextInjectRow, error) {
@@ -252,6 +285,9 @@ func runAutoCapture(args []string) error {
 	jsonOut := fs.Bool("json", false, "Output as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if compilingSession() {
+		return nil
 	}
 
 	input, err := resolveSessionInput(*hookEvent, *summary, *stdin, *memContext, fs.Args())
@@ -339,6 +375,9 @@ func runCheckpoint(args []string) error {
 	tags := fs.String("tags", "", "Comma-separated tags")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if compilingSession() {
+		return nil
 	}
 
 	input, err := resolveSessionInput(*hookEvent, *summary, *stdin, *memContext, fs.Args())

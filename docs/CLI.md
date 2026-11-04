@@ -73,6 +73,7 @@ When no command is given (or flags start with `-`), the binary starts the MCP se
 | `setup` | Auto-configure Claude Code hooks in `~/.claude/settings.json` (`-command`, `-dry-run`, `-force`). See [docs/HOOKS.md](HOOKS.md) |
 | `hooks-config` | Print Claude Code hooks JSON for manual paste into `settings.json` (`-command`, `-json`) |
 | `context-inject` | SessionStart hook payload: recent memories + pending raw summaries (`-limit`, `-pending-limit`, `-context`, `-service`) |
+| `compile` | Extract knowledge from pending session summaries with a headless `claude -p` (`-limit`, `-max-age`, `-model`, `-detach`). See [Background compilation](HOOKS.md#background-compilation) |
 | `auto-capture` | SessionEnd hook: read transcript from stdin, run extract → plan → apply pipeline (`-stdin`, `-summary`, `-mode`, `-context`, `-service`, `-tags`, `-dry-run`, `-json`) |
 | `checkpoint` | PreCompact hook: save a raw session checkpoint before context compression (`-stdin`, `-summary`, `-boundary`, `-context`, `-service`, `-tags`) |
 | `sweep-archive` | Scan `MCP_TASK_ARCHIVE_ROOTS` and run `end-task` on every archived slug (T47) |

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`agent-memory-mcp compile`** extracts decisions, facts, procedures and dead ends from pending session summaries with a headless `claude -p --model haiku`, so this no longer happens in the main model's context. With `MCP_COMPILE_BACKGROUND=true`, `context-inject` prints one line instead of the summaries. See [Background compilation](HOOKS.md#background-compilation).
+
+### Changed
+
+- **The Claude Code plugin uses less context.** Its tools are grouped (17→6 tools, 13.7→9.1 KB of schema; legacy names keep working). This shows at session start only where the client loads schemas up front; Claude Code can defer them until a tool is needed. And session summaries are compiled in the background: on a bank with 5 pending summaries, `context-inject` prints 5.3 KB instead of 11 KB, and the session's model no longer has to process them. Background calls run on your Claude account, up to 20 per session while a backlog lasts. Summaries older than 7 days are skipped (`compile --max-age 0` takes them). `MCP_COMPILE_BACKGROUND=false` in the plugin's `config.env` turns them off. Installs through `setup` and Homebrew keep their tool list, and compile stays off there until `MCP_COMPILE_BACKGROUND=true`.
+
+### Fixed
+
+- **Hooks from `setup` and `hooks-config` now run.** They were written in a format Claude Code skips, so on such an install no session was captured or injected by them. Run `agent-memory-mcp setup` again to replace them; it now adds `compile --detach` too.
+- **`setup` keeps hooks that are not its own.** It used to replace all of `SessionStart`, `SessionEnd` and `PreCompact`, despite the docs. It also now recognises the quoted paths it writes itself.
+
 ## [0.15.1] - 2026-11-03
 
 ### Fixed

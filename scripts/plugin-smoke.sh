@@ -149,7 +149,7 @@ check "a wrong checksum is refused" "$OUT" "checksum mismatch"
 echo "$GOOD_SUMS" >"$PLUGIN/checksums.txt"
 
 OUT="$(session '[["store_memory", {"content": "the smokeword fact", "type": "semantic"}], ["index_documents", {}], ["semantic_search", {"query": "frobnicator", "limit": 3}], ["repo_read", {"path": "docs/runbook.md"}]]')"
-check "core profile" "$OUT" "tools: 17"
+check "core profile, grouped" "$OUT" "tools: 6"
 check "memory is stored with no model" "$OUT" "Memory stored"
 check "documents are indexed with no model" "$OUT" "Indexed 1 files"
 check "keyword search finds the document" "$OUT" "docs/runbook.md"
@@ -161,6 +161,17 @@ echo "ok: nothing but the user's own files in the project"
 
 OUT="$(session '[["recall_memory", {"query": "smokeword"}]]')"
 check "memory survives into the next session" "$OUT" "the smokeword fact"
+
+OUT="$(session '[["memory", {"action": "recall", "query": "smokeword"}]]')"
+check "a grouped call works" "$OUT" "the smokeword fact"
+
+# config.env has to win over the plugin's default, as docs/PLUGIN.md promises. An
+# env entry in plugin/.mcp.json would beat it.
+cp "$DATA/config.env" "$WORK/config.env.orig"
+echo "MCP_TOOL_GROUPING=false" >>"$DATA/config.env"
+OUT="$(session '[]')"
+check "config.env turns grouping off" "$OUT" "tools: 17"
+cp "$WORK/config.env.orig" "$DATA/config.env"
 
 OUT="$(plugin_env "$PLUGIN/scripts/launch.sh" hook context-inject 2>&1)"
 check "the next session starts with the project's memory" "$OUT" "the smokeword fact"
@@ -181,6 +192,45 @@ echo "ok: the update replaced the binary"
 session_end first >/dev/null 2>&1
 [ "$(raw_summaries)" -ge 1 ] || { echo "FAIL: the hook captured nothing" >&2; exit 1; }
 echo "ok: a session end is captured"
+
+OUT="$(plugin_env "$PLUGIN/scripts/launch.sh" hook context-inject 2>&1)"
+check "the session start only counts pending summaries" "$OUT" "waiting for background compilation"
+if grep -qF "Pending session summaries" <<<"$OUT"; then
+	echo "FAIL: pending summaries reached the session" >&2
+	exit 1
+fi
+
+# A headless claude's own hooks: nothing captured, nothing injected, nothing started.
+BEFORE="$(raw_summaries)"
+OUT="$(plugin_env AMM_COMPILING=1 "$PLUGIN/scripts/launch.sh" hook context-inject 2>&1)"
+[ -z "$OUT" ] || { echo "FAIL: context-inject ran inside compile: $OUT" >&2; exit 1; }
+printf '{"session_id":"child","hook_event_name":"SessionEnd","transcript_path":"%s","cwd":"%s"}\n' "$TRANSCRIPT" "$PROJECT" |
+	plugin_env AMM_COMPILING=1 "$PLUGIN/scripts/launch.sh" hook auto-capture --hook-event >/dev/null 2>&1
+[ "$(raw_summaries)" -eq "$BEFORE" ] || { echo "FAIL: auto-capture ran inside compile" >&2; exit 1; }
+echo "ok: hooks do nothing inside compile"
+
+FAKE_CLAUDE="$WORK/fake-claude"
+cat >"$FAKE_CLAUDE" <<SCRIPT
+#!/bin/sh
+cat >/dev/null
+echo "\${AMM_COMPILING:-unset}" >"$WORK/fake-claude.env"
+printf '%s' '{"type":"result","is_error":false,"result":"{\"items\":[{\"kind\":\"fact\",\"title\":\"Compiled in the background\",\"content\":\"the compiledword fact\",\"tags\":[],\"importance\":0.5}]}"}'
+SCRIPT
+chmod 755 "$FAKE_CLAUDE"
+plugin_env MCP_COMPILE_CLAUDE_BIN="$FAKE_CLAUDE" "$PLUGIN/scripts/launch.sh" hook compile --detach >/dev/null 2>&1
+for _ in $(seq 1 40); do
+	OUT="$(plugin_env "$PLUGIN/scripts/launch.sh" hook context-inject 2>&1)"
+	grep -qF "the compiledword fact" <<<"$OUT" && ! grep -qF "waiting for background" <<<"$OUT" && break
+	sleep 0.5
+done
+check "a detached compile stores what the model extracted" "$OUT" "the compiledword fact"
+if grep -qF "waiting for background" <<<"$OUT"; then
+	echo "FAIL: the compiled summary is still pending" >&2
+	exit 1
+fi
+[ "$(cat "$WORK/fake-claude.env")" = 1 ] || { echo "FAIL: the child claude has no recursion guard" >&2; exit 1; }
+[ "$(git -C "$PROJECT" status --short | grep -cv docs/)" -eq 0 ] || { echo "FAIL: compile wrote into the project" >&2; git -C "$PROJECT" status --short >&2; exit 1; }
+echo "ok: compile leaves the queue empty and the project clean"
 
 BEFORE="$(raw_summaries)"
 mkdir -p "$HOME_DIR/.claude"

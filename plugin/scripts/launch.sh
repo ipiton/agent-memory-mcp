@@ -13,6 +13,12 @@ set -eu
 
 umask 077
 
+# The headless claude that `compile` starts would otherwise fire these same hooks:
+# capture its own session, inject memory into it, start another compile.
+if [ "${1:-}" = hook ] && [ "${AMM_COMPILING:-}" = 1 ]; then
+	exit 0
+fi
+
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 plugin_root=$(dirname -- "$here")
 version=$(sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p' "$plugin_root/.claude-plugin/plugin.json" | head -n 1)
@@ -124,6 +130,8 @@ CONFIG
 default_env MCP_HTTP_MODE stdio
 default_env MCP_DATA_SCOPE project
 default_env MCP_TOOL_PROFILE core
+default_env MCP_TOOL_GROUPING true
+default_env MCP_COMPILE_BACKGROUND true
 default_env MCP_EMBEDDING_MODE local-only
 default_env MCP_RAG_KEYWORD_FALLBACK true
 case $project_dir in

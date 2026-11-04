@@ -61,13 +61,15 @@ func TestPluginManifests(t *testing.T) {
 	}
 	readJSON(t, filepath.Join(repo, "plugin", "hooks", "hooks.json"), &hooks)
 	want := map[string]string{
-		"SessionStart": "launch.sh hook context-inject",
-		"SessionEnd":   "launch.sh hook auto-capture --hook-event",
+		"SessionStart": "launch.sh hook context-inject; ${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh hook compile --detach",
+		"SessionEnd":   "launch.sh hook auto-capture --hook-event; ${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh hook compile --detach",
 		"PreCompact":   "launch.sh hook checkpoint --hook-event",
 	}
 	if len(hooks.Hooks) != len(want) {
 		t.Errorf("hook events = %d, want %d", len(hooks.Hooks), len(want))
 	}
+	// One command, not two entries: Claude Code runs the hooks of an event in
+	// parallel, and compile has to see the summary auto-capture just wrote.
 	for event, suffix := range want {
 		entries := hooks.Hooks[event]
 		if len(entries) != 1 || len(entries[0].Hooks) != 1 || !strings.HasSuffix(entries[0].Hooks[0].Command, suffix) {

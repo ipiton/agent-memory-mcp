@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func runHooksConfig(args []string) error {
@@ -38,6 +39,7 @@ func runHooksConfig(args []string) error {
 	fmt.Fprintf(os.Stderr, "\nHook descriptions:\n")
 	fmt.Fprintf(os.Stderr, "  SessionStart  — injects recent memories and project context into the session\n")
 	fmt.Fprintf(os.Stderr, "  SessionEnd    — auto-captures session knowledge (extract, plan, apply)\n")
+	fmt.Fprintf(os.Stderr, "  compile       — runs after both, only with MCP_COMPILE_BACKGROUND=true\n")
 	fmt.Fprintf(os.Stderr, "  PreCompact    — saves a checkpoint before context window compression\n")
 	return nil
 }
@@ -47,27 +49,26 @@ type hookEntry struct {
 	Command string `json:"command"`
 }
 
-func buildHooksConfig(binaryPath string) map[string][]hookEntry {
+// hookGroup is one element of an event's array in settings.json. Claude Code skips
+// an element with no "hooks" array, so a bare hookEntry there never runs.
+type hookGroup struct {
+	Hooks []hookEntry `json:"hooks"`
+}
+
+func buildHooksConfig(binaryPath string) map[string][]hookGroup {
 	bin := shellQuoteHooks(binaryPath)
-	return map[string][]hookEntry{
-		"SessionStart": {
-			{
-				Type:    "command",
-				Command: fmt.Sprintf("%s context-inject", bin),
-			},
-		},
-		"SessionEnd": {
-			{
-				Type:    "command",
-				Command: fmt.Sprintf("%s auto-capture --hook-event", bin),
-			},
-		},
-		"PreCompact": {
-			{
-				Type:    "command",
-				Command: fmt.Sprintf("%s checkpoint --hook-event", bin),
-			},
-		},
+	command := func(format string) []hookGroup {
+		return []hookGroup{{Hooks: []hookEntry{{
+			Type:    "command",
+			Command: strings.ReplaceAll(format, "BIN", bin),
+		}}}}
+	}
+	// compile shares a command with what precedes it: Claude Code runs the hooks of
+	// one event in parallel, and compile has to see the summary auto-capture wrote.
+	return map[string][]hookGroup{
+		"SessionStart": command("BIN context-inject; BIN compile --detach"),
+		"SessionEnd":   command("BIN auto-capture --hook-event; BIN compile --detach"),
+		"PreCompact":   command("BIN checkpoint --hook-event"),
 	}
 }
 

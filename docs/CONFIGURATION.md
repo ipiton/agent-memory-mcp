@@ -36,7 +36,10 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_MAX_DEPTH` | `3` | Max directory recursion depth for `repo_list` |
 | `MCP_STDIO_MODE` | `line` | Stdio framing: `line` (newline-delimited) or `lsp` (Content-Length headers) |
 | `MCP_TOOL_PROFILE` | `full` | `core` offers and accepts 17 tools chosen from real usage: search, memory, typed memory and session review. A call to anything else is refused on the server, not only hidden from `tools/list`. `full` is every tool. The Claude Code plugin sets `core` |
-| `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (~42% smaller, 41→8 tools). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. See [Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency) |
+| `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (~42% smaller, 41→8 tools). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. With the `core` profile it is 17→6 tools, 14→9 KB. The Claude Code plugin turns it on. See [Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency) |
+| `MCP_COMPILE_BACKGROUND` | `false` | `context-inject` stops asking the session's model to process pending summaries, and `compile --detach` does it with a headless `claude`. The Claude Code plugin turns it on. See [Background compilation](HOOKS.md#background-compilation) |
+| `MCP_COMPILE_MODEL` | `haiku` | Model for `compile` |
+| `MCP_COMPILE_CLAUDE_BIN` | `claude` | The `claude` executable for `compile`, for hooks whose `PATH` does not have it |
 | `MCP_MEMORY_ENABLED` | `true` | Enable memory tools |
 | `MCP_MEMORY_PREVIEW_RUNES` | `0` | Override the per-surface truncation cap (rune-based) for memory content/summary fields in MCP tool responses (`recall_memory`, `list_memories`, `search_runbooks`, …). `0` keeps the built-in caps (150/220/300); a positive value forces that single cap on all surfaces; a negative value disables truncation (full text). |
 | `MCP_RAG_ENABLED` | `true` | Enable RAG/search tools (Homebrew service preset overrides this to `false` until you set `MCP_ROOT`) |

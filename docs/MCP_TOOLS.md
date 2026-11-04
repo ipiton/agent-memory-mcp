@@ -106,11 +106,15 @@ Groups: `repo` · `memory` · `memory_admin` · `engineering` · `search` ·
 `session`, plus the `index_documents` and `project_bank_view` singletons — the
 default surface drops from **41 tools to 8** (~42% smaller schema payload).
 
-- **Opt-in, zero regression.** Default is `false`; the flag only changes what
-  `tools/list` returns.
-- **Both call forms always work.** `tools/call` accepts the grouped form
+- **Opt-in.** Default is `false`; the flag only changes what `tools/list` returns.
+- **Both call forms work on the server.** `tools/call` accepts the grouped form
   (`memory` + `action=store`) *and* the legacy name (`store_memory`) regardless
-  of the flag, so existing scripts never break.
+  of the flag, so scripts calling the server directly keep working.
+- **Clients see only the grouped names.** Whatever a client matches by tool name
+  stops matching: permission rules (an `ask` on `promote_to_canonical` no longer
+  applies when a wildcard allows the group), hook matchers (`store_memory`), and
+  tool lists of subagents. A group also mixes reads and writes, so a read-only
+  agent cannot be given `memory`. Check these before turning grouping on.
 - **Administrative & steward tools stay individual.** Rarely listed in
   high-volume agent runs, and `steward_inbox_resolve` already uses its own
   `action` argument — grouping deliberately leaves them ungrouped.
