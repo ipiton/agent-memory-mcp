@@ -16,7 +16,7 @@ func TestContentContainsMeansMergeAddsNothing(t *testing.T) {
 	}{
 		{"Assistant: Checked the indexer.", true},
 		{"assistant: checked the INDEXER.", true}, // case is ignored, as in the merge
-		{"   ", true},                             // empty adds nothing
+		{"   ", true}, // empty adds nothing
 		{"Assistant: Checked the indexer twice.", false},
 	}
 	for _, c := range cases {
