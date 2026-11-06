@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The steward no longer flags episodic memories as stale by age.** Finished tasks and incidents do not become false with time. With `auto_mark_stale_beyond_days` set, one run on the Sema bank used to mark 1368 of them stale; now it marks none. Stale items already in the inbox for episodic memories are closed on the next run.
+- **Duplicate groups where one record contains the others can auto-merge.** Under the existing opt-in (`auto_merge_duplicate_min_confidence` ≤ 0.75), verbatim containment now qualifies a group alongside Jaccard similarity, and the containing record becomes the primary, so its text stays as it is. Jaccard misses this case: a short record inside a long one shares few of its words.
+
+### Fixed
+
+- **Inbox reconciliation skipped items.** It advanced a full page after closing items, so it stepped over as many pending items as it had just closed. It also now closes duplicate groups with fewer than two live members left.
+
 ## [0.16.0] - 2026-11-04
 
 ### Added

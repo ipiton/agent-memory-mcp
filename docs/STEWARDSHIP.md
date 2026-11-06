@@ -28,7 +28,7 @@ A steward run executes four scanners:
 
 1. **Duplicate detection** — groups memories by entity/service/context/subject and flags groups with 2+ entries
 2. **Conflict detection** — finds groups with multiple canonical entries or conflicting lifecycle statuses
-3. **Stale detection** — flags memories not verified within the configured threshold (default: 30 days)
+3. **Stale detection** — flags memories not verified within the configured threshold (default: 30 days). Episodic memories are skipped: they record what happened on a date, and age does not make them false
 4. **Canonical promotion** — finds high-importance, active engineering entries without an existing canonical counterpart
 
 Each scanner produces actions. Actions are classified as:
@@ -125,10 +125,25 @@ run with `dry_run=false` apply these merges automatically. A group only
 auto-merges when **all** of the following hold:
 
 - the detection confidence (`0.75`) is at or above the configured min-confidence;
-- every non-primary member is textually near-identical to the primary —
+- every non-primary member is either contained in the primary verbatim
+  (ignoring case and surrounding whitespace) or textually near-identical to it —
   `JaccardSimilarity(primary, member) >= auto_merge_require_content_similarity`
   (default `0.85`) — so archiving it loses no unique content;
 - no member is canonical (canonical knowledge is never auto-archived).
+
+When one member contains all the others (session-close records accumulate, so
+the newest usually holds every earlier one), it is put first and becomes the
+primary, and the merge leaves its text unchanged. A member admitted by Jaccard
+alone is still appended to the primary as a `Merged note`.
+
+### Inbox reconciliation
+
+Every run with `dry_run=false` first closes pending inbox items that no longer
+need review, as `obsolete`:
+
+- all targets are deleted, merged, superseded or outdated;
+- a duplicate group has fewer than two live members left;
+- a stale entry points only at episodic memories.
 
 Groups that fail the content-similarity guard or contain canonical entries stay
 `review_required`. A value of `0` for `auto_merge_duplicate_min_confidence`
