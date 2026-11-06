@@ -335,16 +335,18 @@ func (s *Service) reconcileInbox() (int, error) {
 	// live set comes from the cache in a single pass; an id absent from it has
 	// been deleted, which is exactly what "gone" means here.
 	live := make(map[string]memory.LifecycleStatus)
+	episodic := make(map[string]bool)
 	for _, m := range s.store.ListLightweight(memory.Filters{}) {
 		if m != nil {
 			live[m.ID] = memory.LifecycleStatusOf(m)
+			episodic[m.ID] = m.Type == memory.TypeEpisodic
 		}
 	}
 
 	reconciled := 0
 	// T90 M5: paged rather than one Limit:100000 query.
 	const page = 500
-	for offset := 0; ; offset += page {
+	for offset := 0; ; {
 		items, err := ListInboxItems(s.db, InboxQuery{Status: string(InboxPending), Limit: page, Offset: offset})
 		if err != nil {
 			return reconciled, err
@@ -352,7 +354,7 @@ func (s *Service) reconcileInbox() (int, error) {
 		if len(items) == 0 {
 			break
 		}
-		n, err := s.reconcileInboxPage(items, live)
+		n, err := s.reconcileInboxPage(items, live, episodic)
 		reconciled += n
 		if err != nil {
 			return reconciled, err
@@ -360,28 +362,53 @@ func (s *Service) reconcileInbox() (int, error) {
 		if len(items) < page {
 			break
 		}
+		// Resolved items leave the pending set, so the next page starts after
+		// the ones still pending, not after a full page: advancing by `page`
+		// skipped as many unseen items as this page resolved.
+		offset += len(items) - n
 	}
 	return reconciled, nil
 }
 
-func (s *Service) reconcileInboxPage(items []InboxItem, live map[string]memory.LifecycleStatus) (int, error) {
+// reconcileReason says why a pending item no longer warrants review, or "" if
+// it still does. Besides targets that are all gone (T81):
+//   - a duplicate group with fewer than two live members has nothing to merge;
+//   - a stale_entry on episodic records only: the scanner no longer flags
+//     episodic records by age (scanStale), so items it raised before stay
+//     pending forever otherwise.
+func reconcileReason(item *InboxItem, live map[string]memory.LifecycleStatus, episodic map[string]bool) string {
+	liveCount, allEpisodic := 0, true
+	for _, tid := range item.TargetIDs {
+		if !targetGoneIn(live, tid) {
+			liveCount++
+		}
+		if !episodic[strings.TrimSpace(tid)] {
+			allEpisodic = false
+		}
+	}
+	switch {
+	case liveCount == 0:
+		return "steward reconcile: all targets deleted/merged/superseded"
+	case item.Kind == InboxDuplicateCandidate && liveCount < 2:
+		return "steward reconcile: fewer than two live members left to merge"
+	case item.Kind == InboxStaleEntry && allEpisodic:
+		return "steward reconcile: episodic records do not go stale by age"
+	}
+	return ""
+}
+
+func (s *Service) reconcileInboxPage(items []InboxItem, live map[string]memory.LifecycleStatus, episodic map[string]bool) (int, error) {
 	reconciled := 0
 	for i := range items {
 		item := &items[i]
 		if len(item.TargetIDs) == 0 {
 			continue
 		}
-		allGone := true
-		for _, tid := range item.TargetIDs {
-			if !targetGoneIn(live, tid) {
-				allGone = false
-				break
-			}
-		}
-		if !allGone {
+		reason := reconcileReason(item, live, episodic)
+		if reason == "" {
 			continue
 		}
-		if err := ResolveInboxItem(s.db, item.ID, "obsolete", "steward reconcile: all targets deleted/merged/superseded", "steward-reconcile"); err != nil {
+		if err := ResolveInboxItem(s.db, item.ID, "obsolete", reason, "steward-reconcile"); err != nil {
 			s.logger.Warn("steward reconcile: resolve obsolete failed", zap.String("id", item.ID), zap.Error(err))
 			continue
 		}

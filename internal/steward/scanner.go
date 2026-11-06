@@ -133,18 +133,26 @@ func scanDuplicates(memories []*memory.Memory, policy Policy, result *ScanResult
 			continue
 		}
 
-		ids := make([]string, len(g.members))
-		for i, m := range g.members {
+		// The merge keeps TargetIDs[0], so a member that contains all the others
+		// goes first: session-close records accumulate, and the newest one holds
+		// every earlier one verbatim.
+		members := g.members
+		if c := containerIndex(members); c > 0 {
+			members = append([]*memory.Memory{members[c]}, append(append([]*memory.Memory{}, members[:c]...), members[c+1:]...)...)
+		}
+
+		ids := make([]string, len(members))
+		for i, m := range members {
 			ids[i] = m.ID
 		}
 
-		title := displayTitle(g.members[0], 60)
+		title := displayTitle(members[0], 60)
 
 		handling := HandlingReviewRequired
-		evidence := []string{fmt.Sprintf("group_size=%d", len(g.members))}
-		if minSim, ok := shouldAutoMergeGroup(g.members, policy); ok {
+		evidence := []string{fmt.Sprintf("group_size=%d", len(members))}
+		if proof, ok := shouldAutoMergeGroup(members, policy); ok {
 			handling = HandlingSafeAutoApply
-			evidence = append(evidence, fmt.Sprintf("min_content_similarity=%.2f", minSim))
+			evidence = append(evidence, proof)
 		}
 
 		result.Actions = append(result.Actions, Action{
@@ -167,32 +175,66 @@ func scanDuplicates(memories []*memory.Memory, policy Policy, result *ScanResult
 //     which is also the safe default for policies persisted before this field)
 //     and that threshold is at or below the group's detection confidence;
 //   - no member is canonical (canonical knowledge is never auto-archived);
-//   - every non-primary member is textually near-identical to the primary
-//     (Jaccard >= the content-similarity threshold), so merging archives no
-//     unique content.
-func shouldAutoMergeGroup(members []*memory.Memory, policy Policy) (float64, bool) {
+//   - every non-primary member is either contained in the primary verbatim
+//     (memory.ContentContains — the merge then leaves the primary's text as it
+//     is) or textually near-identical to it (Jaccard >= the content-similarity
+//     threshold), so merging archives no unique content.
+//
+// Containment is checked first because Jaccard misses it: a short record inside
+// a long one shares few of the long one's words. Measured on the Sema bank
+// 2026-11-06: 21 of 25 sampled duplicate groups were containment, and Jaccard
+// let none of them through.
+//
+// The returned proof names which test admitted the group, for the evidence.
+func shouldAutoMergeGroup(members []*memory.Memory, policy Policy) (string, bool) {
 	minConf := policy.AutoMergeDuplicateMinConfidence
 	if minConf <= 0 || dupGroupConfidence < minConf {
-		return 0, false
+		return "", false
 	}
 	for _, m := range members {
 		if memory.IsCanonicalMemory(m) {
-			return 0, false
+			return "", false
 		}
 	}
 	threshold := policy.EffectiveAutoMergeContentSimilarity()
 	primary := members[0]
 	minSim := 1.0
+	contained := 0
 	for _, m := range members[1:] {
+		if memory.ContentContains(primary.Content, m.Content) {
+			contained++
+			continue
+		}
 		sim := hooks.JaccardSimilarity(primary.Content, m.Content)
 		if sim < minSim {
 			minSim = sim
 		}
 		if sim < threshold {
-			return 0, false
+			return "", false
 		}
 	}
-	return minSim, true
+	if contained == len(members)-1 {
+		return "contained_in_primary=all", true
+	}
+	return fmt.Sprintf("min_content_similarity=%.2f contained_in_primary=%d", minSim, contained), true
+}
+
+// containerIndex returns the index of a member whose content contains every
+// other member's, or -1. The longest member is the only candidate: a text
+// cannot contain a longer one.
+func containerIndex(members []*memory.Memory) int {
+	best := 0
+	for i, m := range members {
+		if len(m.Content) > len(members[best].Content) {
+			best = i
+		}
+	}
+	for i, m := range members {
+		if i != best && !memory.ContentContains(members[best].Content, m.Content) {
+			return -1
+		}
+	}
+	return best
 }
 
 // scanConflicts finds memories with conflicting statuses or multiple canonical entries.
@@ -269,6 +311,13 @@ func scanStale(memories []*memory.Memory, policy Policy, now time.Time, result *
 	threshold := now.AddDate(0, 0, -policy.StaleDays)
 
 	for _, m := range memories {
+		// An episodic record says what happened on a date; age does not make it
+		// false, and re-verifying it has nothing to check against. Flagging by age
+		// filled the inbox with them: 16 of 16 sampled stale episodic items on the
+		// Sema bank (2026-11-06) were finished tasks and incidents.
+		if m.Type == memory.TypeEpisodic {
+			continue
+		}
 		verified := memory.LastVerifiedAt(m)
 		if verified.After(threshold) {
 			continue

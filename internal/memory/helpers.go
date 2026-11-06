@@ -147,6 +147,19 @@ const MaxMergedContentBytes = 100000
 
 const mergedContentTruncatedSuffix = "\n[truncated: merged content exceeded size limit]"
 
+// ContentContains reports whether merging dup into primary adds no text:
+// mergeContent skips exactly the duplicates for which this holds. The steward
+// uses it as proof that an auto-merge archives no unique content, so the two
+// must stay one predicate — a copy that drifted would let a merge grow or lose
+// text while the scanner still called it safe.
+func ContentContains(primary, dup string) bool {
+	d := strings.TrimSpace(dup)
+	if d == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(primary)), strings.ToLower(d))
+}
+
 func mergeContent(primary string, duplicates []*Memory) string {
 	content := strings.TrimSpace(primary)
 	for _, duplicate := range duplicates {
@@ -154,10 +167,7 @@ func mergeContent(primary string, duplicates []*Memory) string {
 			continue
 		}
 		duplicateContent := strings.TrimSpace(duplicate.Content)
-		if duplicateContent == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(content), strings.ToLower(duplicateContent)) {
+		if ContentContains(content, duplicateContent) {
 			continue
 		}
 		title := strings.TrimSpace(duplicate.Title)

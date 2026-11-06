@@ -49,12 +49,17 @@ func TestReconcileInboxKeepsLiveTargets(t *testing.T) {
 	svc := newTestService(t, store)
 	ctx := context.Background()
 
+	// Two live members: a duplicate group of one has nothing left to merge and
+	// is reconciled away by design (TestReconcileInboxComputableReasons).
 	m := &memory.Memory{Content: "still-live decision", Type: memory.TypeSemantic, Importance: 0.6}
-	if err := store.Store(ctx, m); err != nil {
-		t.Fatal(err)
+	m2 := &memory.Memory{Content: "still-live decision, second copy", Type: memory.TypeSemantic, Importance: 0.6}
+	for _, x := range []*memory.Memory{m, m2} {
+		if err := store.Store(ctx, x); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	item := &InboxItem{Kind: InboxDuplicateCandidate, Title: "live dup", TargetIDs: []string{m.ID}}
+	item := &InboxItem{Kind: InboxDuplicateCandidate, Title: "live dup", TargetIDs: []string{m.ID, m2.ID}}
 	if err := CreateInboxItem(svc.DB(), item); err != nil {
 		t.Fatal(err)
 	}
