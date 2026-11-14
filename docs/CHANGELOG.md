@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`accept_session_changes` can apply exactly the reviewed plan.** Review and accept each recomputed the plan from the summary, so a bank changed in between (parallel sessions, steward) was applied without a word. `review_session_changes` now returns `plan_fingerprint` and an `id` per action; `accept_session_changes` with that fingerprint applies only that plan and fails without writing anything if an action, its target or the target's content changed. Optional `decisions` (`action id → update | merge | keep_existing | reject`, requires the fingerprint) replace "all low-risk at once" for the actions they name. Without a fingerprint the old behaviour stays, with a warning in the response. Even without one, an update or merge whose target changed between planning and writing in the same call now stays `review_required`; a second action on a target the first one just rewrote does too.
 - **Search time by phase.** `semantic_search` with `debug=true` (and `debug` on `/console/api/query`) now returns `debug.phases`: refresh, query embedding, vector load, vector ranking, chunk text, keyword search, fusion, rerank and total, in milliseconds. Every search also logs one `Search phases` line with the same numbers, so a day of logs can be split by phase without asking callers for `debug`. The `Reloaded vectors after external re-indexing` log line now carries `took`.
 
 ### Fixed

@@ -474,6 +474,22 @@ Persists the raw summary plus auto-applies the `auto_apply: true` actions from `
 }
 ```
 
+Without `plan_fingerprint` the plan is recomputed at accept time, so it can differ from what `review_session_changes` showed if the bank changed in between; the response then carries a `warnings` entry. To apply exactly the reviewed plan, pass the `plan_fingerprint` that `review_session_changes` returned for the same summary. If any action, its target or the target's content changed since review, the call fails with `session plan changed since review` and writes nothing, not even the raw summary — re-run the review.
+
+`decisions` overrides the auto-apply policy per action, keyed by the action `id` from the review (requires `plan_fingerprint`): `update` / `merge` apply that action into its target whatever its risk handling, `keep_existing` / `reject` skip it. Actions not listed follow the low-risk policy. An unknown id or verdict fails the call before any write.
+
+```json
+{
+  "name": "accept_session_changes",
+  "arguments": {
+    "summary": "…",
+    "context": "agent-memory-mcp",
+    "plan_fingerprint": "plan_3f9c…",
+    "decisions": {"act_81d2…": "reject", "act_07aa…": "update"}
+  }
+}
+```
+
 ### `recall_similar_incidents` / `search_runbooks`
 
 ```json
