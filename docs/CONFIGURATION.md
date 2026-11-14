@@ -190,6 +190,14 @@ Supported source types:
 - `ci_config` for GitHub Actions, GitLab CI, and Jenkins pipeline files
 - `helm`, `terraform`, and `k8s` for source-aware infra files
 
+#### What the corpus deliberately leaves out
+
+Application source code is not indexed. Any file outside the types above gets no source type and is skipped, whatever `MCP_INDEX_DIRS` points at (`classifySourceType` in `internal/rag/documents.go`).
+
+The line follows intent, not syntax. The corpus holds what an agent cannot rebuild for itself between sessions: decisions, incidents, runbooks, how the system is deployed and operated. Navigating code is a solved problem for grep, LSP and SCIP, and an accurate call graph needs type resolution rather than pattern matching; a second code index would duplicate those tools and do it worse. Reasoning: [issue #16](https://github.com/ipiton/agent-memory-mcp/issues/16).
+
+That is why Terraform, Helm, Kubernetes manifests and CI pipelines are in even though `.tf` is a language and a `Jenkinsfile` is Groovy: they describe how the system runs, which an agent cannot recover by reading code. Imperative application code stays out. The boundary is a judgement call, not a strict rule, so a new file type belongs in the corpus if it records intent or operations rather than implementation.
+
 Use `source_type` when you want to narrow retrieval to a specific class of knowledge:
 
 ```bash

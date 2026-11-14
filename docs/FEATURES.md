@@ -48,7 +48,7 @@ This makes it a better fit when the agent needs to answer questions like:
 - **Better visibility**: `stats` and `memory_stats` show how many memories belong to each embedding model, and name the ones no semantic query can reach — records the encoder refused outright, and records embedded from their opening only
 - **Ready MCP client configs**: generate copy-paste snippets for Claude Desktop, Cursor, and Codex
 - **Safer indexing defaults**: built-in directory excludes, optional per-path exclude globs, and secret redaction before documents are indexed
-- **Source-aware retrieval**: docs, ADRs, RFCs, changelogs, runbooks, postmortems, CI configs, Helm, Terraform, and K8s files are classified and surfaced with source metadata
+- **Source-aware retrieval**: docs, ADRs, RFCs, changelogs, runbooks, postmortems, CI configs, Helm, Terraform, and K8s files are classified and surfaced with source metadata. Application code is deliberately not indexed — use grep/LSP for it; the boundary and its reasoning are in [CONFIGURATION.md](CONFIGURATION.md#what-the-corpus-deliberately-leaves-out), and `MCP_INDEX_DIRS` only picks where to look within these types
 - **Hybrid ranking for search**: semantic similarity is now combined with keyword matches, recency, and source-aware weighting instead of cosine similarity alone
 - **Trust-aware retrieval**: memory and document results now expose `source_type`, `confidence`, `freshness`, `owner`, and `last_verified_at`, and ranking uses trust/freshness instead of similarity alone
 - **Explainable retrieval**: opt-in debug output shows filters, score components, and applied boosts for every result
