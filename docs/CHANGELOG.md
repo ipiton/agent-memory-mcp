@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Session tracking over HTTP mixed up clients.** The tracker kept one session per server process, so every HTTP client within the idle window landed in the same summary, under the context of whichever call came first. On a shared instance, notes saved from one chat were summarised together with another client's search. The HTTP transport now issues an `Mcp-Session-Id` on `initialize` and tracks each id separately. Requests without the header are no longer tracked: losing a summary is better than merging two. An unknown id is still accepted, because Claude Code reconnects to a restarted server with its old id. stdio is unchanged: one process is one client.
+- **A session switched to another project kept the first project's label.** The session took the first `context` it saw. A call with a different explicit `context` now closes the session (`session_boundary=context_switch`) and starts a new one.
+- **Checkpoints looked like session summaries.** `PreCompact` and tracker checkpoints were titled `Session close / <context>` and tagged `session-close`, so a long session showed in search as a dozen closing summaries. They are now titled `Session checkpoint / <context>` and tagged `session-checkpoint` only. Records already in the bank keep their old title.
+- **Two hook processes could write the same session twice.** `auto-capture` and `checkpoint` check for a duplicate and then write. Two of them running at once on one bank both passed the check, and on a fresh bank one could fail to open it. They now take a file lock (`session-capture.lock` next to the database) from opening the store until the write.
+
 ## [0.16.1] - 2026-11-14
 
 ### Changed
