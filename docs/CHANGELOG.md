@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`memory_stats` no longer reports review-queue cards as records without an embedding.** Since 0.9.1 these cards are stored without a vector on purpose, but the "⚠️ Without an embedding … usually a body the encoder refused" line counted them, raising a false alarm on banks with an active review queue. The count now covers only records that should have a vector and do not.
+- **Homebrew formula uses `post_install_steps`.** `brew upgrade` warned that `post_install` is deprecated. The formula now declares the same steps (default `config.env` written only when missing, data and log directories created) through the declarative `post_install_steps` block. An existing config is left untouched, as before.
+
+### Documentation
+
+- **What the RAG corpus leaves out, and why.** `docs/CONFIGURATION.md` now states that application code is not indexed, that the line follows intent rather than syntax (Terraform, Helm, Kubernetes and CI files are in), and links the reasoning in issue #16.
+
 ## [0.17.0] - 2026-11-14
 
 ### Added
