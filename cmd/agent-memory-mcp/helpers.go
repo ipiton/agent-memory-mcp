@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
@@ -13,6 +14,29 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
 	"go.uber.org/zap"
 )
+
+// lockSessionCapture serialises session writes from hook processes on one bank
+// (T173). auto-capture and checkpoint decide "is this a duplicate" by reading
+// the bank and then write; two hook processes doing that at once both see no
+// duplicate and both write. The store also loads its cache when it opens, so
+// the lock has to be held from before the open until after the write — taken
+// later, the second process would check against a cache that predates the
+// first one's record. The kernel drops the lock if the process dies.
+func lockSessionCapture(dbPath string) (unlock func(), err error) {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, "session-capture.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("lock session capture: %w", err)
+	}
+	return func() { _ = file.Close() }, nil
+}
 
 // initMemoryStore creates an embedder and memory store from config.
 // Returns store, cleanup function, and error.

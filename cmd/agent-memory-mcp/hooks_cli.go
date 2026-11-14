@@ -310,6 +310,12 @@ func runAutoCapture(args []string) error {
 		return err
 	}
 
+	unlock, err := lockSessionCapture(cfg.Memory.DBPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
 		return err
@@ -394,6 +400,12 @@ func runCheckpoint(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	unlock, err := lockSessionCapture(cfg.Memory.DBPath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	store, cleanup, err := initMemoryStore(cfg)
 	if err != nil {
