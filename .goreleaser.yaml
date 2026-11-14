@@ -80,11 +80,15 @@ brews:
         exec "$BIN" serve --config "$CONFIG"
       SH
       chmod 0755, libexec/"service-wrapper"
-    post_install: |
-      (etc/"agent-memory-mcp").mkpath
-      config_file = etc/"agent-memory-mcp/config.env"
-      unless config_file.exist?
-        config_file.write <<~EOS
+    # T176: Homebrew deprecated the imperative `def post_install` in favour of
+    # declarative `post_install_steps`. goreleaser has no field for it, so the
+    # block goes in through `custom_block`. `write_file … overwrite: false`
+    # keeps the old "only if the file is missing" — a user's config survives
+    # upgrades. `{{var}}` is a Homebrew install-step token, expanded at install;
+    # goreleaser templates the whole formula, so it is written as {{ "{{var}}" }}.
+    custom_block: |
+      post_install_steps do
+        write_file "agent-memory-mcp/config.env", <<~EOS, base: :etc, overwrite: false
           # agent-memory-mcp service configuration
           # Edit this file and the service will auto-reload within ~30 seconds.
           # Or send SIGHUP: kill -HUP $(pgrep agent-memory-mcp)
@@ -95,10 +99,10 @@ brews:
           MCP_HTTP_PORT=18080
 
           # Data storage
-          MCP_DATA_PATH=#{var}/agent-memory-mcp
-          MCP_MEMORY_DB_PATH=#{var}/agent-memory-mcp/memory-store/memories.db
-          MCP_RAG_INDEX_PATH=#{var}/agent-memory-mcp/rag-index
-          MCP_LOG_PATH=#{var}/log/agent-memory-mcp/mcp-diagnostics.log
+          MCP_DATA_PATH={{ "{{var}}" }}/agent-memory-mcp
+          MCP_MEMORY_DB_PATH={{ "{{var}}" }}/agent-memory-mcp/memory-store/memories.db
+          MCP_RAG_INDEX_PATH={{ "{{var}}" }}/agent-memory-mcp/rag-index
+          MCP_LOG_PATH={{ "{{var}}" }}/log/agent-memory-mcp/mcp-diagnostics.log
 
           # Memory (enabled by default)
           MCP_MEMORY_ENABLED=true
@@ -114,10 +118,10 @@ brews:
           # JINA_API_KEY=
           # OPENAI_API_KEY=
         EOS
+        mkdir_p "agent-memory-mcp/memory-store", base: :var
+        mkdir_p "agent-memory-mcp/rag-index", base: :var
+        mkdir_p "log/agent-memory-mcp", base: :var
       end
-      (var/"agent-memory-mcp/memory-store").mkpath
-      (var/"agent-memory-mcp/rag-index").mkpath
-      (var/"log/agent-memory-mcp").mkpath
     service: |
       run [opt_libexec/"service-wrapper"]
       keep_alive true
