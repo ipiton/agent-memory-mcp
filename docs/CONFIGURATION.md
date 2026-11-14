@@ -121,6 +121,8 @@ The recommended solo-local preset stores them under `.agent-memory/`.
 
 ### Indexing safety controls
 
+Every path in `MCP_INDEX_DIRS` must be available. If a configured file or directory cannot be accessed, a directory cannot be scanned, or a supported file cannot be read, indexing fails before changing the existing index. This prevents a temporarily unavailable source from being treated as deleted. Restore the source and retry; if you intentionally removed it, remove its entry from `MCP_INDEX_DIRS`. Files deleted inside an accessible source directory are still removed from the index normally.
+
 RAG indexing scans supported docs and engineering text files, but you can further reduce risk with explicit controls:
 
 - built-in excluded directories such as `.git`, `.agent-memory`, `node_modules`, `logs`, and `.terraform`

@@ -50,8 +50,7 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 
 		info, err := os.Stat(fullPath)
 		if err != nil {
-			ds.logger.Warn("Path not found", zap.String("path", fullPath))
-			continue
+			return nil, fmt.Errorf("access configured index source %q: %w", fullPath, err)
 		}
 
 		if !info.IsDir() {
@@ -62,13 +61,12 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				considered++
 				docs, err := ds.processFile(fullPath)
 				if err != nil {
-					ds.logger.Warn("Failed to process file", zap.String("path", fullPath), zap.Error(err))
-				} else {
-					if len(docs) == 0 {
-						empty++
-					}
-					allDocs = append(allDocs, docs...)
+					return nil, fmt.Errorf("process indexed file %q: %w", fullPath, err)
 				}
+				if len(docs) == 0 {
+					empty++
+				}
+				allDocs = append(allDocs, docs...)
 			}
 			continue
 		}
@@ -87,8 +85,7 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				considered++
 				docs, err := ds.processFile(path)
 				if err != nil {
-					ds.logger.Warn("Failed to process file", zap.String("path", path), zap.Error(err))
-					return nil
+					return fmt.Errorf("process indexed file %q: %w", path, err)
 				}
 				if len(docs) == 0 {
 					empty++
@@ -98,7 +95,8 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 			return nil
 		})
 		if err != nil {
-			ds.logger.Error("Failed to walk directory", zap.String("path", fullPath), zap.Error(err))
+			// An incomplete scan must not turn unreadable sources into deletions.
+			return nil, fmt.Errorf("walk index source %q: %w", fullPath, err)
 		}
 	}
 

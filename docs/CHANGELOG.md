@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Indexing preserves existing documents when a configured source is missing or unreadable, or a scan fails. Restore unavailable sources, or remove intentionally deleted sources from `MCP_INDEX_DIRS`.
+
 ## [0.17.0] - 2026-11-14
 
 ### Added
