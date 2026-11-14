@@ -272,7 +272,34 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 	// session summary or a /finalize "Task complete:" record), fold this summary
 	// into it instead of creating a second near-identical episodic. Cross-session
 	// duplicates are left to the steward (T69).
-	if recordKind == memory.RecordKindSessionSummary {
+	// T186: a record that names its agent session folds into that session's
+	// record of the same kind, at any age, by appending the new tail.
+	sessionID := strings.TrimSpace(mem.Metadata[memory.MetadataAgentSessionID])
+	isCheckpoint := recordKind == memory.RecordKindSessionCheckpoint
+	if sessionID != "" && (isCheckpoint || recordKind == memory.RecordKindSessionSummary) {
+		target, err := s.findSessionRecord(ctx, mem, sessionID, isCheckpoint)
+		if err != nil {
+			return "", err
+		}
+		if target != nil {
+			updates := memory.Update{
+				Tags:     mergeTags(target.Tags, mem.Tags),
+				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+			}
+			if folded := foldSessionTail(target.Content, mem.Content); folded != strings.TrimSpace(target.Content) {
+				updates.Content = folded
+			}
+			if mem.Importance > target.Importance {
+				importance := mem.Importance
+				updates.Importance = &importance
+			}
+			if err := s.store.Update(ctx, target.ID, updates); err != nil {
+				return "", err
+			}
+			return target.ID, nil
+		}
+		mem.Content = capSessionRecord(mem.Content)
+	} else if recordKind == memory.RecordKindSessionSummary {
 		target, err := s.findConsolidationTarget(ctx, mem)
 		if err != nil {
 			return "", err
@@ -305,6 +332,8 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 // consolidationWindow bounds how far back the session-close writer looks for an
 // existing terminal episodic of the same slug to fold into. It covers a single
 // working session; cross-session duplicates are deferred to the steward (T69).
+// Since T186 it applies only to records without an agent session id (a manual
+// close_session, an old bank): with an id, findSessionRecord matches at any age.
 const consolidationWindow = 6 * time.Hour
 
 // findConsolidationTarget returns the most recent terminal episodic memory of

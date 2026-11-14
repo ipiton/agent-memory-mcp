@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One session, one summary and one checkpoint.** A Claude Code session in the desktop app lives for days and fires `SessionEnd` each time it is left; a summary arriving more than 6 h after the previous one started a new record, and every `PreCompact` added a checkpoint of its own. One Moving bank held 904 such records for about 350 sessions. Records that carry `agent_session_id` now fold by session alone, with no time window: the new transcript tail is appended from where the stored text ends (or after a `[…]` marker when no overlap is found), so the opening of a long session is kept. A record over 32 000 bytes keeps its opening and its latest part, with the middle trimmed. Records without a session id keep the 6 h window. Existing records are not merged.
 - **`memory_stats` no longer reports review-queue cards as records without an embedding.** Since 0.9.1 these cards are stored without a vector on purpose, but the "⚠️ Without an embedding … usually a body the encoder refused" line counted them, raising a false alarm on banks with an active review queue. The count now covers only records that should have a vector and do not.
 - **Homebrew formula uses `post_install_steps`.** `brew upgrade` warned that `post_install` is deprecated. The formula now declares the same steps (default `config.env` written only when missing, data and log directories created) through the declarative `post_install_steps` block. An existing config is left untouched, as before.
 
