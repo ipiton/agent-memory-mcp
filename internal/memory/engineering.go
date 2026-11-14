@@ -43,6 +43,9 @@ const (
 	// defense). Canonical promotion is gated on it: auto-pipelines may not
 	// canonicalize a conversational-origin record without a human/verify step.
 	MetadataProvenance = "provenance"
+	// MetadataSourceHashes holds the sha256 of each file a record references,
+	// taken at verify_entry: drift_scan judges a newer mtime against it (T150).
+	MetadataSourceHashes = "source_hashes"
 )
 
 // Provenance values for MetadataProvenance. Records with no explicit provenance
@@ -83,6 +86,7 @@ var serverOwnedTrustKeys = map[string]bool{
 	MetadataProvenance:      true,
 	MetadataKnowledgeLayer:  true,
 	MetadataLastVerifiedAt:  true,
+	MetadataSourceHashes:    true, // a forged hash would hide source_changed
 	"canonical":             true,
 	"canonical_promoted_at": true,
 }

@@ -35,6 +35,7 @@ type VerifyParams struct {
 	Method   VerificationMethod
 	Status   VerificationStatus
 	Note     string
+	RootPath string // project root: referenced files are hashed for drift_scan (T150)
 }
 
 // VerifyEntry marks a memory as verified (or failed verification) by updating its metadata.
@@ -52,6 +53,14 @@ func (s *Service) VerifyEntry(ctx context.Context, params VerifyParams) error {
 	}
 	if params.Note != "" {
 		meta["verification_note"] = params.Note
+	}
+	// Record what the referenced files held at verification, so drift_scan
+	// can tell a rewrite (git checkout, touch) from a change (T150). An empty
+	// value drops hashes left by an earlier verification.
+	if params.RootPath != "" {
+		if m, err := s.store.Get(params.MemoryID); err == nil {
+			meta[memory.MetadataSourceHashes] = sourceHashes(params.RootPath, m.Content)
+		}
 	}
 
 	return s.store.Update(ctx, params.MemoryID, memory.Update{Metadata: meta})
