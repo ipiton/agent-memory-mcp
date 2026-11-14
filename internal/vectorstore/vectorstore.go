@@ -23,7 +23,7 @@ import (
 type Store interface {
 	Upsert(chunks []Chunk) error
 	DeleteByDocPath(docPath string) error
-	Search(queryEmbedding []float32, limit int) ([]SearchResult, error)
+	Search(queryEmbedding []float32, limit int) ([]SearchResult, SearchTiming, error)
 	KeywordSearch(query string, limit int) ([]SearchResult, error)
 	RefreshIfStale() (bool, error)
 	AllChunks() ([]Chunk, error)
@@ -417,14 +417,18 @@ func (s *SQLiteStore) RefreshIfStale() (bool, error) {
 		return true, nil
 	}
 
+	began := time.Now()
 	if err := s.loadVectors(); err != nil {
 		return false, fmt.Errorf("failed to reload vectors after index change: %w", err)
 	}
 
+	// T178: the reload re-reads and decodes every vector and runs inside the
+	// search that noticed the new version, so its cost lands on that query.
 	s.logger.Info("Reloaded vectors after external re-indexing",
 		zap.String("previous_version", loaded),
 		zap.String("current_version", current),
 		zap.Int("chunks", s.Count()),
+		zap.Duration("took", time.Since(began)),
 	)
 
 	return true, nil
@@ -578,16 +582,33 @@ func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
 	return nil
 }
 
+// SearchTiming is the wall time of the steps inside one Search (T178). Load is
+// zero unless this call was the one that had to read the vectors from disk.
+type SearchTiming struct {
+	Load    time.Duration
+	Rank    time.Duration
+	Content time.Duration
+}
+
 // Search finds the most similar chunks to the query embedding, ranked by cosine similarity.
-func (s *SQLiteStore) Search(queryEmbedding []float32, limit int) ([]SearchResult, error) {
+func (s *SQLiteStore) Search(queryEmbedding []float32, limit int) ([]SearchResult, SearchTiming, error) {
+	var timing SearchTiming
+	began := time.Now()
 	if err := s.ensureVectors(); err != nil {
-		return nil, err
+		return nil, timing, err
 	}
+	timing.Load = time.Since(began)
+
+	began = time.Now()
 	results := s.rankVectors(queryEmbedding, limit)
+	timing.Rank = time.Since(began)
+
+	began = time.Now()
 	if err := s.loadContent(results); err != nil {
-		return nil, fmt.Errorf("failed to read chunk text: %w", err)
+		return nil, timing, fmt.Errorf("failed to read chunk text: %w", err)
 	}
-	return results, nil
+	timing.Content = time.Since(began)
+	return results, timing, nil
 }
 
 func (s *SQLiteStore) rankVectors(queryEmbedding []float32, limit int) []SearchResult {

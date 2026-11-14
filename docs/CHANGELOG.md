@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Search time by phase.** `semantic_search` with `debug=true` (and `debug` on `/console/api/query`) now returns `debug.phases`: refresh, query embedding, vector load, vector ranking, chunk text, keyword search, fusion, rerank and total, in milliseconds. Every search also logs one `Search phases` line with the same numbers, so a day of logs can be split by phase without asking callers for `debug`. The `Reloaded vectors after external re-indexing` log line now carries `took`.
+
 ### Fixed
 
 - **`memory_stats` no longer reports review-queue cards as records without an embedding.** Since 0.9.1 these cards are stored without a vector on purpose, but the "⚠️ Without an embedding … usually a body the encoder refused" line counted them, raising a false alarm on banks with an active review queue. The count now covers only records that should have a vector and do not.

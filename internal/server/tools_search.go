@@ -157,6 +157,17 @@ func (s *MCPServer) formatSearchDebug(debug *rag.SearchDebug) string {
 		debug.CandidateCount,
 		debug.ReturnedCount,
 	)
+	if p := debug.Phases; p != nil {
+		reloaded := ""
+		if p.Reloaded {
+			reloaded = " (index reloaded)"
+		}
+		fmt.Fprintf(&buf,
+			"\nPhases, ms: refresh %.2f%s | embed %.2f | vectors load %.2f, rank %.2f, content %.2f | keyword %.2f | fusion %.2f | rerank %.2f | total %.2f",
+			p.RefreshMs, reloaded, p.EmbedMs, p.VectorLoadMs, p.VectorRankMs, p.VectorContentMs,
+			p.KeywordMs, p.FusionMs, p.RerankMs, p.TotalMs,
+		)
+	}
 
 	return buf.String()
 }

@@ -217,7 +217,7 @@ func TestVectorsLoadOnlyForVectorSearch(t *testing.T) {
 		t.Fatalf("vectors in memory before any vector search: loaded=%v n=%d", s.vectorsLoaded, len(s.chunks))
 	}
 
-	results, err := s.Search([]float32{1, 0, 0}, 5)
+	results, _, err := s.Search([]float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestChunkWithoutVector(t *testing.T) {
 	if ids := keywordIDs(t, s, "plain"); len(ids) != 1 {
 		t.Errorf("keyword search: %v", ids)
 	}
-	results, err := s.Search([]float32{1, 0, 0}, 5)
+	results, _, err := s.Search([]float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
