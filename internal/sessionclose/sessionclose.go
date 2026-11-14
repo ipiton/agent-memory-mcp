@@ -229,13 +229,17 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 	if recordKind == "" {
 		recordKind = memory.RecordKindSessionSummary
 	}
+	title, kindTags := rawSummaryTitle(summary), rawSummaryTags(summary)
+	if recordKind == memory.RecordKindSessionCheckpoint {
+		title, kindTags = rawCheckpointTitle(summary), rawCheckpointTags(summary)
+	}
 	mem := &memory.Memory{
-		Title:      rawSummaryTitle(summary),
+		Title:      title,
 		Content:    strings.TrimSpace(summary.Summary),
 		Type:       memory.TypeEpisodic,
 		Context:    summary.Context,
 		Importance: 0.20,
-		Tags:       memory.NormalizeTags(append(rawSummaryTags(summary), opts.ExtraTags...)),
+		Tags:       memory.NormalizeTags(append(kindTags, opts.ExtraTags...)),
 		Metadata: map[string]string{
 			memory.MetadataRecordKind:     recordKind,
 			memory.MetadataSessionMode:    string(summary.Mode),

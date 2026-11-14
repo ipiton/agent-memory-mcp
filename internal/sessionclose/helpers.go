@@ -160,7 +160,18 @@ func memoryPreview(mem *memory.Memory) *memory.Memory {
 }
 
 func rawSummaryTitle(summary memory.SessionSummary) string {
-	parts := []string{"Session close"}
+	return rawRecordTitle("Session close", summary)
+}
+
+// T186: a checkpoint is a mid-session snapshot, not the session's result. It
+// used to share the "Session close" title and tag, so search returned a dozen
+// checkpoints of one session looking exactly like its closing summaries.
+func rawCheckpointTitle(summary memory.SessionSummary) string {
+	return rawRecordTitle("Session checkpoint", summary)
+}
+
+func rawRecordTitle(prefix string, summary memory.SessionSummary) string {
+	parts := []string{prefix}
 	if summary.Context != "" {
 		parts = append(parts, summary.Context)
 	}
@@ -171,7 +182,15 @@ func rawSummaryTitle(summary memory.SessionSummary) string {
 }
 
 func rawSummaryTags(summary memory.SessionSummary) []string {
-	tags := append([]string{"session-summary", "session-close", "mode:" + string(summary.Mode)}, summary.Tags...)
+	return rawRecordTags([]string{"session-summary", "session-close"}, summary)
+}
+
+func rawCheckpointTags(summary memory.SessionSummary) []string {
+	return rawRecordTags([]string{"session-checkpoint"}, summary)
+}
+
+func rawRecordTags(kindTags []string, summary memory.SessionSummary) []string {
+	tags := append(append(kindTags, "mode:"+string(summary.Mode)), summary.Tags...)
 	if summary.Service != "" {
 		tags = append(tags, "service:"+summary.Service)
 	}
