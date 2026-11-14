@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -357,6 +359,69 @@ func TestBatchEmbedUsesLlamaCPPBeforeOllama(t *testing.T) {
 	}
 	if len(result.Embeddings) != 2 {
 		t.Fatalf("embeddings count = %d, want 2", len(result.Embeddings))
+	}
+}
+
+// TestLlamaCPPBatchIsSplitIntoSmallRequests guards the search timeout seen in
+// production: llama-server queues every input of a request ahead of anything
+// sent later, so one request of 50 indexing texts kept a search's query waiting
+// for a minute. The batch must reach the server in requests of at most
+// llamaCPPMaxBatch texts, and the vectors must come back in input order.
+func TestLlamaCPPBatchIsSplitIntoSmallRequests(t *testing.T) {
+	var mu sync.Mutex
+	var sizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		sizes = append(sizes, len(body.Input))
+		mu.Unlock()
+		data := make([]map[string]any, 0, len(body.Input))
+		// Answer in reverse order: the index field, not the position, places a vector.
+		for i := len(body.Input) - 1; i >= 0; i-- {
+			n, _ := strconv.Atoi(body.Input[i])
+			data = append(data, map[string]any{"embedding": []float64{float64(n), 1, 0, 0}, "index": i})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	}))
+	defer server.Close()
+
+	e, err := New(Config{LlamaCPPBaseURL: server.URL + "/v1", Dimension: 4, Mode: "local-only"}, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	texts := make([]string, 50)
+	for i := range texts {
+		texts[i] = strconv.Itoa(i + 1)
+	}
+	result, err := e.BatchEmbedDetailed(context.Background(), texts)
+	if err != nil {
+		t.Fatalf("BatchEmbedDetailed: %v", err)
+	}
+
+	total := 0
+	for _, n := range sizes {
+		if n > llamaCPPMaxBatch {
+			t.Fatalf("a request carried %d texts, want at most %d (sizes %v)", n, llamaCPPMaxBatch, sizes)
+		}
+		total += n
+	}
+	if total != len(texts) {
+		t.Fatalf("requests carried %d texts in all, want %d", total, len(texts))
+	}
+	if len(result.Embeddings) != len(texts) {
+		t.Fatalf("embeddings = %d, want %d", len(result.Embeddings), len(texts))
+	}
+	for i, emb := range result.Embeddings {
+		if int(emb[0]) != i+1 {
+			t.Fatalf("embedding %d belongs to text %v, want %d", i, emb[0], i+1)
+		}
 	}
 }
 

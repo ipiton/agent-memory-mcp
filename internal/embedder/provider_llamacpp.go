@@ -35,16 +35,33 @@ func (a llamaCPPAdapter) embed(ctx context.Context, text, _ string) ([]float32, 
 	return singleEmbeddingFromCompatibleResponse("llama.cpp", response)
 }
 
+// llamaCPPMaxBatch caps the texts sent in one request. llama-server turns every
+// input of a request into a task on one FIFO queue and works through it a few
+// slots (-np) at a time, so a query embedded while an indexing batch of 50 is
+// queued waits for all 50: about a minute on a CPU pod, past the HTTP write
+// timeout. Small requests let a query in after a few tasks; throughput stays the
+// same because the server never ran more than -np tasks at once anyway.
+const llamaCPPMaxBatch = 4
+
 func (a llamaCPPAdapter) batchEmbed(ctx context.Context, texts []string, _ string) ([][]float32, error) {
-	payload := map[string]any{
-		"input": texts,
-		"model": a.model(),
+	embeddings := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += llamaCPPMaxBatch {
+		part := texts[start:min(start+llamaCPPMaxBatch, len(texts))]
+		payload := map[string]any{
+			"input": part,
+			"model": a.model(),
+		}
+		var response compatibleEmbeddingsResponse
+		if err := a.embedder.postJSON(ctx, a.endpoint(), nil, payload, &response); err != nil {
+			return nil, fmt.Errorf("llama.cpp batch request failed: %w", err)
+		}
+		got, err := batchEmbeddingsFromCompatibleResponse("llama.cpp", response, len(part))
+		if err != nil {
+			return nil, err
+		}
+		embeddings = append(embeddings, got...)
 	}
-	var response compatibleEmbeddingsResponse
-	if err := a.embedder.postJSON(ctx, a.endpoint(), nil, payload, &response); err != nil {
-		return nil, fmt.Errorf("llama.cpp batch request failed: %w", err)
-	}
-	return batchEmbeddingsFromCompatibleResponse("llama.cpp", response, len(texts))
+	return embeddings, nil
 }
 
 func (a llamaCPPAdapter) model() string {

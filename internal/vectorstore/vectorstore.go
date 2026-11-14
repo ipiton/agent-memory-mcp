@@ -36,6 +36,7 @@ type Store interface {
 	CommitIndexState(update IndexStateUpdate) error
 	// Indexed files tracking
 	GetAllIndexedFiles() (map[string]*IndexedFileInfo, error)
+	ChunkCountsByDocPath() (map[string]int, error)
 	GetIndexedFile(filePath string) (*IndexedFileInfo, error)
 	SetIndexedFile(info *IndexedFileInfo) error
 	DeleteIndexedFile(filePath string) error

@@ -132,6 +132,27 @@ func (s *SQLiteStore) DeleteIndexedFile(filePath string) error {
 	return err
 }
 
+// ChunkCountsByDocPath returns how many chunks are stored for each document
+// path, so tracking records can be checked against what is actually there.
+func (s *SQLiteStore) ChunkCountsByDocPath() (map[string]int, error) {
+	rows, err := s.db.Query("SELECT doc_path, COUNT(*) FROM chunks GROUP BY doc_path")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var path string
+		var n int
+		if err := rows.Scan(&path, &n); err != nil {
+			return nil, err
+		}
+		counts[path] = n
+	}
+	return counts, rows.Err()
+}
+
 // GetAllIndexedFiles returns indexing metadata for all tracked files.
 func (s *SQLiteStore) GetAllIndexedFiles() (map[string]*IndexedFileInfo, error) {
 	rows, err := s.db.Query("SELECT file_path, hash, mod_time, size, chunk_count FROM indexed_files")

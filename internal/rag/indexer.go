@@ -40,12 +40,9 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	indexState, _ := store.GetMetadata(indexStateMetadataKey)
 
 	needsRebuild := false
-	if indexState == indexStateDirty {
-		re.logger.Warn("Index state marked dirty - forcing rebuild to recover tracking consistency")
-		needsRebuild = true
-	}
+	currentModel := ""
 	if oldModel != "" && len(allDocs) > 0 {
-		currentModel, err := re.vecService.detectModelID(ctx, allDocs[0].Content)
+		currentModel, err = re.vecService.detectModelID(ctx, allDocs[0].Content)
 		if err != nil {
 			return fmt.Errorf("failed to detect current embedding model: %w", err)
 		}
@@ -63,12 +60,17 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	keywordOnly := false
 	wasKeywordOnly, _ := store.GetMetadata(keywordOnlyMetadataKey)
 	if re.vecService.config.KeywordFallback && oldModel == "" && len(allDocs) > 0 {
-		if _, err := re.vecService.detectModelID(ctx, allDocs[0].Content); err != nil {
+		model, err := re.vecService.detectModelID(ctx, allDocs[0].Content)
+		switch {
+		case err != nil:
 			re.logger.Warn("No embedding model available, indexing for keyword search only", zap.Error(err))
 			keywordOnly = true
-		} else if wasKeywordOnly == "true" {
+		case wasKeywordOnly == "true":
 			re.logger.Info("Embedding model is available now, rebuilding the keyword-only index")
+			currentModel = model
 			needsRebuild = true
+		default:
+			currentModel = model
 		}
 	}
 	if oldChunker != "" && oldChunker != chunkerVersion {
@@ -79,6 +81,21 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	indexedFiles, err := store.GetAllIndexedFiles()
 	if err != nil {
 		indexedFiles = make(map[string]*vectorstore.IndexedFileInfo)
+	}
+
+	// A dirty index is one whose last run did not finish: the process was
+	// stopped, or some files failed. That used to force a full rebuild, which on
+	// a large corpus outlives the next restart and so never finished. Records
+	// are written only for files whose chunks are all stored, so what an
+	// interrupted run can leave behind is a record whose chunks are gone or
+	// partial — found by counting them. Only those files are indexed again.
+	if indexState == indexStateDirty && !needsRebuild {
+		stale, err := markStaleRecords(store, indexedFiles)
+		if err != nil {
+			return fmt.Errorf("failed to check indexed files against stored chunks: %w", err)
+		}
+		re.logger.Warn("Index state marked dirty - re-indexing files whose chunks do not match their record",
+			zap.Int("stale_files", stale))
 	}
 
 	if err := re.checkIndexRoot(allDocs, indexedFiles); err != nil {
@@ -99,11 +116,14 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		zap.Bool("force_rebuild", needsRebuild),
 	)
 
+	// Records go before their chunks: a record without chunks would claim a
+	// file is indexed, while chunks without a record are swept as orphans.
 	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
 		Metadata: map[string]string{
 			indexStateMetadataKey: indexStateDirty,
 			indexStartedAtKey:     startTime.Format(time.RFC3339),
 		},
+		DeleteFilePaths: toRemove,
 	}); err != nil {
 		return fmt.Errorf("failed to mark index state dirty: %w", err)
 	}
@@ -117,17 +137,38 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		}
 	}
 
+	// Once the old index is gone, stamp what the new one is built with. A
+	// rebuild stopped after this point resumes as an ordinary run: the files it
+	// finished are recorded and skipped, the rest are indexed. Stamped before
+	// the removal finished, a restart would keep old vectors under the new
+	// model's name.
+	if needsRebuild {
+		stamp := map[string]string{"chunker_version": chunkerVersion}
+		if currentModel != "" {
+			stamp["embedding_model"] = currentModel
+		}
+		if keywordOnly {
+			stamp[keywordOnlyMetadataKey] = "true"
+		} else if wasKeywordOnly != "" {
+			stamp[keywordOnlyMetadataKey] = ""
+		}
+		if err := store.CommitIndexState(vectorstore.IndexStateUpdate{Metadata: stamp}); err != nil {
+			return fmt.Errorf("failed to record the rebuild: %w", err)
+		}
+	}
+
 	indexedModel := oldModel
-	indexedFilesToUpsert := make(map[string]*vectorstore.IndexedFileInfo)
 	failedFiles := make(map[string]struct{})
 
 	if len(toAdd) > 0 {
 		re.logger.Info("Starting to index documents", zap.Int("count", len(toAdd)))
 
 		chunkCountsByFile := make(map[string]int)
+		pendingChunks := make(map[string]int)
 		docsByID := make(map[string]document, len(toAdd))
 		for _, doc := range toAdd {
 			chunkCountsByFile[doc.Path]++
+			pendingChunks[doc.Path]++
 			docsByID[doc.ID] = doc
 		}
 
@@ -209,18 +250,21 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 					continue
 				}
 				failedFiles[doc.Path] = struct{}{}
-				delete(indexedFilesToUpsert, doc.Path)
 			}
 
+			// A file is recorded as soon as its last chunk is stored, not at the
+			// end of the run, so a run that is stopped keeps what it finished.
+			var completed []*vectorstore.IndexedFileInfo
 			for _, successID := range result.SuccessIDs {
 				doc, ok := docsByID[successID]
 				if !ok {
 					continue
 				}
-				if _, failed := failedFiles[doc.Path]; failed {
+				pendingChunks[doc.Path]--
+				if pendingChunks[doc.Path] != 0 {
 					continue
 				}
-				if _, alreadyTracked := indexedFilesToUpsert[doc.Path]; alreadyTracked {
+				if _, failed := failedFiles[doc.Path]; failed {
 					continue
 				}
 
@@ -229,17 +273,17 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 					fileHash = calculateFileHash(doc.Content)
 				}
 
-				chunkCount := chunkCountsByFile[doc.Path]
-				if chunkCount == 0 {
-					chunkCount = 1
-				}
-
-				indexedFilesToUpsert[doc.Path] = &vectorstore.IndexedFileInfo{
+				completed = append(completed, &vectorstore.IndexedFileInfo{
 					FilePath:   doc.Path,
 					Hash:       fileHash,
 					ModTime:    doc.LastModified,
 					Size:       int64(len(doc.Content)),
-					ChunkCount: chunkCount,
+					ChunkCount: chunkCountsByFile[doc.Path],
+				})
+			}
+			if len(completed) > 0 {
+				if err := store.CommitIndexState(vectorstore.IndexStateUpdate{UpsertFiles: completed}); err != nil {
+					return fmt.Errorf("failed to record indexed files: %w", err)
 				}
 			}
 
@@ -262,22 +306,12 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		}
 	}
 
-	deletePaths := append([]string(nil), toRemove...)
+	// A failed file's old record, if any, would claim chunks this run deleted.
+	deletePaths := make([]string, 0, len(failedFiles))
 	for filePath := range failedFiles {
 		deletePaths = append(deletePaths, filePath)
 	}
 	sort.Strings(deletePaths)
-
-	upsertPaths := make([]string, 0, len(indexedFilesToUpsert))
-	for filePath := range indexedFilesToUpsert {
-		upsertPaths = append(upsertPaths, filePath)
-	}
-	sort.Strings(upsertPaths)
-
-	upsertFiles := make([]*vectorstore.IndexedFileInfo, 0, len(upsertPaths))
-	for _, filePath := range upsertPaths {
-		upsertFiles = append(upsertFiles, indexedFilesToUpsert[filePath])
-	}
 
 	finalMetadata := map[string]string{
 		"chunker_version":     chunkerVersion,
@@ -300,7 +334,6 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 
 	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
 		Metadata:        finalMetadata,
-		UpsertFiles:     upsertFiles,
 		DeleteFilePaths: deletePaths,
 	}); err != nil {
 		return fmt.Errorf("failed to commit index state: %w", err)
@@ -407,6 +440,27 @@ func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map
 	return toAdd, toRemove
 }
 
+// markStaleRecords clears the hash of every record whose stored chunk count
+// differs from the one it claims, so calculateIndexChanges indexes that file
+// again. The record itself stays, so a file deleted since is still removed.
+func markStaleRecords(store vectorstore.Store, indexedFiles map[string]*vectorstore.IndexedFileInfo) (int, error) {
+	counts, err := store.ChunkCountsByDocPath()
+	if err != nil {
+		return 0, err
+	}
+	stale := 0
+	for path, info := range indexedFiles {
+		if counts[path] == info.ChunkCount {
+			continue
+		}
+		cleared := *info
+		cleared.Hash = ""
+		indexedFiles[path] = &cleared
+		stale++
+	}
+	return stale, nil
+}
+
 func (re *Engine) autoIndexIfNeeded() {
 	select {
 	case <-time.After(2 * time.Second):
@@ -505,6 +559,13 @@ func (re *Engine) indexWithLock(trigger string) {
 
 func (re *Engine) needsIndexing() bool {
 	store := re.vecService.store
+
+	// An unfinished run can leave files whose records outlived their chunks;
+	// only IndexDocuments counts them, so a dirty index always gets a run.
+	if state, _ := store.GetMetadata(indexStateMetadataKey); state == indexStateDirty {
+		re.logger.Info("Index state is dirty, indexing required", zap.String("repo_root", re.repoRoot))
+		return true
+	}
 
 	indexedFiles, err := store.GetAllIndexedFiles()
 	if err != nil {

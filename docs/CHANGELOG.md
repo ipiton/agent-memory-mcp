@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Inbox reconciliation skipped items.** It advanced a full page after closing items, so it stepped over as many pending items as it had just closed. It also now closes duplicate groups with fewer than two live members left.
+- **A restart during indexing no longer rebuilds the whole index.** A run that did not finish left the index marked dirty, and the next start deleted every chunk and embedded the corpus again. On a 33k-chunk corpus that took about 13 hours on one core, longer than the pod lived, so it started over at every restart. Search saw only the part rebuilt so far. Now a dirty index is checked file by file: records whose stored chunk count does not match are indexed again, and nothing else is. Files are recorded as soon as their last chunk is stored, not at the end of the run. A rebuild after a model or chunker change records the new model and chunker once the old chunks are gone, so a stopped rebuild continues where it stopped.
+- **`semantic_search` timed out while indexing ran against llama.cpp.** llama-server queues every input of a request ahead of anything sent later, so a query's embedding waited behind an indexing batch of 50 texts. On a CPU pod that is about a minute, past the HTTP server's 60 s write timeout. Behind an OAuth proxy it showed as a 502. Batches now go to llama.cpp in requests of at most 4 texts, as Ollama batches already did with 10. A query waits for at most a few texts, and indexing throughput does not change.
 
 ## [0.16.0] - 2026-11-04
 
