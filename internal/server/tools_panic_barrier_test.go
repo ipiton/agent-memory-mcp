@@ -55,7 +55,7 @@ func TestKnowledgeTimelineToolSurvivesShortSupersededBy(t *testing.T) {
 		"name":      "knowledge_timeline",
 		"arguments": map[string]any{"query": "ingress routing"},
 	})
-	result, rErr := s.handleToolsCall(json.RawMessage(params))
+	result, rErr := s.handleToolsCall(json.RawMessage(params), stdioClientKey)
 	if rErr != nil {
 		t.Fatalf("knowledge_timeline returned error: %+v", rErr)
 	}

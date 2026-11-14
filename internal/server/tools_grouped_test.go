@@ -194,7 +194,7 @@ func TestGroupedDispatchEquivalence(t *testing.T) {
 
 	call := func(name string, args map[string]any) (any, *rpcError) {
 		params, _ := json.Marshal(map[string]any{"name": name, "arguments": args})
-		return s.handleToolsCall(json.RawMessage(params))
+		return s.handleToolsCall(json.RawMessage(params), stdioClientKey)
 	}
 
 	// list_memories on an empty store, both call forms.

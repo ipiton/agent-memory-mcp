@@ -42,7 +42,16 @@ type rpcRequest struct {
 	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+
+	// client is the transport-level key the session tracker groups calls by
+	// (T187): stdioClientKey for the stdio process, "http:<Mcp-Session-Id>"
+	// over HTTP, empty when the caller cannot be told apart from others —
+	// such calls are not tracked.
+	client string
 }
+
+// stdioClientKey is the only client of a stdio server: the process is the session.
+const stdioClientKey = "stdio"
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -172,6 +181,7 @@ func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
 			continue
 		}
 
+		req.client = stdioClientKey
 		resp := server.handle(req)
 		if resp == nil {
 			continue
@@ -282,7 +292,7 @@ func (s *MCPServer) handle(req rpcRequest) *rpcResponse {
 func (s *MCPServer) handleNotification(req rpcRequest) {
 	// Notifications (e.g. "initialized") require no response.
 	if s.sessionTracker != nil {
-		s.sessionTracker.HandleNotification(req.Method, req.Params)
+		s.sessionTracker.HandleNotification(req.client, req.Method, req.Params)
 	}
 }
 
@@ -299,7 +309,7 @@ func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 	case "tools/list":
 		return s.handleToolsList(req.Params)
 	case "tools/call":
-		return s.handleToolsCall(req.Params)
+		return s.handleToolsCall(req.Params, req.client)
 	default:
 		s.logUnknownMethod(req)
 		return nil, &rpcError{Code: rpcErrMethodNotFound, Message: "method not found"}

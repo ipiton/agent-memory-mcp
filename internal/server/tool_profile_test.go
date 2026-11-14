@@ -14,7 +14,7 @@ func callTool(t *testing.T, s *MCPServer, name string, args map[string]any) *rpc
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	_, rErr := s.handleToolsCall(params)
+	_, rErr := s.handleToolsCall(params, stdioClientKey)
 	return rErr
 }
 

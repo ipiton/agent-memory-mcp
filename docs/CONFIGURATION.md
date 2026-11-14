@@ -136,8 +136,9 @@ When the MCP server is running with the default session-tracking policy, it keep
 
 Current behavior:
 
-- successful MCP tool calls are grouped into an active session automatically
-- idle timeout or server shutdown triggers a background `close_session` run
+- successful MCP tool calls are grouped into an active session automatically, one session per client: in stdio mode the process is the client; over HTTP the server issues an `Mcp-Session-Id` header in the `initialize` response and groups requests by it. HTTP requests without that header are not tracked
+- a call with an explicit `context` different from the session's closes the session and starts a new one
+- idle timeout, a context switch or server shutdown triggers a background `close_session` run
 - clients can explicitly flush or checkpoint the active session with `notifications/session_event` and `event=task_done|final_summary|checkpoint|reset`
 - raw session summaries are persisted automatically
 - low-risk updates can auto-apply under the existing `safe_auto_apply` policy

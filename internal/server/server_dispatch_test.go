@@ -83,7 +83,7 @@ func TestHandleUnknownTool(t *testing.T) {
 		"arguments": map[string]any{},
 	})
 
-	result, rErr := s.handleToolsCall(json.RawMessage(params))
+	result, rErr := s.handleToolsCall(json.RawMessage(params), stdioClientKey)
 	if rErr == nil {
 		t.Fatal("expected error for unknown tool")
 	}

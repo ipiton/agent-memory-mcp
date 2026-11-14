@@ -31,10 +31,11 @@ type sessionTracker struct {
 	cancel              context.CancelFunc
 	onSessionClose      func() // optional callback after session close
 
-	mu      sync.Mutex
-	timer   *time.Timer
-	current *trackedSession
-	closed  bool
+	mu sync.Mutex
+	// sessions holds one open session per client key (T187). It used to be a
+	// single `current`, which over HTTP merged every client into one summary.
+	sessions map[string]*clientSession
+	closed   bool
 
 	// Round 3 M10: checkpoints used to run synchronously in HandleToolCall,
 	// adding a DB-write + embedder-call latency tax to every tool response
@@ -50,6 +51,17 @@ type sessionTracker struct {
 	// instead of guessing time.Sleep durations.
 	flushWG sync.WaitGroup
 }
+
+// clientSession is one client's open session and its idle timer.
+type clientSession struct {
+	session *trackedSession
+	timer   *time.Timer
+}
+
+// maxTrackedClients bounds the session map. With a positive idle timeout
+// entries leave on their own; the cap covers a zero timeout and a flood of
+// distinct session ids. A client past it is not tracked.
+const maxTrackedClients = 256
 
 type trackedSession struct {
 	startedAt        time.Time
@@ -112,14 +124,19 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 		ctx:           ctx,
 		cancel:        cancel,
 		checkpointSem: make(chan struct{}, 2),
+		sessions:      make(map[string]*clientSession),
 	}
 }
 
-func (st *sessionTracker) HandleToolCall(name string, args map[string]any, rErr *rpcError) {
-	if st == nil || rErr != nil {
+// HandleToolCall records one tool call into the session of client. An empty
+// client is a caller the transport cannot tell apart (HTTP without
+// Mcp-Session-Id): it is not tracked, since its calls would land in whichever
+// session happens to be open (T187).
+func (st *sessionTracker) HandleToolCall(client, name string, args map[string]any, rErr *rpcError) {
+	if st == nil || rErr != nil || client == "" {
 		return
 	}
-	if st.handleManualSessionBoundary(name, args) {
+	if st.handleManualSessionBoundary(client, name, args) {
 		return
 	}
 
@@ -129,17 +146,33 @@ func (st *sessionTracker) HandleToolCall(name string, args map[string]any, rErr 
 	}
 
 	now := st.now()
-	var checkpoint *trackedSession
+	var checkpoint, switched *trackedSession
 
 	st.mu.Lock()
 	if st.closed {
 		st.mu.Unlock()
 		return
 	}
-	if st.current == nil {
-		st.current = newTrackedSession(now)
+	cs := st.sessions[client]
+	if cs == nil {
+		if len(st.sessions) >= maxTrackedClients {
+			st.mu.Unlock()
+			st.logWarn("session tracker full, call not tracked", zap.Int("clients", maxTrackedClients))
+			return
+		}
+		cs = &clientSession{session: newTrackedSession(now)}
+		st.sessions[client] = cs
 	}
-	session := st.current
+	// T187: an explicit change of context ends the session. Taking the first
+	// context seen and keeping it meant a later call relabelled earlier ones,
+	// and calls about another project were summarised under the first.
+	if callContext := activityContext(args); callContext != "" && cs.session.context != "" &&
+		callContext != cs.session.context && len(cs.session.activities) > 0 {
+		switched = cloneTrackedSession(cs.session)
+		cs.session = newTrackedSession(now)
+		st.flushWG.Add(1)
+	}
+	session := cs.session
 	session.lastActivityAt = now
 	if session.startedAt.IsZero() {
 		session.startedAt = now
@@ -169,20 +202,26 @@ func (st *sessionTracker) HandleToolCall(name string, args map[string]any, rErr 
 			session.activities = session.activities[len(session.activities)-maxActivities:]
 		}
 	}
-	st.resetIdleTimerLocked()
-	if st.shouldCheckpointLocked(now) {
+	st.resetIdleTimerLocked(client, cs)
+	if st.shouldCheckpointLocked(session, now) {
 		checkpoint = cloneTrackedSession(session)
 		session.lastCheckpointAt = now
 	}
 	st.mu.Unlock()
 
+	if switched != nil {
+		go func() {
+			defer st.flushWG.Done()
+			st.flushSession("context_switch", switched)
+		}()
+	}
 	if checkpoint != nil {
 		st.saveCheckpoint(checkpoint)
 	}
 }
 
-func (st *sessionTracker) HandleNotification(method string, params json.RawMessage) {
-	if st == nil {
+func (st *sessionTracker) HandleNotification(client, method string, params json.RawMessage) {
+	if st == nil || client == "" {
 		return
 	}
 	switch strings.TrimSpace(method) {
@@ -198,7 +237,7 @@ func (st *sessionTracker) HandleNotification(method string, params json.RawMessa
 		st.logWarn("failed to parse session notification", zap.String("method", method), zap.Error(err))
 		return
 	}
-	st.handleSessionNotification(event)
+	st.handleSessionNotification(client, event)
 }
 
 func (st *sessionTracker) Close() {
@@ -212,12 +251,14 @@ func (st *sessionTracker) Close() {
 		return
 	}
 	st.closed = true
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
+	sessions := make([]*trackedSession, 0, len(st.sessions))
+	for client, cs := range st.sessions {
+		if cs.timer != nil {
+			cs.timer.Stop()
+		}
+		sessions = append(sessions, cloneTrackedSession(cs.session))
+		delete(st.sessions, client)
 	}
-	session := cloneTrackedSession(st.current)
-	st.current = nil
 	st.mu.Unlock()
 
 	// Drain in-flight async checkpoints (Round 3 M10) BEFORE flush + cancel
@@ -225,20 +266,22 @@ func (st *sessionTracker) Close() {
 	// store.
 	st.checkpointWG.Wait()
 
-	st.flushSession("shutdown", session)
+	for _, session := range sessions {
+		st.flushSession("shutdown", session)
+	}
 	st.cancel()
 }
 
-func (st *sessionTracker) handleManualSessionBoundary(name string, args map[string]any) bool {
+func (st *sessionTracker) handleManualSessionBoundary(client, name string, args map[string]any) bool {
 	switch name {
 	case "review_session_changes":
 		return true
 	case "accept_session_changes":
-		st.reset()
+		st.reset(client)
 		return true
 	case "close_session", "analyze_session":
 		if sessionToolWrites(args) {
-			st.reset()
+			st.reset(client)
 		}
 		return true
 	default:
@@ -246,53 +289,60 @@ func (st *sessionTracker) handleManualSessionBoundary(name string, args map[stri
 	}
 }
 
-func (st *sessionTracker) handleSessionNotification(event sessionNotification) {
+func (st *sessionTracker) handleSessionNotification(client string, event sessionNotification) {
 	switch normalizeSessionEvent(event.Event) {
 	case "reset":
-		st.reset()
+		st.reset(client)
 	case "checkpoint":
-		st.forceCheckpoint(event, "checkpoint")
+		st.forceCheckpoint(client, event, "checkpoint")
 	case "pre_compact":
-		st.forceCheckpoint(event, "pre_compact")
+		st.forceCheckpoint(client, event, "pre_compact")
 	case "task_done", "final_summary":
-		st.flushWithNotification(normalizeSessionEvent(event.Event), event)
+		st.flushWithNotification(client, normalizeSessionEvent(event.Event), event)
 	default:
 		st.logWarn("ignored unknown session event", zap.String("event", event.Event))
 	}
 }
 
-func (st *sessionTracker) reset() {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
+// takeLocked removes client's session from the map and stops its timer,
+// returning the session it held (nil if there was none). Caller holds st.mu.
+func (st *sessionTracker) takeLocked(client string) *trackedSession {
+	cs := st.sessions[client]
+	if cs == nil {
+		return nil
 	}
-	st.current = nil
+	if cs.timer != nil {
+		cs.timer.Stop()
+	}
+	delete(st.sessions, client)
+	return cs.session
 }
 
-func (st *sessionTracker) flushFromIdle() {
+func (st *sessionTracker) reset(client string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.takeLocked(client)
+}
+
+// flushFromIdle runs from cs's idle timer. A timer that fired after its
+// session was reset or replaced finds another entry (or none) under client
+// and leaves it alone.
+func (st *sessionTracker) flushFromIdle(client string, cs *clientSession) {
 	st.flushWG.Add(1)
 	defer st.flushWG.Done()
 
 	st.mu.Lock()
-	if st.closed {
+	if st.closed || st.sessions[client] != cs {
 		st.mu.Unlock()
 		return
 	}
-	session := cloneTrackedSession(st.current)
-	st.current = nil
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
+	session := cloneTrackedSession(st.takeLocked(client))
 	st.mu.Unlock()
 
 	st.flushSession("idle_timeout", session)
 }
 
-func (st *sessionTracker) flushWithNotification(boundary string, event sessionNotification) {
+func (st *sessionTracker) flushWithNotification(client, boundary string, event sessionNotification) {
 	now := st.now()
 
 	st.mu.Lock()
@@ -300,22 +350,17 @@ func (st *sessionTracker) flushWithNotification(boundary string, event sessionNo
 		st.mu.Unlock()
 		return
 	}
-	session := cloneTrackedSession(st.current)
+	session := cloneTrackedSession(st.takeLocked(client))
 	if session == nil {
 		session = newTrackedSession(now)
 	}
 	applySessionNotification(session, event, now)
-	st.current = nil
-	if st.timer != nil {
-		st.timer.Stop()
-		st.timer = nil
-	}
 	st.mu.Unlock()
 
 	st.flushSession(boundary, session)
 }
 
-func (st *sessionTracker) forceCheckpoint(event sessionNotification, boundary string) {
+func (st *sessionTracker) forceCheckpoint(client string, event sessionNotification, boundary string) {
 	now := st.now()
 
 	st.mu.Lock()
@@ -323,14 +368,14 @@ func (st *sessionTracker) forceCheckpoint(event sessionNotification, boundary st
 		st.mu.Unlock()
 		return
 	}
-	session := cloneTrackedSession(st.current)
-	if session == nil {
+	var session *trackedSession
+	if cs := st.sessions[client]; cs != nil {
+		session = cloneTrackedSession(cs.session)
+		cs.session.lastCheckpointAt = now
+	} else {
 		session = newTrackedSession(now)
 	}
 	applySessionNotification(session, event, now)
-	if st.current != nil {
-		st.current.lastCheckpointAt = now
-	}
 	st.mu.Unlock()
 
 	st.saveCheckpointWithBoundary(session, boundary)
@@ -419,7 +464,13 @@ func (st *sessionTracker) waitForIdleTimer() {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		st.mu.Lock()
-		armed := st.timer != nil
+		armed := false
+		for _, cs := range st.sessions {
+			if cs.timer != nil {
+				armed = true
+				break
+			}
+		}
 		st.mu.Unlock()
 		if !armed || !time.Now().Before(deadline) {
 			return
@@ -566,22 +617,22 @@ func (st *sessionTracker) persistReviewQueue(ctx context.Context, boundary strin
 	return nil
 }
 
-func (st *sessionTracker) resetIdleTimerLocked() {
+func (st *sessionTracker) resetIdleTimerLocked(client string, cs *clientSession) {
 	if st.idleTimeout <= 0 {
 		return
 	}
-	if st.timer == nil {
-		st.timer = time.AfterFunc(st.idleTimeout, st.flushFromIdle)
+	if cs.timer == nil {
+		cs.timer = time.AfterFunc(st.idleTimeout, func() { st.flushFromIdle(client, cs) })
 		return
 	}
-	st.timer.Reset(st.idleTimeout)
+	cs.timer.Reset(st.idleTimeout)
 }
 
-func (st *sessionTracker) shouldCheckpointLocked(now time.Time) bool {
-	if st.checkpointInterval <= 0 || st.current == nil || len(st.current.activities) == 0 {
+func (st *sessionTracker) shouldCheckpointLocked(session *trackedSession, now time.Time) bool {
+	if st.checkpointInterval <= 0 || session == nil || len(session.activities) == 0 {
 		return false
 	}
-	return now.Sub(st.current.lastCheckpointAt) >= st.checkpointInterval
+	return now.Sub(session.lastCheckpointAt) >= st.checkpointInterval
 }
 
 func (st *sessionTracker) buildActivity(name string, args map[string]any) (trackedActivity, bool) {

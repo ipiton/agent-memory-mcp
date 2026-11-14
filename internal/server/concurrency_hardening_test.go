@@ -75,7 +75,7 @@ func TestCheckpointAfterCloseIsNotStranded(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 50 {
-			st.HandleToolCall("store_memory", map[string]any{"content": "checkpoint material"}, nil)
+			st.HandleToolCall(stdioClientKey, "store_memory", map[string]any{"content": "checkpoint material"}, nil)
 		}
 	}()
 

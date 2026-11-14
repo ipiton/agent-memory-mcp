@@ -1,8 +1,10 @@
 package server
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -82,6 +84,7 @@ func buildHTTPMux(server *MCPServer) http.Handler {
 			return
 		}
 
+		req.client = httpClientKey(w, r, req.Method)
 		resp := server.handle(req)
 		if resp == nil {
 			w.WriteHeader(http.StatusNoContent)
@@ -226,6 +229,57 @@ func buildHTTPMux(server *MCPServer) http.Handler {
 	})
 
 	return requireTrustedOrigin(server, mux)
+}
+
+// mcpSessionIDHeader is the MCP Streamable HTTP session header.
+const mcpSessionIDHeader = "Mcp-Session-Id"
+
+// httpClientKey tells HTTP clients apart for the session tracker (T187). One
+// server process serves every HTTP client, so without a key their calls land
+// in one session and the summary attributes one client's actions to another.
+//
+// initialize issues a fresh Mcp-Session-Id, as the Streamable HTTP spec
+// describes; a client echoes it on every later request. The id is only a
+// grouping key: an unknown id is not rejected, because Claude Code reconnects
+// to a restarted server with its old id and no new initialize, and refusing it
+// would break the client to protect a summary. A request with no usable id gets
+// an empty key and is not tracked — a lost summary beats a merged one.
+func httpClientKey(w http.ResponseWriter, r *http.Request, method string) string {
+	if method == "initialize" {
+		id := newMCPSessionID()
+		if id == "" {
+			return ""
+		}
+		w.Header().Set(mcpSessionIDHeader, id)
+		return "http:" + id
+	}
+	id := r.Header.Get(mcpSessionIDHeader)
+	if !validMCPSessionID(id) {
+		return ""
+	}
+	return "http:" + id
+}
+
+func newMCPSessionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// validMCPSessionID applies the spec's charset (visible ASCII 0x21–0x7E) and a
+// length cap, so a header cannot grow the tracker's key space without bound.
+func validMCPSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x21 || id[i] > 0x7E {
+			return false
+		}
+	}
+	return true
 }
 
 // sseKeepAliveInterval is the cadence of keepalive comments on the GET /mcp

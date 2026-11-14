@@ -146,7 +146,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 	}
 }
 
-func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
+func (s *MCPServer) handleToolsCall(params json.RawMessage, client string) (any, *rpcError) {
 	start := time.Now()
 	var req struct {
 		Name      string         `json:"name"`
@@ -190,7 +190,7 @@ func (s *MCPServer) handleToolsCall(params json.RawMessage) (any, *rpcError) {
 	result, rErr := s.invokeTool(name, handler, req.Arguments)
 	s.logToolEvent(name, req.Arguments, start, rErr)
 	if s.sessionTracker != nil {
-		s.sessionTracker.HandleToolCall(name, req.Arguments, rErr)
+		s.sessionTracker.HandleToolCall(client, name, req.Arguments, rErr)
 	}
 	return result, rErr
 }

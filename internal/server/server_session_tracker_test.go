@@ -28,7 +28,7 @@ func TestBackgroundSessionTrackerFlushesOnIdle(t *testing.T) {
 			"service": "api",
 		},
 	})
-	if _, rErr := s.handleToolsCall(params); rErr != nil {
+	if _, rErr := s.handleToolsCall(params, stdioClientKey); rErr != nil {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
@@ -75,7 +75,7 @@ func TestBackgroundSessionTrackerSkipsChoreOnlySession(t *testing.T) {
 			"service": "api",
 		},
 	})
-	if _, rErr := s.handleToolsCall(params); rErr != nil {
+	if _, rErr := s.handleToolsCall(params, stdioClientKey); rErr != nil {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
@@ -103,7 +103,7 @@ func TestBackgroundSessionTrackerCreatesReviewQueueItems(t *testing.T) {
 			"service": "api",
 		},
 	})
-	if _, rErr := s.handleToolsCall(params); rErr != nil {
+	if _, rErr := s.handleToolsCall(params, stdioClientKey); rErr != nil {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
@@ -157,7 +157,7 @@ func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing
 			"service": "api",
 		},
 	})
-	if _, rErr := s.handleToolsCall(first); rErr != nil {
+	if _, rErr := s.handleToolsCall(first, stdioClientKey); rErr != nil {
 		t.Fatalf("first handleToolsCall returned error: %+v", rErr)
 	}
 
@@ -170,7 +170,7 @@ func TestBackgroundSessionTrackerCreatesCheckpointDuringActiveSession(t *testing
 			"context": "payments",
 		},
 	})
-	if _, rErr := s.handleToolsCall(second); rErr != nil {
+	if _, rErr := s.handleToolsCall(second, stdioClientKey); rErr != nil {
 		t.Fatalf("second handleToolsCall returned error: %+v", rErr)
 	}
 
@@ -203,11 +203,11 @@ func TestBackgroundSessionTrackerFlushesOnTaskDoneNotification(t *testing.T) {
 			"service": "api",
 		},
 	})
-	if _, rErr := s.handleToolsCall(storeParams); rErr != nil {
+	if _, rErr := s.handleToolsCall(storeParams, stdioClientKey); rErr != nil {
 		t.Fatalf("handleToolsCall returned error: %+v", rErr)
 	}
 
-	s.handleNotification(rpcRequest{
+	s.handleNotification(rpcRequest{client: stdioClientKey,
 		Method: "notifications/session_event",
 		Params: json.RawMessage(`{
 			"event":"task_done",
@@ -248,7 +248,7 @@ func TestBackgroundSessionTrackerFlushesOnTaskDoneNotification(t *testing.T) {
 func TestBackgroundSessionTrackerCheckpointNotificationPersistsCheckpoint(t *testing.T) {
 	s := newAutoSessionTestServer(t, time.Hour, 0, 1)
 
-	s.handleNotification(rpcRequest{
+	s.handleNotification(rpcRequest{client: stdioClientKey,
 		Method: "notifications/session_event",
 		Params: json.RawMessage(`{
 			"event":"checkpoint",
