@@ -53,6 +53,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
+| `OLLAMA_EMBEDDING_MODEL` | unset | Pin a single Ollama model. Unset keeps `bge-m3:latest` followed by `mxbai-embed-large:latest`; an explicit model never falls back to those defaults. Set `MCP_EMBEDDING_DIMENSION` to match the model. Restart the server for memory embeddings, then rebuild the document index and re-embed memories when switching models |
 | `LLAMACPP_BASE_URL` | - | llama.cpp OpenAI-compatible base URL (e.g. `http://127.0.0.1:8080/v1`); empty disables it |
 | `LLAMACPP_EMBEDDING_MODEL` | `bge-m3` | llama.cpp embedding model label (used only when `LLAMACPP_BASE_URL` is set). The label is part of the derived model id stored on every record, so changing it invalidates the bank exactly as changing the model does — see `docs/EMBEDDING_MIGRATION.md` |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
