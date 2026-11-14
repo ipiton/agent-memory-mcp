@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-14
+
 ### Changed
 
 - **The steward no longer flags episodic memories as stale by age.** Finished tasks and incidents do not become false with time. With `auto_mark_stale_beyond_days` set, one run on the Sema bank used to mark 1368 of them stale; now it marks none. Stale items already in the inbox for episodic memories are closed on the next run.
