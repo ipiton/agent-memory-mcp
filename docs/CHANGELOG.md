@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tool safety annotations.** Every tool in `tools/list` now carries the MCP `annotations` object with `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` set explicitly. Before, `delete_memory`, `merge_duplicates` or `sweep_archive` looked to a client the same as `recall_memory`, and confirmation on them alone meant listing their names by hand. Ten tools that delete, merge, archive or overwrite entries are marked destructive; grouped meta-tools take the strictest hints of their actions. The table with `dry_run` per destructive tool is in `docs/MCP_TOOLS.md` ([Tool safety annotations](MCP_TOOLS.md#tool-safety-annotations)). A test fails when a tool is added without a classification.
 - **Search time by phase.** `semantic_search` with `debug=true` (and `debug` on `/console/api/query`) now returns `debug.phases`: refresh, query embedding, vector load, vector ranking, chunk text, keyword search, fusion, rerank and total, in milliseconds. Every search also logs one `Search phases` line with the same numbers, so a day of logs can be split by phase without asking callers for `debug`. The `Reloaded vectors after external re-indexing` log line now carries `took`.
 
 ### Fixed
