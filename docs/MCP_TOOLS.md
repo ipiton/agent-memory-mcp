@@ -331,9 +331,11 @@ query against a corpus that never included the material returns "no results",
 which is indistinguishable from "there is nothing like that". A root that is
 configured and contributes zero files is therefore reported by name (T97) —
 omitting it would make it look like a root nobody had configured. Common
-causes: the path does not exist under `MCP_ROOT`, it holds no supported file
-types, or `MCP_INDEX_EXCLUDE_DIRS` / `MCP_INDEX_EXCLUDE_GLOBS` filtered
-everything out.
+causes: it holds no supported file types, or `MCP_INDEX_EXCLUDE_DIRS` /
+`MCP_INDEX_EXCLUDE_GLOBS` filtered everything out. A missing or unreadable
+configured path fails indexing before the existing index is changed. Restore
+the path and retry, or remove an intentionally deleted source from
+`MCP_INDEX_DIRS`.
 
 ## Engineering workflow tools
 
