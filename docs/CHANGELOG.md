@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Index directories explicitly configured through symbolic links, preserving document paths and exclusions. Replacing a directory with a link no longer silently removes its indexed documents.
+
 ## [0.17.0] - 2026-11-14
 
 ### Added

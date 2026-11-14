@@ -73,11 +73,14 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 			continue
 		}
 
-		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
+		// DirFS follows a configured directory symlink while WalkDir still skips
+		// directory symlinks encountered below it, avoiding recursive link cycles.
+		err = fs.WalkDir(os.DirFS(fullPath), ".", func(rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if path != fullPath && ds.shouldSkipPath(path, d.IsDir()) {
+			path := filepath.Join(fullPath, rel)
+			if rel != "." && ds.shouldSkipPath(path, d.IsDir()) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}

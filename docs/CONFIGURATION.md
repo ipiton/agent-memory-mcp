@@ -130,6 +130,12 @@ RAG indexing scans supported docs and engineering text files, but you can furthe
 
 This is especially important if you use hosted embedding providers or shared HTTP mode.
 
+A directory explicitly listed in `MCP_INDEX_DIRS` may be a symbolic link. Indexing
+follows that directory and retains paths under the configured link, so replacing
+`docs` with a link to the same files keeps their indexed paths. Excludes also use
+those logical paths. Directory links found inside a scanned directory are not
+followed, preventing link cycles; list such a directory explicitly to index it.
+
 ### Automatic session tracking
 
 When the MCP server is running with the default session-tracking policy, it keeps a lightweight background session buffer.
