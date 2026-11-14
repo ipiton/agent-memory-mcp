@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-14
+
 ### Added
 
 - **Retrieval log `recall_events`.** Each record returned by a bounded `recall` (`limit > 0`, the same rule as `targeted_access_count`) leaves one row: time, query (up to 500 characters), context filter, record id, rank and score. A sweep leaves none. The per-record counter says only that a record was retrieved, not when, for which question or at what rank; the log is what a "retrieved → used" measurement can join on. The table has no retention yet and grows by up to `limit` rows per recall.
