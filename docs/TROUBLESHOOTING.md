@@ -6,7 +6,7 @@
 
 The server tries Jina → OpenAI → Ollama in `auto` mode and stops at the first available one. If none is reachable, embeddings (and therefore semantic recall) are disabled.
 
-- set at least one of `JINA_API_KEY`, `OPENAI_API_KEY`, or run Ollama with `bge-m3` pulled (`ollama pull bge-m3`)
+- set at least one of `JINA_API_KEY`, `OPENAI_API_KEY`, or run Ollama with the selected model pulled: use `ollama pull bge-m3` when `OLLAMA_EMBEDDING_MODEL` is unset, otherwise pull the model named by that setting (for example `ollama pull embeddinggemma:300m`)
 - in `MCP_EMBEDDING_MODE=local-only` only Ollama is consulted; verify `OLLAMA_BASE_URL` (default `http://localhost:11434`) responds
 
 CLI `agent-memory-mcp store …` without an embedder still saves the memory but skips the vector — the record will only be retrievable via text/keyword search until you run `agent-memory-mcp reembed`.
