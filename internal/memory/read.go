@@ -12,6 +12,7 @@ import (
 
 	"github.com/ipiton/agent-memory-mcp/internal/dbutil"
 	"github.com/ipiton/agent-memory-mcp/internal/scoring"
+	"github.com/ipiton/agent-memory-mcp/internal/textfmt"
 	"github.com/ipiton/agent-memory-mcp/internal/topk"
 	"go.uber.org/zap"
 )
@@ -414,7 +415,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	// proves nothing about any single entry. Both are recorded; only the first
 	// moves the counter the sediment gate reads.
 	select {
-	case ms.accessCh <- accessEvent{ids: ids, targeted: limit > 0}:
+	case ms.accessCh <- newAccessEvent(query, filters.Context, results, limit > 0):
 	default:
 		ms.logger.Debug("Access stats channel full, dropping update")
 	}
@@ -533,12 +534,44 @@ func (ms *Store) textMatchScore(query string, m *cachedMemory) float64 {
 type accessEvent struct {
 	ids      []string
 	targeted bool
+	// T76(b): who asked and what came back, kept per retrieval. The counter
+	// says a record was retrieved; only the event says when, for which
+	// question and at what rank — the join to a task needs all three.
+	query    string
+	ctxLabel string
+	scores   []float64
+	at       time.Time
+}
+
+// recallEventQueryMaxRunes bounds the stored question. The event is a join
+// key and a reading aid, not an archive of prompts.
+const recallEventQueryMaxRunes = 500
+
+// maxPendingRecallEvents caps events held between flushes. Past it new events
+// are dropped, same policy as a full accessCh: telemetry never blocks recall.
+const maxPendingRecallEvents = 1000
+
+func newAccessEvent(query, ctxLabel string, results []*SearchResult, targeted bool) accessEvent {
+	ev := accessEvent{ids: make([]string, len(results)), targeted: targeted}
+	for i, r := range results {
+		ev.ids[i] = r.Memory.ID
+	}
+	if targeted {
+		ev.query = textfmt.Truncate(query, recallEventQueryMaxRunes)
+		ev.ctxLabel = ctxLabel
+		ev.scores = make([]float64, len(results))
+		for i, r := range results {
+			ev.scores[i] = r.Score
+		}
+	}
+	return ev
 }
 
 // accessStatsWorker drains accessCh and flushes batched access stats updates.
 // Batches are flushed when 100 IDs accumulate or after 5 seconds of inactivity.
 // Targeted and sweep accesses are batched apart: merging them would force the
-// flush to pick one meaning for the whole batch.
+// flush to pick one meaning for the whole batch. Targeted events are also kept
+// whole for recall_events (T76b) and written with the targeted batch.
 func (ms *Store) accessStatsWorker() {
 	defer ms.accessWG.Done()
 
@@ -550,10 +583,15 @@ func (ms *Store) accessStatsWorker() {
 		true:  make(map[string]struct{}, maxBatch),
 		false: make(map[string]struct{}, maxBatch),
 	}
+	var events []accessEvent
 	timer := time.NewTimer(flushTimeout)
 	defer timer.Stop()
 
 	flushOne := func(targeted bool) {
+		if targeted && len(events) > 0 {
+			ms.flushRecallEvents(events)
+			events = events[:0]
+		}
 		batch := batches[targeted]
 		if len(batch) == 0 {
 			return
@@ -577,6 +615,12 @@ func (ms *Store) accessStatsWorker() {
 				flush()
 				return
 			}
+			if ev.targeted && len(ev.ids) > 0 && len(events) < maxPendingRecallEvents {
+				if ev.at.IsZero() {
+					ev.at = ms.now()
+				}
+				events = append(events, ev)
+			}
 			batch := batches[ev.targeted]
 			for _, id := range ev.ids {
 				batch[id] = struct{}{}
@@ -589,6 +633,40 @@ func (ms *Store) accessStatsWorker() {
 			flush()
 			timer.Reset(flushTimeout)
 		}
+	}
+}
+
+// flushRecallEvents appends one row per (retrieval, returned record) to
+// recall_events. T76(b): targeted_access_count answers "was this record ever
+// retrieved"; consumption needs "retrieved when, for what question, at which
+// rank", and an aggregate cannot be unpacked into that after the fact.
+func (ms *Store) flushRecallEvents(events []accessEvent) {
+	tx, err := ms.db.Begin()
+	if err != nil {
+		ms.logger.Warn("Failed to begin recall events tx", zap.Error(err))
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`INSERT INTO recall_events (at, query, context, memory_id, rank, score) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		ms.logger.Warn("Failed to prepare recall events stmt", zap.Error(err))
+		return
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, ev := range events {
+		for i, id := range ev.ids {
+			score := 0.0
+			if i < len(ev.scores) {
+				score = ev.scores[i]
+			}
+			if _, err := stmt.Exec(ev.at, ev.query, ev.ctxLabel, id, i+1, score); err != nil {
+				ms.logger.Warn("Failed to record recall event", zap.String("id", id), zap.Error(err))
+				return
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		ms.logger.Warn("Failed to commit recall events tx", zap.Error(err))
 	}
 }
 

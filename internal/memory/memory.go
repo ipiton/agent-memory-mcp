@@ -733,6 +733,23 @@ func ensureMemorySchema(db *sql.DB) error {
 		return err
 	}
 
+	// T76(b) retrieval log: one row per record returned by a bounded recall.
+	// No foreign key to memories — an event outlives a deleted record, and
+	// "retrieved, then deleted" is itself an answer the measurement needs.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS recall_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		at DATETIME NOT NULL,
+		query TEXT NOT NULL,
+		context TEXT,
+		memory_id TEXT NOT NULL,
+		rank INTEGER NOT NULL,
+		score REAL NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_recall_events_memory_id ON recall_events(memory_id);
+	CREATE INDEX IF NOT EXISTS idx_recall_events_at ON recall_events(at);`); err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -113,6 +113,56 @@ func TestBoundedRecallCountsAsTargetedAccess(t *testing.T) {
 	}
 }
 
+// T76(b): consumption needs the retrieval itself — when, for which question,
+// at what rank — not just a per-record total. A bounded recall leaves one row
+// per returned record; a sweep leaves none, for the same reason it does not
+// move the targeted counter.
+func TestRecallEventsLogOnlyTargetedRetrievals(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "events.db")
+
+	reopened := storeAndClose(t, dbPath, func(s *Store) {
+		for _, content := range []string{
+			"traefik ingress rollback notes",
+			"traefik ingress certificate renewal",
+		} {
+			if err := s.Store(ctx, &Memory{Content: content, Type: TypeSemantic, Context: "t76"}); err != nil {
+				t.Fatalf("Store: %v", err)
+			}
+		}
+		if _, err := s.Recall(ctx, "traefik ingress", Filters{Context: "t76"}, 0); err != nil {
+			t.Fatalf("sweep Recall: %v", err)
+		}
+		if _, err := s.Recall(ctx, "traefik ingress", Filters{Context: "t76"}, 10); err != nil {
+			t.Fatalf("bounded Recall: %v", err)
+		}
+	})
+
+	rows, err := reopened.db.Query(`SELECT query, context, rank FROM recall_events ORDER BY rank`)
+	if err != nil {
+		t.Fatalf("query recall_events: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var ranks []int
+	for rows.Next() {
+		var query, ctxLabel string
+		var rank int
+		if err := rows.Scan(&query, &ctxLabel, &rank); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if query != "traefik ingress" || ctxLabel != "t76" {
+			t.Errorf("event = (%q, %q), want (\"traefik ingress\", \"t76\")", query, ctxLabel)
+		}
+		ranks = append(ranks, rank)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(ranks) != 2 || ranks[0] != 1 || ranks[1] != 2 {
+		t.Errorf("ranks = %v, want [1 2] — one row per record of the bounded recall, none for the sweep", ranks)
+	}
+}
+
 // T113, second half: the sediment gate reads the honest counter. On the live
 // bank 4046 of 4556 entries cleared EpisodicToSemanticMin=3 on the sweep-driven
 // counter — a gate that admits 89% of the bank is not a gate.

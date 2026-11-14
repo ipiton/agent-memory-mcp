@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Retrieval log `recall_events`.** Each record returned by a bounded `recall` (`limit > 0`, the same rule as `targeted_access_count`) leaves one row: time, query (up to 500 characters), context filter, record id, rank and score. A sweep leaves none. The per-record counter says only that a record was retrieved, not when, for which question or at what rank; the log is what a "retrieved → used" measurement can join on. The table has no retention yet and grows by up to `limit` rows per recall.
+
 ### Fixed
 
 - **Session tracking over HTTP mixed up clients.** The tracker kept one session per server process, so every HTTP client within the idle window landed in the same summary, under the context of whichever call came first. On a shared instance, notes saved from one chat were summarised together with another client's search. The HTTP transport now issues an `Mcp-Session-Id` on `initialize` and tracks each id separately. Requests without the header are no longer tracked: losing a summary is better than merging two. An unknown id is still accepted, because Claude Code reconnects to a restarted server with its old id. stdio is unchanged: one process is one client.
