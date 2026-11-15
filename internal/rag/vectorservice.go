@@ -61,6 +61,10 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	// embedder could only cost time. The start-up indexing run is what notices a
 	// model appearing.
 	keywordOnly, _ := vs.store.GetMetadata(keywordOnlyMetadataKey)
+	semanticOnly := vs.config.Fusion == "semantic"
+	if semanticOnly && keywordOnly == "true" {
+		return nil, fmt.Errorf("semantic fusion requires a vector index; run index_documents with an embedding model")
+	}
 
 	var queryResult *embedder.EmbeddingResult
 	var err error
@@ -96,7 +100,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 			path.KeywordOnly = true
 			path.Degraded = true
 		}
-	case vs.config.KeywordFallback && !vs.config.Strict:
+	case vs.config.KeywordFallback && !vs.config.Strict && !semanticOnly:
 		vs.logger.Warn("Query could not be embedded, answering from keywords", zap.Error(err))
 		path.KeywordOnly = true
 		path.Degraded = true
@@ -106,7 +110,10 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	keywordResults, err := vs.store.KeywordSearch(query.Query, keywordLimit)
+	var keywordResults []vectorstore.SearchResult
+	if !semanticOnly {
+		keywordResults, err = vs.store.KeywordSearch(query.Query, keywordLimit)
+	}
 	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !vs.config.Strict {
 		path.KeywordSkipped = "keyword index is still being built"
 		path.Degraded = true

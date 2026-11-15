@@ -139,6 +139,7 @@ type RAGConfig struct {
 	// Fusion selects how the semantic and keyword arms are merged (T124):
 	// "weighted" (default) blends the two scores, "rrf" fuses their ranks,
 	// "rrf-boosted" fuses ranks and keeps the additive boosts on top.
+	// "semantic" ranks vector candidates by similarity without keyword or metadata boosts.
 	// MCP_RAG_FUSION.
 	Fusion string
 	// RRFK is the RRF damping constant, canonically 60. Only read when
@@ -1074,16 +1075,17 @@ func normalizeOutputMode(value string) string {
 // R@5 0.7648).
 const DefaultMaxChunksPerDoc = 1
 
-// NormalizeFusion maps MCP_RAG_FUSION onto the three modes the ranker knows,
-// falling back to the blended default the way every other enum here does.
 // Values of MCP_TOOL_PROFILE.
 const (
 	ToolProfileFull = "full"
 	ToolProfileCore = "core"
 )
 
+// NormalizeFusion falls back to the blended default for unknown modes.
 func NormalizeFusion(value string) string {
 	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "semantic":
+		return "semantic"
 	case "rrf":
 		return "rrf"
 	case "rrf-boosted", "rrf_boosted", "rrf+boosts":

@@ -228,6 +228,9 @@ func (f fusionSettings) usesRanks() bool {
 // a full set of them is worth about ten rank positions, which keeps them a
 // tie-breaker instead of something that can outrank the retrieval itself.
 func (f fusionSettings) score(c hybridCandidate, keywordComponent, confidenceComponent float64) float64 {
+	if f.mode == "semantic" {
+		return c.semanticScore
+	}
 	if !f.usesRanks() {
 		score := c.semanticScore*0.60 + keywordComponent*0.30 + c.recencyScore + c.sourceBoost + confidenceComponent
 		if keywordComponent > 0 && c.semanticScore < 0.1 {
@@ -260,6 +263,9 @@ func (f fusionSettings) score(c hybridCandidate, keywordComponent, confidenceCom
 func buildHybridSearchResults(query string, sourceTypeFilter string, semanticResults []vectorstore.SearchResult, keywordResults []vectorstore.SearchResult, indexedChunks int, limit int, debug bool, fusion fusionSettings, maxChunksPerDoc int) ([]SearchResult, []string, *SearchDebug) {
 	now := time.Now()
 	normalizedFilter := normalizeSourceType(sourceTypeFilter)
+	if fusion.mode == "semantic" {
+		keywordResults = nil
+	}
 
 	candidateMap := make(map[string]*hybridCandidate, len(semanticResults)+len(keywordResults))
 	filteredOut := 0
@@ -314,8 +320,10 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 			continue
 		}
 
-		candidate.recencyScore = recencyBoost(candidate.chunk.LastModified, now)
-		candidate.sourceBoost = sourceAwareBoost(query, candidate.sourceType)
+		if fusion.mode != "semantic" {
+			candidate.recencyScore = recencyBoost(candidate.chunk.LastModified, now)
+			candidate.sourceBoost = sourceAwareBoost(query, candidate.sourceType)
+		}
 		candidate.trust = trustMetadataForDocument(candidate.sourceType, candidate.chunk.LastModified, now)
 		candidates = append(candidates, *candidate)
 	}
@@ -334,7 +342,10 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 			keywordComponent = candidate.keywordScore / maxKeywordScore
 		}
 
-		confidenceComponent := confidenceBoost(candidate.trust.Confidence)
+		confidenceComponent := 0.0
+		if fusion.mode != "semantic" {
+			confidenceComponent = confidenceBoost(candidate.trust.Confidence)
+		}
 		score := fusion.score(candidate, keywordComponent, confidenceComponent)
 
 		fullContent := candidate.chunk.Content
@@ -384,6 +395,9 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].result.Score == rows[j].result.Score {
+			if fusion.mode == "semantic" {
+				return rows[i].result.ID < rows[j].result.ID
+			}
 			return rows[i].result.LastModified.After(rows[j].result.LastModified)
 		}
 		return rows[i].result.Score > rows[j].result.Score
@@ -421,6 +435,9 @@ func buildHybridSearchResults(query string, sourceTypeFilter string, semanticRes
 		DiscardedAsNoise: discardedAsNoise,
 		CandidateCount:   len(candidates),
 		ReturnedCount:    len(searchResults),
+	}
+	if fusion.mode == "semantic" {
+		debugInfo.RankingSignals = []string{"semantic_similarity", "source_type_filter"}
 	}
 	if normalizedFilter != "" {
 		debugInfo.AppliedFilters = []string{fmt.Sprintf("source_type=%s", normalizedFilter)}

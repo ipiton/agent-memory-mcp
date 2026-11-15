@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Compare document search with `MCP_RAG_FUSION=semantic`: vector similarity without keyword or metadata boosts. Requires a vector index; the default hybrid ranking stays unchanged.
+
 ## [0.17.0] - 2026-11-14
 
 ### Added
