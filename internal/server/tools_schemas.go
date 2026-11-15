@@ -11,9 +11,10 @@ const (
 )
 
 type tool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	InputSchema map[string]any   `json:"inputSchema"`
+	Annotations *toolAnnotations `json:"annotations,omitempty"`
 }
 
 // buildSessionSchema returns a JSON-Schema object literal that describes the
@@ -147,6 +148,7 @@ func (s *MCPServer) availableToolDefs() []tool {
 		if s.memoryStore == nil && re == nil && hybridTools[t.Name] {
 			continue
 		}
+		t.Annotations = annotationsFor(t.Name)
 		filtered = append(filtered, t)
 	}
 	return filtered
