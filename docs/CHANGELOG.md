@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-15
+
 ### Added
 
 - **Tool safety annotations.** Every tool in `tools/list` now carries the MCP `annotations` object with `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` set explicitly. Before, `delete_memory`, `merge_duplicates` or `sweep_archive` looked to a client the same as `recall_memory`, and confirmation on them alone meant listing their names by hand. Ten tools that delete, merge, archive or overwrite entries are marked destructive; grouped meta-tools take the strictest hints of their actions. The table with `dry_run` per destructive tool is in `docs/MCP_TOOLS.md` ([Tool safety annotations](MCP_TOOLS.md#tool-safety-annotations)). A test fails when a tool is added without a classification.
