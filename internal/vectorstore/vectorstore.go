@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -26,6 +29,9 @@ type Store interface {
 	Search(queryEmbedding []float32, limit int) ([]SearchResult, SearchTiming, error)
 	KeywordSearch(query string, limit int) ([]SearchResult, error)
 	RefreshIfStale() (bool, error)
+	// StartVectorLoad reports whether the vectors are in memory, and starts
+	// loading them in the background when they are not (T177).
+	StartVectorLoad() bool
 	AllChunks() ([]Chunk, error)
 	ChunksByDocPath(docPath string) ([]Chunk, error)
 	Count() int
@@ -84,10 +90,20 @@ type SQLiteStore struct {
 	db     *sql.DB
 	logger *zap.Logger
 	mu     sync.RWMutex
-	// chunks holds vectors and identity for semantic search, without Content:
-	// the text is read from disk for the chunks a search returns.
-	chunks        map[string]*Chunk
+	// dim is the configured embedding dimension; vectors of another length are
+	// left out of memory.
+	dim int
+	// vectors holds what semantic search needs, without Content: the text is
+	// read from disk for the chunks a search returns. Nil until loaded.
+	vectors       *vectorIndex
 	vectorsLoaded bool
+	// vectorLoading is set while a background load (StartVectorLoad) runs.
+	vectorLoading bool
+	// lastVectorUse is when a search last needed the vectors, in UnixNano; the
+	// idle unloader compares against it (T177).
+	lastVectorUse atomic.Int64
+	// bg tracks the background vector load and the idle unloader.
+	bg sync.WaitGroup
 	// invalidUTF8Chunks counts chunks cut mid-rune by the pre-T118 splitter,
 	// found by the one-time sweep. Reported so the next such share is found by a
 	// number rather than by accident.
@@ -163,7 +179,7 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 	store := &SQLiteStore{
 		db:       db,
 		logger:   logger,
-		chunks:   make(map[string]*Chunk),
+		dim:      dimension,
 		ftsReady: make(chan struct{}),
 		stop:     make(chan struct{}),
 	}
@@ -260,6 +276,13 @@ func (s *SQLiteStore) loadVectors() error {
 	// the update would be missed for good.
 	version := s.readIndexVersion()
 
+	// Sized up front so the array is allocated once instead of doubling its way
+	// to a few hundred megabytes and leaving every smaller copy behind.
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM chunks WHERE length(embedding) > 0`).Scan(&count); err != nil {
+		return err
+	}
+
 	rows, err := s.db.Query(`
 		SELECT id, doc_path, title, last_modified, embedding
 		FROM chunks
@@ -270,44 +293,87 @@ func (s *SQLiteStore) loadVectors() error {
 	}
 	defer func() { _ = rows.Close() }()
 
-	loaded := make(map[string]*Chunk)
-	for rows.Next() {
-		var chunk Chunk
-		var embeddingBlob []byte
+	loaded := newVectorIndex(s.dim, count)
+	// Many chunks share a document; one copy of its path serves them all.
+	docPaths := make(map[string]string)
+	skipped := 0
+	for n := 0; rows.Next(); n++ {
+		if n%4096 == 0 {
+			select {
+			case <-s.stop:
+				return errStoreClosed
+			default:
+			}
+		}
+		var meta chunkMeta
+		var docPath string
+		// RawBytes points into the driver's buffer: the blob is decoded into the
+		// array without a copy of its own.
+		var embeddingBlob sql.RawBytes
 		var title sql.NullString
 		var lastModified sql.NullTime
 
-		if err := rows.Scan(&chunk.ID, &chunk.DocPath, &title, &lastModified, &embeddingBlob); err != nil {
+		if err := rows.Scan(&meta.ID, &docPath, &title, &lastModified, &embeddingBlob); err != nil {
 			s.logger.Warn("Failed to scan chunk", zap.Error(err))
 			continue
 		}
-		chunk.Title = sanitizeUTF8(title.String)
+		if shared, ok := docPaths[docPath]; ok {
+			meta.DocPath = shared
+		} else {
+			docPaths[docPath] = docPath
+			meta.DocPath = docPath
+		}
+		meta.Title = sanitizeUTF8(title.String)
 		if lastModified.Valid {
-			chunk.LastModified = lastModified.Time
+			meta.LastModified = lastModified.Time
 		}
 
-		embedding, err := dbutil.DecodeEmbedding(embeddingBlob)
-		if err != nil {
-			s.logger.Warn("Failed to decode embedding", zap.String("id", chunk.ID), zap.Error(err))
+		if len(embeddingBlob) > 0 && embeddingBlob[0] == '[' {
+			// Legacy JSON blob, or a binary one that happens to start with '[':
+			// the decoder tells them apart.
+			embedding, err := dbutil.DecodeEmbedding(embeddingBlob)
+			if err != nil {
+				s.logger.Warn("Failed to decode embedding", zap.String("id", meta.ID), zap.Error(err))
+				continue
+			}
+			if len(embedding) != s.dim {
+				skipped++
+				continue
+			}
+			loaded.put(meta, embedding)
 			continue
 		}
-		chunk.Embedding = embedding
-		loaded[chunk.ID] = &chunk
+		if !loaded.appendBlob(meta, embeddingBlob) {
+			skipped++
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if skipped > 0 {
+		s.logger.Warn("Vectors of another dimension left out of semantic search",
+			zap.Int("skipped", skipped), zap.Int("dimension", s.dim))
+	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.chunks = loaded
+	s.vectors = loaded
 	s.vectorsLoaded = true
 	s.loadedIndexVersion = version
+	s.mu.Unlock()
+
+	// The load leaves the driver's buffers and, on a reload, the previous array
+	// behind. Collecting them now and handing the pages back keeps the footprint
+	// at the live size instead of waiting for the heap to double first.
+	debug.FreeOSMemory()
 	return nil
 }
 
+// errStoreClosed stops a vector load that Close interrupted.
+var errStoreClosed = errors.New("vector store closed")
+
 // ensureVectors loads the vectors on the first semantic search.
 func (s *SQLiteStore) ensureVectors() error {
+	s.touchVectors()
 	s.mu.RLock()
 	loaded := s.vectorsLoaded
 	s.mu.RUnlock()
@@ -328,8 +394,103 @@ func (s *SQLiteStore) ensureVectors() error {
 	if err := s.loadVectors(); err != nil {
 		return fmt.Errorf("failed to load vectors: %w", err)
 	}
-	s.logger.Info("Vectors loaded", zap.Duration("took", time.Since(began)))
+	s.touchVectors()
+	s.logger.Info("Vectors loaded", zap.Duration("took", time.Since(began)), zap.Int("vectors", s.vectorCount()))
 	return nil
+}
+
+// StartVectorLoad reports whether the vectors are in memory. When they are
+// not, it starts loading them in the background (once) and returns false
+// straight away, so a search can answer from keywords instead of holding the
+// client for the load (T177): under load it took minutes, past client timeouts.
+func (s *SQLiteStore) StartVectorLoad() bool {
+	s.touchVectors()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.vectorsLoaded {
+		return true
+	}
+	if s.vectorLoading {
+		return false
+	}
+	select {
+	case <-s.stop:
+		return false
+	default:
+	}
+	s.vectorLoading = true
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		err := s.ensureVectors()
+		s.mu.Lock()
+		s.vectorLoading = false
+		s.mu.Unlock()
+		if err != nil && !errors.Is(err, errStoreClosed) {
+			s.logger.Warn("Background vector load failed", zap.Error(err))
+		}
+	}()
+	return false
+}
+
+// touchVectors records that a search needed the vectors now.
+func (s *SQLiteStore) touchVectors() {
+	s.lastVectorUse.Store(time.Now().UnixNano())
+}
+
+func (s *SQLiteStore) vectorCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.vectors == nil {
+		return 0
+	}
+	return s.vectors.len()
+}
+
+// SetIdleUnload drops the vectors from memory once no search has needed them
+// for idle, and returns the pages to the system (T177). The next search loads
+// them again. Zero or negative leaves them in memory for good. Call once,
+// right after NewSQLiteStore.
+func (s *SQLiteStore) SetIdleUnload(idle time.Duration) {
+	if idle <= 0 {
+		return
+	}
+	check := min(idle/4, time.Minute)
+	s.bg.Add(1)
+	go func() {
+		defer s.bg.Done()
+		ticker := time.NewTicker(check)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case <-ticker.C:
+				s.unloadIfIdle(idle)
+			}
+		}
+	}()
+}
+
+// unloadIfIdle drops the vectors when the last search that needed them is
+// more than idle ago. It takes refreshMu so it never races a load or a reload.
+func (s *SQLiteStore) unloadIfIdle(idle time.Duration) {
+	if time.Since(time.Unix(0, s.lastVectorUse.Load())) < idle {
+		return
+	}
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	s.mu.Lock()
+	if !s.vectorsLoaded || time.Since(time.Unix(0, s.lastVectorUse.Load())) < idle {
+		s.mu.Unlock()
+		return
+	}
+	n := s.vectors.len()
+	s.vectors = nil
+	s.vectorsLoaded = false
+	s.mu.Unlock()
+	debug.FreeOSMemory()
+	s.logger.Info("Vectors unloaded after idle", zap.Duration("idle", idle), zap.Int("vectors", n))
 }
 
 // readIndexVersion returns the version stamped by the last completed indexing
@@ -515,13 +676,12 @@ func (s *SQLiteStore) Upsert(chunks []Chunk) error {
 		return nil
 	}
 	for _, chunk := range chunks {
-		if len(chunk.Embedding) == 0 {
-			delete(s.chunks, chunk.ID)
-			continue
-		}
-		chunkCopy := chunk
-		chunkCopy.Content = ""
-		s.chunks[chunk.ID] = &chunkCopy
+		s.vectors.put(chunkMeta{
+			ID:           chunk.ID,
+			DocPath:      chunk.DocPath,
+			Title:        chunk.Title,
+			LastModified: chunk.LastModified,
+		}, chunk.Embedding)
 	}
 
 	return nil
@@ -570,8 +730,10 @@ func (s *SQLiteStore) DeleteByDocPath(docPath string) error {
 	}
 
 	s.mu.Lock()
-	for _, id := range ids {
-		delete(s.chunks, id)
+	if s.vectorsLoaded {
+		for _, id := range ids {
+			s.vectors.remove(id)
+		}
 	}
 	s.mu.Unlock()
 
@@ -615,54 +777,67 @@ func (s *SQLiteStore) rankVectors(queryEmbedding []float32, limit int) []SearchR
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if len(s.chunks) == 0 {
+	x := s.vectors
+	if x == nil || x.len() == 0 {
 		return []SearchResult{}
 	}
 
 	const minScore = 0.1
 
+	// Candidates are slots until the end, so a chunk the heap later evicts
+	// costs no copy of its identity.
+	type scored struct {
+		slot  int
+		score float64
+	}
 	useHeap := limit > 0
-	var topResults *topk.MinHeap[SearchResult]
+	var top *topk.MinHeap[scored]
 	if useHeap {
-		topResults = topk.NewMinHeap(limit, func(a, b SearchResult) bool {
-			return a.Score < b.Score
+		top = topk.NewMinHeap(limit, func(a, b scored) bool {
+			return a.score < b.score
 		})
 	}
-	results := make([]SearchResult, 0)
-	for _, chunk := range s.chunks {
-		score := CosineSimilarity(queryEmbedding, chunk.Embedding)
+	var all []scored
+	for i := range x.len() {
+		score := CosineSimilarity(queryEmbedding, x.vector(i))
 		if score < minScore {
 			continue
 		}
-
-		result := SearchResult{
-			Chunk: *chunk,
-			Score: score,
-		}
-		if !useHeap {
-			results = append(results, result)
-			continue
-		}
-		if topResults.Len() < limit {
-			topResults.PushItem(result)
-			continue
-		}
-		if topResults.PeekMin().Score < result.Score {
-			topResults.ReplaceMin(result)
+		c := scored{slot: i, score: score}
+		switch {
+		case !useHeap:
+			all = append(all, c)
+		case top.Len() < limit:
+			top.PushItem(c)
+		case top.PeekMin().score < score:
+			top.ReplaceMin(c)
 		}
 	}
-
 	if useHeap {
-		results = make([]SearchResult, 0, topResults.Len())
-		for topResults.Len() > 0 {
-			results = append(results, topResults.PopItem())
+		all = make([]scored, 0, top.Len())
+		for top.Len() > 0 {
+			all = append(all, top.PopItem())
 		}
 	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].score > all[j].score
 	})
 
+	results := make([]SearchResult, len(all))
+	for i, c := range all {
+		m := x.meta[c.slot]
+		results[i] = SearchResult{
+			Chunk: Chunk{
+				ID:           m.ID,
+				DocPath:      m.DocPath,
+				Title:        m.Title,
+				LastModified: m.LastModified,
+				// A copy: the slot is overwritten in place by later upserts.
+				Embedding: slices.Clone(x.vector(c.slot)),
+			},
+			Score: c.score,
+		}
+	}
 	return results
 }
 
@@ -764,8 +939,13 @@ func (s *SQLiteStore) Count() int {
 
 // Close closes the underlying SQLite database connection.
 func (s *SQLiteStore) Close() error {
+	// Under mu, so StartVectorLoad either sees the store closed or has added
+	// its goroutine to bg before the Wait below.
+	s.mu.Lock()
 	s.stopOnce.Do(func() { close(s.stop) })
+	s.mu.Unlock()
 	s.backfill.Wait()
+	s.bg.Wait()
 	return s.db.Close()
 }
 

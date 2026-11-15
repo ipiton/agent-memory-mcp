@@ -70,6 +70,9 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 func initRAGEngine(cfg config.Config) (*rag.Engine, error) {
 	cfg.RAG.AutoIndex = false
 	cfg.RAG.FileWatcher = false
+	// A one-shot command has no later search to hand the load to.
+	cfg.RAG.BackgroundVectorLoad = false
+	cfg.RAG.VectorIdleUnload = 0
 
 	engine := rag.NewEngine(cfg, nil)
 	if engine == nil {
