@@ -54,7 +54,7 @@ func TestInitializeLogsClientProtocolVersion(t *testing.T) {
 	params := json.RawMessage(`{"protocolVersion":"2026-07-28",` +
 		`"clientInfo":{"name":"claude-code","version":"9.9.9"}}`)
 
-	result, rpcErr := s.handleInitialize(params)
+	result, rpcErr := s.handleInitialize("", params)
 	if rpcErr != nil {
 		t.Fatalf("handleInitialize returned error: %+v", rpcErr)
 	}
@@ -85,7 +85,7 @@ func TestInitializeLogsMatchingProtocolVersion(t *testing.T) {
 	s, logPath := newLoggingTestServer(t)
 
 	params := json.RawMessage(`{"protocolVersion":"` + protocolVersion + `"}`)
-	if _, rpcErr := s.handleInitialize(params); rpcErr != nil {
+	if _, rpcErr := s.handleInitialize("", params); rpcErr != nil {
 		t.Fatalf("handleInitialize returned error: %+v", rpcErr)
 	}
 
@@ -175,7 +175,7 @@ func TestInitializeSurvivesUnusableParams(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, _ := newLoggingTestServer(t)
 
-			result, rpcErr := s.handleInitialize(params)
+			result, rpcErr := s.handleInitialize("", params)
 			if rpcErr != nil {
 				t.Fatalf("handleInitialize returned error: %+v", rpcErr)
 			}

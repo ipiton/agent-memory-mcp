@@ -58,7 +58,7 @@ func TestUpsertReplace(t *testing.T) {
 		t.Fatalf("expected 1 after replace, got %d", got)
 	}
 
-	results, err := store.Search([]float32{0, 1, 0}, 1)
+	results, _, err := store.Search([]float32{0, 1, 0}, 1)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestSearchReturnsRanked(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	results, err := store.Search([]float32{1, 0, 0}, 10)
+	results, _, err := store.Search([]float32{1, 0, 0}, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestSearchScoreThreshold(t *testing.T) {
 	}
 
 	// Orthogonal vector — cosine similarity = 0
-	results, err := store.Search([]float32{0, 1, 0}, 10)
+	results, _, err := store.Search([]float32{0, 1, 0}, 10)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSearchLimit(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	results, err := store.Search([]float32{1, 0, 0}, 5)
+	results, _, err := store.Search([]float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

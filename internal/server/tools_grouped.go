@@ -238,6 +238,7 @@ func buildGroupedTool(g toolGroupSpec, members []tool, actions []groupAction) to
 			"properties": props,
 			"required":   []string{"action"},
 		},
+		Annotations: combineAnnotations(members),
 	}
 }
 

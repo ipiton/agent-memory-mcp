@@ -114,7 +114,7 @@ func memoryToolDefs() []tool {
 							"an empty string REMOVES the key. Removal had no surface at all before " +
 							"T96 — the store supported it, no tool exposed it — which left canonical " +
 							"records stamped as verified by their own promotion with no way to correct them. " +
-							"Trust keys (provenance, canonical, knowledge_layer, canonical_promoted_at, last_verified_at) " +
+							"Trust keys (provenance, canonical, knowledge_layer, canonical_promoted_at, last_verified_at, source_hashes) " +
 							"and a canonical status are server-owned: setting them is refused, removing them is allowed.",
 					},
 				},
