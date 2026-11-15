@@ -750,6 +750,23 @@ func ensureMemorySchema(db *sql.DB) error {
 		return err
 	}
 
+	// T155: the text a content update replaced. Without it recall_as_of
+	// answered a past date with today's text, and a heuristic rewrite left no
+	// trace. No embedding — revisions never take part in search. No FK, like
+	// recall_events; Delete removes a record's revisions explicitly.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS memory_revisions (
+		memory_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		content TEXT NOT NULL,
+		title TEXT,
+		replaced_at DATETIME NOT NULL,
+		replaced_by_path TEXT NOT NULL,
+		PRIMARY KEY (memory_id, revision)
+	);
+	CREATE INDEX IF NOT EXISTS idx_memory_revisions_path ON memory_revisions(replaced_by_path);`); err != nil {
+		return err
+	}
+
 	return nil
 }
 
