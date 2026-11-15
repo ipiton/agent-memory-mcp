@@ -153,6 +153,9 @@ const (
 	SessionModeMigration SessionMode = "migration"
 	SessionModeResearch  SessionMode = "research"
 	SessionModeCleanup   SessionMode = "cleanup"
+	// SessionModeChat is a conversation outside a coding agent (T188): the
+	// summary is kept, but no engineering knowledge is extracted from it.
+	SessionModeChat SessionMode = "chat"
 )
 
 // SessionSummary is the raw end-of-session capture before consolidation planning.
@@ -207,7 +210,7 @@ func ValidateSessionMode(value string, defaultMode SessionMode) (SessionMode, er
 		return defaultMode, nil
 	}
 	switch SessionMode(value) {
-	case SessionModeCoding, SessionModeIncident, SessionModeMigration, SessionModeResearch, SessionModeCleanup:
+	case SessionModeCoding, SessionModeIncident, SessionModeMigration, SessionModeResearch, SessionModeCleanup, SessionModeChat:
 		return SessionMode(value), nil
 	default:
 		return "", &ErrValidation{Message: fmt.Sprintf("invalid session mode %q", value)}

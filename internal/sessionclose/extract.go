@@ -65,6 +65,12 @@ func extractSegments(summary memory.SessionSummary) []segment {
 }
 
 func inferEngineeringType(text string, mode memory.SessionMode) (memory.EngineeringType, []string) {
+	// T188: a chat is not engineering work. Its keywords ("decided", "steps")
+	// and the mode fallback turned every line into a hard_review card, so a
+	// chat summary yields no candidates at all and is kept as raw only.
+	if mode == memory.SessionModeChat {
+		return "", []string{"chat_mode_no_extraction"}
+	}
 	lower := strings.ToLower(strings.TrimSpace(text))
 	trace := make([]string, 0, 3)
 

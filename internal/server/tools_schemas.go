@@ -32,7 +32,7 @@ func buildSessionSchema(summaryDesc string, extras map[string]any) map[string]an
 		},
 		"mode": map[string]any{
 			"type":        "string",
-			"enum":        []string{"coding", "incident", "migration", "research", "cleanup"},
+			"enum":        []string{"coding", "incident", "migration", "research", "cleanup", "chat"},
 			"default":     "coding",
 			"description": "Optional session mode that influences conservative type fallback",
 		},
