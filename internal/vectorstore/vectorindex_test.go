@@ -135,6 +135,39 @@ func TestBackgroundLoadAndIdleUnload(t *testing.T) {
 	}
 }
 
+// Every search calls RefreshIfStale first; behind a background load it must
+// not wait for the load, or the client is held after all.
+func TestRefreshDoesNotWaitForBackgroundLoad(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "v.db"), 2, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+
+	s.refreshMu.Lock() // the load in progress
+	s.mu.Lock()
+	s.vectorLoading = true
+	s.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.RefreshIfStale()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RefreshIfStale: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RefreshIfStale waited for the background load")
+	}
+	s.mu.Lock()
+	s.vectorLoading = false
+	s.mu.Unlock()
+	s.refreshMu.Unlock()
+}
+
 // Close must not leave a background load running against a closed database.
 func TestCloseWaitsForBackgroundLoad(t *testing.T) {
 	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "v.db"), 2, zap.NewNop())

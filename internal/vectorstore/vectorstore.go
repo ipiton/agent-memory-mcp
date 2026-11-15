@@ -557,7 +557,18 @@ func (s *SQLiteStore) adoptIndexVersionLocked(before, after string) {
 // The cost when nothing changed is one primary-key lookup of a single metadata
 // row; the reload runs only when the version actually moved.
 func (s *SQLiteStore) RefreshIfStale() (bool, error) {
-	s.refreshMu.Lock()
+	if !s.refreshMu.TryLock() {
+		// A background load holds the lock for as long as it reads (T177):
+		// waiting here would hold the search for it after all. The load records
+		// the version it read; a newer one is caught by a later search.
+		s.mu.RLock()
+		loading := s.vectorLoading
+		s.mu.RUnlock()
+		if loading {
+			return false, nil
+		}
+		s.refreshMu.Lock()
+	}
 	defer s.refreshMu.Unlock()
 
 	current := s.readIndexVersion()
