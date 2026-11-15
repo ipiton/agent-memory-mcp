@@ -314,6 +314,7 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 			updates := memory.Update{
 				Tags:     mergeTags(target.Tags, mem.Tags),
 				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+				Source:   memory.RevisionSourceSessionFold,
 			}
 			if folded := foldSessionTail(target.Content, mem.Content); folded != strings.TrimSpace(target.Content) {
 				updates.Content = folded
@@ -337,6 +338,7 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 			updates := memory.Update{
 				Tags:     mergeTags(target.Tags, mem.Tags),
 				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+				Source:   memory.RevisionSourceSessionConsolidate,
 			}
 			if shouldReplaceContent(target.Content, mem.Content) {
 				updates.Content = mem.Content

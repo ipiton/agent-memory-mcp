@@ -130,6 +130,7 @@ func (s *Service) applyUpdateAction(ctx context.Context, action *CandidateAction
 	updates := memory.Update{
 		Tags:     mergeTags(target.Tags, candidate.Tags),
 		Metadata: mergeMetadata(target.Metadata, candidate.Metadata),
+		Source:   memory.RevisionSourceSessionNearExact,
 	}
 	if target.Context == "" && candidate.Context != "" {
 		updates.Context = candidate.Context

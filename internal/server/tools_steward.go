@@ -407,6 +407,9 @@ func formatRecallAsOf(results []*memory.SearchResult, asOf time.Time) string {
 		title := memory.DisplayTitle(r.Memory, 60)
 		fmt.Fprintf(&sb, "\n%d. %s (score: %.2f)\n", i+1, title, r.Score)
 		fmt.Fprintf(&sb, "   ID: %s | Type: %s\n", r.Memory.ID, r.Memory.Type)
+		if rev := r.Memory.Metadata[memory.MetadataContentAsOfRevision]; rev != "" {
+			fmt.Fprintf(&sb, "   Text as of the date (revision %s); the current text differs\n", rev)
+		}
 		if r.Memory.ValidFrom != nil {
 			fmt.Fprintf(&sb, "   Valid from: %s", r.Memory.ValidFrom.Format("2006-01-02"))
 		}
