@@ -76,6 +76,15 @@ type Config struct {
 	// embeddings ignore the setting and use raw cosine.
 	RecallCentered bool
 
+	// MemoryLimitMB is the Go runtime soft memory limit for a long-running
+	// server, in MiB (T164). Without one the heap grows to twice the live data
+	// before a collection: the main instance peaked near 3.9 GB over a few
+	// hundred MB of vectors. The collector works harder only as the heap nears
+	// the limit; it is not a cap, so a larger live set still runs. A GOMEMLIMIT
+	// set in the environment wins over it. 0 disables.
+	// MCP_GOMEMLIMIT_MB, default 1024.
+	MemoryLimitMB int
+
 	Stats           StatsConfig
 	Memory          MemoryConfig
 	RAG             RAGConfig
@@ -153,6 +162,18 @@ type RAGConfig struct {
 	// default, because an outage must not replace good vectors on an installation
 	// that has a model. MCP_RAG_KEYWORD_FALLBACK.
 	KeywordFallback bool
+	// BackgroundVectorLoad answers a search from keywords while the vectors are
+	// still loading, marked as degraded, instead of holding the client for the
+	// load; strict mode fails with a "loading" error instead (T177). Under load a
+	// cold load took minutes, past client timeouts. One-shot CLI commands and the
+	// eval turn it off: they have nothing to come back for.
+	// MCP_RAG_BACKGROUND_VECTOR_LOAD, default true.
+	BackgroundVectorLoad bool
+	// VectorIdleUnload drops the vectors from memory after this long without a
+	// vector search and returns the pages to the system; the next search loads
+	// them again, in the background when BackgroundVectorLoad is on (T177).
+	// 0 keeps them for good. MCP_RAG_VECTOR_IDLE_UNLOAD, default 30m.
+	VectorIdleUnload time.Duration
 }
 
 // EmbeddingsConfig holds embedding provider + transport settings.
@@ -387,6 +408,9 @@ type envValues struct {
 	ragRRFK                          int
 	ragMaxChunksPerDoc               int
 	ragKeywordFallback               bool
+	ragBackgroundVectorLoad          bool
+	ragVectorIdleUnload              time.Duration
+	memoryLimitMB                    int
 	tripleExtractorEnabled           bool
 	tripleExtractorBaseURL           string
 	tripleExtractorAPIKey            string
@@ -495,6 +519,9 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		ragRRFK:                          s.Int("MCP_RAG_RRF_K", 60),
 		ragMaxChunksPerDoc:               s.Int("MCP_RAG_MAX_CHUNKS_PER_DOC", DefaultMaxChunksPerDoc),
 		ragKeywordFallback:               s.Bool("MCP_RAG_KEYWORD_FALLBACK", false),
+		ragBackgroundVectorLoad:          s.Bool("MCP_RAG_BACKGROUND_VECTOR_LOAD", true),
+		ragVectorIdleUnload:              s.Duration("MCP_RAG_VECTOR_IDLE_UNLOAD", 30*time.Minute),
+		memoryLimitMB:                    s.Int("MCP_GOMEMLIMIT_MB", 1024),
 		tripleExtractorEnabled:           s.Bool("MCP_TRIPLE_EXTRACTOR_ENABLED", false),
 		tripleExtractorBaseURL:           s.String("MCP_TRIPLE_EXTRACTOR_BASE_URL", ""),
 		tripleExtractorAPIKey:            s.String("MCP_TRIPLE_EXTRACTOR_API_KEY", ""),
@@ -653,6 +680,7 @@ func resolvePaths(ev envValues) (Config, error) {
 		ToolProfile:      strings.ToLower(strings.TrimSpace(ev.toolProfile)),
 		RetrievalStrict:  ev.retrievalStrict,
 		RecallCentered:   ev.recallCentered,
+		MemoryLimitMB:    ev.memoryLimitMB,
 
 		Compile: CompileConfig{
 			Background: ev.compileBackground,
@@ -692,6 +720,9 @@ func resolvePaths(ev envValues) (Config, error) {
 			RRFK:              ev.ragRRFK,
 			MaxChunksPerDoc:   ev.ragMaxChunksPerDoc,
 			KeywordFallback:   ev.ragKeywordFallback,
+
+			BackgroundVectorLoad: ev.ragBackgroundVectorLoad,
+			VectorIdleUnload:     ev.ragVectorIdleUnload,
 		},
 
 		Embeddings: EmbeddingsConfig{

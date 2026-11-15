@@ -227,8 +227,8 @@ func TestVectorsLoadOnlyForVectorSearch(t *testing.T) {
 	if got := s.Count(); got != 1 {
 		t.Fatalf("Count = %d, want 1", got)
 	}
-	if s.vectorsLoaded || len(s.chunks) != 0 {
-		t.Fatalf("vectors in memory before any vector search: loaded=%v n=%d", s.vectorsLoaded, len(s.chunks))
+	if s.vectorsLoaded || s.vectorCount() != 0 {
+		t.Fatalf("vectors in memory before any vector search: loaded=%v n=%d", s.vectorsLoaded, s.vectorCount())
 	}
 
 	results, _, err := s.Search([]float32{1, 0, 0}, 5)
@@ -238,9 +238,8 @@ func TestVectorsLoadOnlyForVectorSearch(t *testing.T) {
 	if len(results) != 1 || results[0].Content != "lazy text" {
 		t.Fatalf("Search = %+v, want the chunk with its text", results)
 	}
-	if s.chunks["a"].Content != "" {
-		t.Errorf("text kept in memory next to the vector")
-	}
+	// The text cannot stay in memory next to the vector: chunkMeta has no field
+	// for it (T164).
 }
 
 func TestChunkWithoutVector(t *testing.T) {

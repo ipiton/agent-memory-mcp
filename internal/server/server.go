@@ -91,6 +91,7 @@ type MCPServer struct {
 // (Round 3 H17); New orchestrates them in order.
 func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	fileLogger := initFileLogger(cfg)
+	applyMemoryLimit(cfg, fileLogger)
 	ragEngine := initRAGEngine(cfg, fileLogger)
 	memoryStore, emb := initMemoryStore(cfg, fileLogger)
 

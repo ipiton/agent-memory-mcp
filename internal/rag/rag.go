@@ -68,6 +68,9 @@ type RetrievalPath struct {
 	// KeywordSkipped is set when only vectors answered because the keyword index
 	// is not usable yet.
 	KeywordSkipped string `json:"keyword_skipped,omitempty"`
+	// VectorsSkipped is set when only keywords answered because the vectors are
+	// still being loaded into memory (T177).
+	VectorsSkipped string `json:"vectors_skipped,omitempty"`
 	// Reranker is set when reranking actually reordered the results;
 	// RerankSkipped carries the reason when it did not.
 	Reranker      string `json:"reranker,omitempty"`
@@ -193,6 +196,9 @@ type vecServiceConfig struct {
 	// KeywordFallback allows working without an embedding model. See
 	// config.RAGConfig.KeywordFallback.
 	KeywordFallback bool
+	// BackgroundVectorLoad and VectorIdleUnload: see config.RAGConfig (T177).
+	BackgroundVectorLoad bool
+	VectorIdleUnload     time.Duration
 	// Fusion / RRFK select how the semantic and keyword arms are merged.
 	// See config.RAGConfig.Fusion (T124).
 	Fusion string
@@ -331,6 +337,9 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		RRFK:            cfg.RAG.RRFK,
 		MaxChunksPerDoc: cfg.RAG.MaxChunksPerDoc,
 		KeywordFallback: cfg.RAG.KeywordFallback,
+
+		BackgroundVectorLoad: cfg.RAG.BackgroundVectorLoad,
+		VectorIdleUnload:     cfg.RAG.VectorIdleUnload,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {

@@ -34,6 +34,7 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
+	store.SetIdleUnload(cfg.VectorIdleUnload)
 
 	return &vectorService{
 		config: cfg,
@@ -67,13 +68,28 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	// model appearing.
 	keywordOnly, _ := vs.store.GetMetadata(keywordOnlyMetadataKey)
 
+	// T177: while the vectors are still on their way into memory the semantic
+	// arm is skipped rather than waited for; the load continues in the
+	// background and a later search uses it.
+	vectorsLoading := false
+	if vs.config.BackgroundVectorLoad && keywordOnly != "true" && !vs.store.StartVectorLoad() {
+		if vs.config.Strict {
+			return nil, StrictModeError("vectors", "the vectors are still being loaded into memory; retry shortly")
+		}
+		vectorsLoading = true
+	}
+
 	var queryResult *embedder.EmbeddingResult
-	if !vs.config.KeywordFallback || keywordOnly != "true" {
+	if !vectorsLoading && (!vs.config.KeywordFallback || keywordOnly != "true") {
 		mark = time.Now()
 		queryResult, err = vs.config.Embedder.EmbedQueryDetailed(ctx, query.Query)
 		phases.EmbedMs = sinceMs(mark)
 	}
 	switch {
+	case vectorsLoading:
+		path.KeywordOnly = true
+		path.VectorsSkipped = "vectors are still being loaded into memory"
+		path.Degraded = true
 	case vs.config.KeywordFallback && keywordOnly == "true" && !vs.config.Strict:
 		path.KeywordOnly = true
 		path.Degraded = true

@@ -188,6 +188,9 @@ func formatDegradedNote(path *rag.RetrievalPath) string {
 	if path.KeywordSkipped != "" {
 		parts = append(parts, path.KeywordSkipped+" — results come from vectors alone")
 	}
+	if path.VectorsSkipped != "" {
+		parts = append(parts, path.VectorsSkipped+" — results come from keywords alone")
+	}
 	if path.RerankSkipped != "" {
 		parts = append(parts, "reranking skipped ("+path.RerankSkipped+") — results are in hybrid order")
 	}
