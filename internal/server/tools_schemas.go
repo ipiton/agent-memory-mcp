@@ -80,7 +80,24 @@ func buildSessionSchema(summaryDesc string, extras map[string]any) map[string]an
 	}
 }
 
-var sessionAnalysisSchema = buildSessionSchema("Raw session summary text to analyze", map[string]any{
+// reviewedPlanProperties are the T139 write-time guards. runSessionAnalysis
+// honours them on every writing call, so close_session/analyze_session with
+// dry_run=false declare them too, not only accept_session_changes.
+func reviewedPlanProperties() map[string]any {
+	return map[string]any{
+		"plan_fingerprint": map[string]any{
+			"type":        "string",
+			"description": "From review_session_changes: write only that plan, fail without writing if it changed",
+		},
+		"decisions": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "string"},
+			"description":          "action id -> update|merge|keep_existing|reject; needs plan_fingerprint",
+		},
+	}
+}
+
+var sessionAnalysisSchema = buildSessionSchema("Raw session summary text to analyze", withReviewedPlan(map[string]any{
 	"dry_run": map[string]any{
 		"type":        "boolean",
 		"default":     true,
@@ -96,7 +113,14 @@ var sessionAnalysisSchema = buildSessionSchema("Raw session summary text to anal
 		"default":     false,
 		"description": "Auto-apply only low-risk actions such as near-exact updates; risky changes stay in review_required",
 	},
-})
+}))
+
+func withReviewedPlan(props map[string]any) map[string]any {
+	for k, v := range reviewedPlanProperties() {
+		props[k] = v
+	}
+	return props
+}
 
 func mainToolDefs() []tool {
 	var tools []tool
@@ -288,7 +312,7 @@ func sessionToolDefs() []tool {
 		{
 			Name:        "accept_session_changes",
 			Description: "Persist the raw session summary, auto-apply low-risk session changes, and return the remaining review backlog",
-			InputSchema: buildSessionSchema("Raw session summary text to apply", nil),
+			InputSchema: buildSessionSchema("Raw session summary text to apply", reviewedPlanProperties()),
 		},
 	}
 }

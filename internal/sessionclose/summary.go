@@ -77,7 +77,7 @@ func buildAvailableActions(result *AnalysisResult) []AvailableAction {
 		{
 			Key:         "accept_all",
 			Tool:        "accept_session_changes",
-			Description: "persist raw summary and apply the session plan under the current safety policy",
+			Description: "persist raw summary and apply the session plan under the current safety policy; pass plan_fingerprint (and optional decisions keyed by action id) to apply exactly this plan",
 			Enabled:     canApplyPlan,
 		},
 		{
@@ -108,6 +108,15 @@ func isReviewItem(action CandidateAction, dryRun bool) bool {
 	}
 	if dryRun {
 		return action.Handling != ActionHandlingAutoApply
+	}
+	return false
+}
+
+func hasAutoApplyKnowledge(actions []CandidateAction) bool {
+	for _, action := range actions {
+		if action.Kind != ActionRawOnly && action.Handling == ActionHandlingAutoApply {
+			return true
+		}
 	}
 	return false
 }
