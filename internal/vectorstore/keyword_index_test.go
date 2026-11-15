@@ -140,6 +140,20 @@ func TestKeywordSearchStemsRussianOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeForKeywordIndexStemsOnlyCyrillicTokens(t *testing.T) {
+	cases := map[string]string{
+		"миграции миграцию":                "миграц миграц",
+		"MAKE-QUALITY-GATES-2026 sema_api": "make quality gates 2026 sema api",
+		"k8s gateway":                      "k8s gateway",
+		"apiшлюзы":                         "apiшлюзы",
+	}
+	for in, want := range cases {
+		if got := normalizeForKeywordIndex(in); got != want {
+			t.Errorf("normalizeForKeywordIndex(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestUpsertAndDeleteKeepKeywordRowsInStep(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Upsert([]Chunk{{ID: "a", DocPath: "a.md", Content: "oldterm here", Embedding: []float32{1, 0, 0}}}); err != nil {
