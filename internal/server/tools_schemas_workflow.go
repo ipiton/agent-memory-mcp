@@ -166,6 +166,7 @@ func workflowToolDefs() []tool {
 					},
 					"created_before": map[string]any{
 						"type":        "string",
+						"format":      "date-time",
 						"description": "Only select items created before this RFC3339 timestamp (bulk cleanup of an aged backlog). Ignored when explicit ids are given.",
 					},
 					"kind": map[string]any{
