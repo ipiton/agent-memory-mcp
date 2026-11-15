@@ -2,6 +2,9 @@ package steward
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,15 +89,11 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 		// Check referenced file paths.
 		if params.RootPath != "" {
 			refs := extractPathRefs(m.Content)
+			var verifiedHashes map[string]string
+			_ = json.Unmarshal([]byte(m.Metadata[memory.MetadataSourceHashes]), &verifiedHashes)
 			for _, ref := range refs {
-				absPath := ref
-				if !filepath.IsAbs(ref) {
-					absPath = filepath.Join(params.RootPath, ref)
-				}
-				absPath = filepath.Clean(absPath)
-
-				// Guard: only stat paths within the configured root to prevent path traversal.
-				if !strings.HasPrefix(absPath, cleanRoot+string(filepath.Separator)) && absPath != cleanRoot {
+				absPath, ok := resolveRef(cleanRoot, ref)
+				if !ok {
 					result.UnreachableSources = append(result.UnreachableSources, UnreachableRef{
 						MemoryID:   m.ID,
 						SourcePath: ref,
@@ -124,8 +123,15 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 					continue
 				}
 
-				// Check if source was modified after last verification.
+				// Check if source was modified after last verification. mtime
+				// alone lies: git checkout, rebase and touch rewrite a file
+				// without changing it, so a newer mtime counts only when the
+				// bytes differ from those hashed at verify_entry (T150).
+				// Records verified before hashes existed keep the mtime verdict.
 				if info.ModTime().After(verified) {
+					if h, ok := verifiedHashes[ref]; ok && h == fileSHA256(absPath) {
+						continue
+					}
 					result.Findings = append(result.Findings, DriftFinding{
 						MemoryID:        m.ID,
 						Title:           title,
@@ -158,6 +164,53 @@ func (s *Service) DriftScan(ctx context.Context, params DriftScanParams) (*Drift
 	}
 
 	return result, nil
+}
+
+// resolveRef turns a path reference into an absolute path under root. It
+// refuses anything that lands outside root, so neither the scan nor the
+// verify-time hashing reads files beyond the project (path traversal guard).
+func resolveRef(cleanRoot, ref string) (string, bool) {
+	absPath := ref
+	if !filepath.IsAbs(ref) {
+		absPath = filepath.Join(cleanRoot, ref)
+	}
+	absPath = filepath.Clean(absPath)
+	if !strings.HasPrefix(absPath, cleanRoot+string(filepath.Separator)) && absPath != cleanRoot {
+		return "", false
+	}
+	return absPath, true
+}
+
+// sourceHashes hashes every file the content references under root, as a JSON
+// object ref → sha256. Unreadable or out-of-root refs are left out: drift_scan
+// then falls back to the mtime verdict for them. Empty when nothing was hashed.
+func sourceHashes(root, content string) string {
+	cleanRoot := filepath.Clean(root)
+	hashes := make(map[string]string)
+	for _, ref := range extractPathRefs(content) {
+		absPath, ok := resolveRef(cleanRoot, ref)
+		if !ok {
+			continue
+		}
+		if h := fileSHA256(absPath); h != "" {
+			hashes[ref] = h
+		}
+	}
+	if len(hashes) == 0 {
+		return ""
+	}
+	encoded, _ := json.Marshal(hashes)
+	return string(encoded)
+}
+
+// fileSHA256 returns the hex sha256 of a regular file, or "" when it cannot be read.
+func fileSHA256(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func matchesDriftScope(scope string, entity memory.EngineeringType, isCanonical bool) bool {

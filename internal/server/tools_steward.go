@@ -225,6 +225,7 @@ func (s *MCPServer) callVerifyEntry(args map[string]any) (any, *rpcError) {
 		Method:   method,
 		Status:   vStatus,
 		Note:     note,
+		RootPath: s.config.RootPath,
 	})
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: fmt.Sprintf("verify entry failed: %v", err)}
