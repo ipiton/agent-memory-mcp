@@ -129,7 +129,7 @@ func splitMarkdownWithBreadcrumbs(content, docTitle string, chunkSize, overlap i
 			budget = chunkSize
 			breadcrumb = ""
 		}
-		for _, piece := range splitTextByBudget(body, budget, overlap) {
+		for _, piece := range splitMarkdownBodyByBudget(body, budget, overlap) {
 			if breadcrumb == "" {
 				chunks = append(chunks, piece)
 			} else {
@@ -377,6 +377,184 @@ func splitTextByBudget(body string, budget, overlap int) []string {
 		if end >= bodyLen {
 			break
 		}
+	}
+	return chunks
+}
+
+// markdownTable is one pipe table inside a section body, in byte offsets into
+// that body: [start, end) covers the header line, the delimiter row and every
+// body row, rowsStart is where the first body row begins, and header is the
+// header line plus the delimiter row, ready to be repeated.
+type markdownTable struct {
+	start, rowsStart, end int
+	header                string
+}
+
+// findMarkdownTables locates GFM pipe tables: a line holding a '|' followed by
+// a delimiter row (`|---|:--:|`), then every following non-blank line that
+// holds a '|'. Tables inside fenced code blocks are text, not tables.
+func findMarkdownTables(body string) []markdownTable {
+	type line struct{ start, end int } // end excludes the '\n'
+	var lines []line
+	for pos := 0; ; {
+		nl := strings.IndexByte(body[pos:], '\n')
+		if nl < 0 {
+			lines = append(lines, line{pos, len(body)})
+			break
+		}
+		lines = append(lines, line{pos, pos + nl})
+		pos += nl + 1
+	}
+	text := func(i int) string { return body[lines[i].start:lines[i].end] }
+
+	var (
+		tables []markdownTable
+		fence  string
+	)
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(text(i))
+		if fence == "" {
+			if strings.HasPrefix(trimmed, "```") {
+				fence = "```"
+				continue
+			} else if strings.HasPrefix(trimmed, "~~~") {
+				fence = "~~~"
+				continue
+			}
+		} else {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if i+1 >= len(lines) || !strings.Contains(trimmed, "|") || !isTableDelimiterRow(text(i+1)) {
+			continue
+		}
+		j := i + 2
+		for j < len(lines) && strings.TrimSpace(text(j)) != "" && strings.Contains(text(j), "|") {
+			j++
+		}
+		t := markdownTable{
+			start:  lines[i].start,
+			end:    lines[j-1].end,
+			header: body[lines[i].start:lines[i+1].end],
+		}
+		t.rowsStart = t.end
+		if j > i+2 {
+			t.rowsStart = lines[i+2].start
+		}
+		tables = append(tables, t)
+		i = j - 1
+	}
+	return tables
+}
+
+// isTableDelimiterRow reports whether line is a GFM table delimiter row: cells
+// of dashes with optional alignment colons, separated by '|'.
+func isTableDelimiterRow(line string) bool {
+	s := strings.TrimSpace(line)
+	if !strings.Contains(s, "|") || !strings.Contains(s, "-") {
+		return false
+	}
+	s = strings.TrimSuffix(strings.TrimPrefix(s, "|"), "|")
+	for _, cell := range strings.Split(s, "|") {
+		cell = strings.TrimSpace(cell)
+		cell = strings.TrimSuffix(strings.TrimPrefix(cell, ":"), ":")
+		if cell == "" || strings.Trim(cell, "-") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// splitMarkdownBodyByBudget is splitTextByBudget made aware of pipe tables
+// (T143). The plain splitter cuts on the nearest whitespace, which inside a
+// table lands mid-row, and a piece that starts below the header carries rows
+// like `| 6100 | 2026-08-01 | paid |` with nothing saying which number is what.
+// Here a piece never ends inside a table row — the break moves back to the
+// '\n' before that row — and a piece that starts among a table's body rows
+// opens with that table's header and delimiter row; the repeated header counts
+// against the budget. A body without a table goes to splitTextByBudget
+// unchanged, so its chunks stay byte-identical to the pre-T143 index.
+//
+// Limits: a single row longer than the budget is still cut on whitespace,
+// since there is no line break to move to; a header longer than half the
+// budget is not repeated, as the pieces would be mostly header.
+func splitMarkdownBodyByBudget(body string, budget, overlap int) []string {
+	if budget <= 0 || len(body) <= budget {
+		return []string{body}
+	}
+	tables := findMarkdownTables(body)
+	if len(tables) == 0 {
+		return splitTextByBudget(body, budget, overlap)
+	}
+	tableAt := func(pos int) *markdownTable {
+		for i := range tables {
+			if pos >= tables[i].start && pos < tables[i].end {
+				return &tables[i]
+			}
+		}
+		return nil
+	}
+	lineStart := func(pos int) int { return strings.LastIndexByte(body[:pos], '\n') + 1 }
+
+	var chunks []string
+	bodyLen := len(body)
+	for start := 0; start < bodyLen; {
+		prefix := ""
+		if t := tableAt(start); t != nil && start >= t.rowsStart && len(t.header)+1 <= budget/2 {
+			prefix = t.header + "\n"
+		}
+		end := start + budget - len(prefix)
+		// Inside a table the piece ends on a row boundary: before the row the
+		// budget ran out in, or before the whole table when that row is the
+		// header or the delimiter, so the header is never parted from its rows.
+		cut := -1
+		if t := tableAt(end); end < bodyLen && t != nil && body[end] != '\n' {
+			cut = lineStart(end)
+			if end < t.rowsStart {
+				cut = t.start
+			}
+		}
+		if end >= bodyLen {
+			end = bodyLen
+		} else if cut > start {
+			end = cut
+		} else {
+			breakPoint := end
+			for i := end; i > end-100 && i > start; i-- {
+				if body[i] == ' ' || body[i] == '\n' {
+					breakPoint = i
+					break
+				}
+			}
+			end = textfmt.AlignRuneStart(body, breakPoint)
+		}
+		if end <= start {
+			break
+		}
+		if chunk := strings.TrimSpace(body[start:end]); chunk != "" {
+			chunks = append(chunks, prefix+chunk)
+		}
+		if end >= bodyLen {
+			break
+		}
+
+		// The next piece overlaps this one by `overlap` bytes. Inside a table it
+		// starts on a row boundary — at the table itself when the overlap reaches
+		// back into the header, which the piece then carries on its own.
+		next := textfmt.AlignRuneStart(body, end-overlap)
+		if t := tableAt(next); t != nil {
+			if next < t.rowsStart {
+				next = t.start
+			} else {
+				next = lineStart(next)
+			}
+		}
+		if next <= start {
+			next = end
+		}
+		start = next
 	}
 	return chunks
 }

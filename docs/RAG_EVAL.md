@@ -47,7 +47,7 @@ is expected.
 Edit `internal/rag/eval/testdata/qa.json`. Each entry has:
 
 - `id`: stable, unique identifier (`simple-7`, `multi-3`, ...).
-- `type`: one of `simple`, `set`, `multi-hop`, `conditional`.
+- `type`: one of `simple`, `set`, `multi-hop`, `conditional`, `table`.
 - `question`: natural-language query sent to the engine.
 - `expected_doc_ids`: list of corpus-relative paths. At least one must
   appear in the top-5 results for the query to count as a hit.
@@ -57,6 +57,24 @@ Edit `internal/rag/eval/testdata/qa.json`. Each entry has:
 Pick expected doc IDs honestly — if a query could reasonably match
 several docs, list them all. Do not tune a query just to hit a single
 cherry-picked document.
+
+### `table` questions
+
+`table-*` ask for a value in a row of a long table under `corpus/registers/`,
+below the first chunk of that document, phrased with the column names
+(`notice period`, `payment status`, `custodian`). The three registers list the
+same suppliers, so the supplier name alone does not tell them apart; only the
+header does. The column names live in the header row, so they measure whether
+a chunk cut from the middle of a table still carries it.
+
+| Splitter | `table` Hit@5 | `table` MRR | all 33 Hit@5 | all 33 MRR |
+|---|---|---|---|---|
+| before T143 (whitespace cut, header in the first chunk only) | 0.375 | 0.208 | 0.848 | 0.784 |
+| T143 (row-boundary cut, header repeated) | 0.750 | 0.521 | 0.939 | 0.860 |
+
+The other 25 questions score the same in both runs. The two remaining misses
+(`table-1`, `table-2`) do not reach the top five at all with the fixture
+encoder.
 
 ## Interpreting failure
 

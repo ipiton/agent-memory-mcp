@@ -3,37 +3,49 @@
     "id": "simple-1",
     "type": "simple",
     "question": "How do I roll back a production deploy?",
-    "expected_doc_ids": ["runbooks/deploy-rollback.md"]
+    "expected_doc_ids": [
+      "runbooks/deploy-rollback.md"
+    ]
   },
   {
     "id": "simple-2",
     "type": "simple",
     "question": "What is the procedure to rotate a leaked secret?",
-    "expected_doc_ids": ["runbooks/secret-rotation.md"]
+    "expected_doc_ids": [
+      "runbooks/secret-rotation.md"
+    ]
   },
   {
     "id": "simple-3",
     "type": "simple",
     "question": "How do I renew a TLS certificate manually with cert-manager?",
-    "expected_doc_ids": ["runbooks/tls-renewal.md"]
+    "expected_doc_ids": [
+      "runbooks/tls-renewal.md"
+    ]
   },
   {
     "id": "simple-4",
     "type": "simple",
     "question": "Why did we pick PostgreSQL as the primary database?",
-    "expected_doc_ids": ["adrs/adr-001-use-postgres.md"]
+    "expected_doc_ids": [
+      "adrs/adr-001-use-postgres.md"
+    ]
   },
   {
     "id": "simple-5",
     "type": "simple",
     "question": "Which identity provider did we choose and why?",
-    "expected_doc_ids": ["adrs/adr-004-auth-provider.md"]
+    "expected_doc_ids": [
+      "adrs/adr-004-auth-provider.md"
+    ]
   },
   {
     "id": "simple-6",
     "type": "simple",
     "question": "What is the rate limiting algorithm used by our API gateway?",
-    "expected_doc_ids": ["adrs/adr-002-rate-limiting.md"]
+    "expected_doc_ids": [
+      "adrs/adr-002-rate-limiting.md"
+    ]
   },
   {
     "id": "set-1",
@@ -127,59 +139,141 @@
     "type": "conditional",
     "question": "deploy rollback",
     "source_type": "runbook",
-    "expected_doc_ids": ["runbooks/deploy-rollback.md"]
+    "expected_doc_ids": [
+      "runbooks/deploy-rollback.md"
+    ]
   },
   {
     "id": "cond-2",
     "type": "conditional",
     "question": "architecture decision about monorepo layout",
     "source_type": "adr",
-    "expected_doc_ids": ["adrs/adr-003-monorepo-layout.md"]
+    "expected_doc_ids": [
+      "adrs/adr-003-monorepo-layout.md"
+    ]
   },
   {
     "id": "cond-3",
     "type": "conditional",
     "question": "database lock incident",
     "source_type": "postmortem",
-    "expected_doc_ids": ["postmortems/incident-2025-12-15-db-lock.md"]
+    "expected_doc_ids": [
+      "postmortems/incident-2025-12-15-db-lock.md"
+    ]
   },
   {
     "id": "cond-4",
     "type": "conditional",
     "question": "TLS certificate expiry",
     "source_type": "postmortem",
-    "expected_doc_ids": ["postmortems/incident-2025-11-03-cert-expiry.md"]
+    "expected_doc_ids": [
+      "postmortems/incident-2025-11-03-cert-expiry.md"
+    ]
   },
   {
     "id": "cond-5",
     "type": "conditional",
     "question": "incident response severity levels",
     "source_type": "runbook",
-    "expected_doc_ids": ["runbooks/incident-response.md"]
+    "expected_doc_ids": [
+      "runbooks/incident-response.md"
+    ]
   },
   {
     "id": "cond-6",
     "type": "conditional",
     "question": "observability stack components",
     "source_type": "adr",
-    "expected_doc_ids": ["adrs/adr-005-observability-stack.md"]
+    "expected_doc_ids": [
+      "adrs/adr-005-observability-stack.md"
+    ]
   },
   {
     "id": "dead-end-1",
     "type": "conditional",
     "question": "what approach did we try for async migration and why did it fail?",
-    "expected_doc_ids": ["dead_ends/why-we-avoid-async-migration.md"]
+    "expected_doc_ids": [
+      "dead_ends/why-we-avoid-async-migration.md"
+    ]
   },
   {
     "id": "dead-end-2",
     "type": "simple",
     "question": "lesson learned from sharding without capacity planning",
-    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
+    "expected_doc_ids": [
+      "dead_ends/why-we-avoid-sharding-without-planning.md"
+    ]
   },
   {
     "id": "dead-end-3",
     "type": "simple",
     "question": "why should we avoid naive hash sharding of the ledger",
-    "expected_doc_ids": ["dead_ends/why-we-avoid-sharding-without-planning.md"]
+    "expected_doc_ids": [
+      "dead_ends/why-we-avoid-sharding-without-planning.md"
+    ]
+  },
+  {
+    "id": "table-1",
+    "type": "table",
+    "question": "What is the notice period for Thistle Signage?",
+    "expected_doc_ids": [
+      "registers/supplier-agreements.md"
+    ]
+  },
+  {
+    "id": "table-2",
+    "type": "table",
+    "question": "When is the renewal date for Vesper Vending?",
+    "expected_doc_ids": [
+      "registers/supplier-agreements.md"
+    ]
+  },
+  {
+    "id": "table-3",
+    "type": "table",
+    "question": "Who is the contract owner for Brackenridge Audio?",
+    "expected_doc_ids": [
+      "registers/supplier-agreements.md"
+    ]
+  },
+  {
+    "id": "table-4",
+    "type": "table",
+    "question": "What is the payment status of the Umber Carpet Care invoice?",
+    "expected_doc_ids": [
+      "registers/accounts-payable-2026.md"
+    ]
+  },
+  {
+    "id": "table-5",
+    "type": "table",
+    "question": "Amount in EUR and due date owed to Willowmere Shredding",
+    "expected_doc_ids": [
+      "registers/accounts-payable-2026.md"
+    ]
+  },
+  {
+    "id": "table-6",
+    "type": "table",
+    "question": "Which invoice from Dunmore Generators is due and what is its amount?",
+    "expected_doc_ids": [
+      "registers/accounts-payable-2026.md"
+    ]
+  },
+  {
+    "id": "table-7",
+    "type": "table",
+    "question": "When does the warranty expire for the unit installed by Zephyr Air Filters?",
+    "expected_doc_ids": [
+      "registers/site-equipment.md"
+    ]
+  },
+  {
+    "id": "table-8",
+    "type": "table",
+    "question": "Who is the custodian of the asset installed by Cinderford Fire Safety?",
+    "expected_doc_ids": [
+      "registers/site-equipment.md"
+    ]
   }
 ]
