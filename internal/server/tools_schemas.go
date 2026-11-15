@@ -47,10 +47,12 @@ func buildSessionSchema(summaryDesc string, extras map[string]any) map[string]an
 		},
 		"started_at": map[string]any{
 			"type":        "string",
+			"format":      "date-time",
 			"description": "Optional RFC3339 session start timestamp",
 		},
 		"ended_at": map[string]any{
 			"type":        "string",
+			"format":      "date-time",
 			"description": "Optional RFC3339 session end timestamp",
 		},
 		"tags": map[string]any{
