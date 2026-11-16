@@ -122,6 +122,41 @@ func TestUnembeddableBodyIsCounted(t *testing.T) {
 	}
 }
 
+// Review-queue cards carry no vector by design (T84), so they must not show up
+// as records the encoder refused (T189).
+func TestReviewQueueCardIsNotCountedAsUnembedded(t *testing.T) {
+	store, _ := newSizeLimitedStore(t, 5)
+	ctx := context.Background()
+
+	card := &Memory{
+		Title:    "Карточка очереди ревью",
+		Content:  "new engineering knowledge",
+		Type:     TypeEpisodic,
+		Metadata: map[string]string{MetadataRecordKind: RecordKindReviewQueueItem},
+	}
+	refused := &Memory{
+		Title:   "Неукладываемая запись",
+		Content: strings.Repeat("текст ", 2000),
+		Type:    TypeEpisodic,
+	}
+	for _, m := range []*Memory{card, refused} {
+		if err := store.Store(ctx, m); err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+	}
+
+	stored, err := store.Get(card.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(stored.Embedding) != 0 {
+		t.Fatal("precondition: review-queue card is expected to be stored without a vector")
+	}
+	if got := store.CountWithoutEmbedding(); got != 1 {
+		t.Errorf("CountWithoutEmbedding() = %d, want 1 — only the refused body counts", got)
+	}
+}
+
 // A body that fits must not pay for the retry path, and must not be marked.
 func TestNormalBodyEmbedsOnceUnmarked(t *testing.T) {
 	store, emb := newSizeLimitedStore(t, embedRetryRunes)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
@@ -38,6 +39,19 @@ func initFileLogger(cfg config.Config) *logger.FileLogger {
 		zap.String("rag_index_path", cfg.RAG.IndexPath),
 	)
 	return fileLogger
+}
+
+// applyMemoryLimit sets the Go soft memory limit from cfg.MemoryLimitMB
+// (T164). GOMEMLIMIT in the environment is already applied by the runtime and
+// is left alone, so an operator can still override the config either way.
+func applyMemoryLimit(cfg config.Config, fileLogger *logger.FileLogger) {
+	if os.Getenv("GOMEMLIMIT") != "" || cfg.MemoryLimitMB <= 0 {
+		return
+	}
+	debug.SetMemoryLimit(int64(cfg.MemoryLimitMB) << 20)
+	if fileLogger != nil {
+		fileLogger.Info("Go memory limit set", zap.Int("mb", cfg.MemoryLimitMB))
+	}
 }
 
 // initRAGEngine builds the RAG engine when enabled, returning nil when disabled

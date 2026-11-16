@@ -68,6 +68,9 @@ type RetrievalPath struct {
 	// KeywordSkipped is set when only vectors answered because the keyword index
 	// is not usable yet.
 	KeywordSkipped string `json:"keyword_skipped,omitempty"`
+	// VectorsSkipped is set when only keywords answered because the vectors are
+	// still being loaded into memory (T177).
+	VectorsSkipped string `json:"vectors_skipped,omitempty"`
 	// Reranker is set when reranking actually reordered the results;
 	// RerankSkipped carries the reason when it did not.
 	Reranker      string `json:"reranker,omitempty"`
@@ -110,6 +113,24 @@ type SearchDebug struct {
 	DiscardedAsNoise int      `json:"discarded_as_noise"`
 	CandidateCount   int      `json:"candidate_count"`
 	ReturnedCount    int      `json:"returned_count"`
+	// Phases is where the time of this search went (T178).
+	Phases *SearchPhases `json:"phases,omitempty"`
+}
+
+// SearchPhases is the wall time of each step of one search, in milliseconds
+// (T178). The vector steps are zero when the query was not embedded; Reloaded
+// says the refresh step re-read the whole index because its version moved.
+type SearchPhases struct {
+	RefreshMs       float64 `json:"refresh_ms"`
+	Reloaded        bool    `json:"reloaded,omitempty"`
+	EmbedMs         float64 `json:"embed_ms"`
+	VectorLoadMs    float64 `json:"vector_load_ms"`
+	VectorRankMs    float64 `json:"vector_rank_ms"`
+	VectorContentMs float64 `json:"vector_content_ms"`
+	KeywordMs       float64 `json:"keyword_ms"`
+	FusionMs        float64 `json:"fusion_ms"`
+	RerankMs        float64 `json:"rerank_ms"`
+	TotalMs         float64 `json:"total_ms"`
 }
 
 // Engine provides document indexing and hybrid retrieval over a repository.
@@ -175,6 +196,9 @@ type vecServiceConfig struct {
 	// KeywordFallback allows working without an embedding model. See
 	// config.RAGConfig.KeywordFallback.
 	KeywordFallback bool
+	// BackgroundVectorLoad and VectorIdleUnload: see config.RAGConfig (T177).
+	BackgroundVectorLoad bool
+	VectorIdleUnload     time.Duration
 	// Fusion / RRFK select how the semantic and keyword arms are merged.
 	// See config.RAGConfig.Fusion (T124).
 	Fusion string
@@ -313,6 +337,9 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 		RRFK:            cfg.RAG.RRFK,
 		MaxChunksPerDoc: cfg.RAG.MaxChunksPerDoc,
 		KeywordFallback: cfg.RAG.KeywordFallback,
+
+		BackgroundVectorLoad: cfg.RAG.BackgroundVectorLoad,
+		VectorIdleUnload:     cfg.RAG.VectorIdleUnload,
 	}, zapLogger)
 	if err != nil {
 		if fileLogger != nil {

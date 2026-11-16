@@ -36,6 +36,11 @@ type sessionTracker struct {
 	// single `current`, which over HTTP merged every client into one summary.
 	sessions map[string]*clientSession
 	closed   bool
+	// chatClients maps a client key to the clientInfo.name of a client that
+	// is not a coding agent (T188). Coding agents are not stored: an unknown
+	// key keeps the coding default, which is also what a client that skipped
+	// initialize gets.
+	chatClients map[string]string
 
 	// Round 3 M10: checkpoints used to run synchronously in HandleToolCall,
 	// adding a DB-write + embedder-call latency tax to every tool response
@@ -70,8 +75,11 @@ type trackedSession struct {
 	context          string
 	service          string
 	mode             memory.SessionMode
-	tags             []string
-	activities       []trackedActivity
+	// chatClient marks a session of a non-coding client: with no explicit
+	// mode it is summarised as SessionModeChat instead of coding (T188).
+	chatClient bool
+	tags       []string
+	activities []trackedActivity
 }
 
 // newTrackedSession constructs a fresh trackedSession with all three
@@ -125,7 +133,50 @@ func newSessionTracker(cfg config.Config, store *memory.Store, fileLogger *logge
 		cancel:        cancel,
 		checkpointSem: make(chan struct{}, 2),
 		sessions:      make(map[string]*clientSession),
+		chatClients:   make(map[string]string),
 	}
+}
+
+// codingClientPrefixes are the clientInfo.name values of coding agents, taken
+// from the initialize lines of the live logs on 2026-11-14: "claude-code" and
+// "codex-mcp-client (via mcp-remote 0.16.x)". A name outside the list is
+// treated as a chat; an agent missing here loses only the engineering
+// candidates of its auto-summary, never the summary itself.
+var codingClientPrefixes = []string{"claude-code", "codex-mcp-client"}
+
+func isCodingClient(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, prefix := range codingClientPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// SetClientName records the clientInfo.name a client sent in initialize, so
+// its later calls are summarised in the right mode (T188).
+func (st *sessionTracker) SetClientName(client, name string) {
+	name = strings.TrimSpace(name)
+	if st == nil || client == "" || name == "" {
+		return
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if isCodingClient(name) {
+		delete(st.chatClients, client)
+		return
+	}
+	if _, ok := st.chatClients[client]; !ok && len(st.chatClients) >= maxTrackedClients {
+		// Every HTTP initialize brings a new key and nothing says when one is
+		// gone. Dropping an arbitrary entry costs at most one chat summary
+		// labelled coding, as before T188.
+		for key := range st.chatClients {
+			delete(st.chatClients, key)
+			break
+		}
+	}
+	st.chatClients[client] = name
 }
 
 // HandleToolCall records one tool call into the session of client. An empty
@@ -174,6 +225,9 @@ func (st *sessionTracker) HandleToolCall(client, name string, args map[string]an
 	}
 	session := cs.session
 	session.lastActivityAt = now
+	if _, ok := st.chatClients[client]; ok {
+		session.chatClient = true
+	}
 	if session.startedAt.IsZero() {
 		session.startedAt = now
 	}
@@ -721,8 +775,12 @@ func (ts *trackedSession) summary(boundary string) memory.SessionSummary {
 		memory.MetadataSessionBoundary: boundary,
 		memory.MetadataSessionOrigin:   autoSessionOrigin,
 	}
+	mode := ts.mode
+	if mode == "" && ts.chatClient {
+		mode = memory.SessionModeChat
+	}
 	return memory.SessionSummary{
-		Mode:      ts.mode,
+		Mode:      mode,
 		Context:   ts.context,
 		Service:   ts.service,
 		Summary:   strings.Join(lines, "\n"),

@@ -41,6 +41,11 @@ func (s *Service) executeActions(ctx context.Context, result *AnalysisResult, re
 			continue
 		}
 
+		if decision, ok := req.Decisions[action.ID]; ok {
+			s.applyDecision(ctx, action, decision)
+			continue
+		}
+
 		if !req.AutoApplyLowRisk || action.Handling != ActionHandlingAutoApply {
 			action.State = ActionStateReviewRequired
 			if !req.AutoApplyLowRisk && action.Handling == ActionHandlingAutoApply {
@@ -58,9 +63,42 @@ func (s *Service) executeActions(ctx context.Context, result *AnalysisResult, re
 	return nil
 }
 
+// applyDecision carries out a reviewer's verdict on one action. A verdict
+// overrides the handling policy: the reviewer has seen the action.
+func (s *Service) applyDecision(ctx context.Context, action *CandidateAction, decision Decision) {
+	switch decision {
+	case DecisionKeepExisting:
+		action.State = ActionStateSkipped
+		action.ExecutionNote = "kept existing memory by reviewer decision"
+		return
+	case DecisionReject:
+		action.State = ActionStateSkipped
+		action.ExecutionNote = "rejected by reviewer decision"
+		return
+	}
+	action.Kind = ActionKind(decision)
+	if err := s.applyAction(ctx, action); err != nil {
+		action.State = ActionStateReviewRequired
+		action.ExecutionNote = err.Error()
+		return
+	}
+	action.ExecutionNote += " (reviewer decision)"
+}
+
 func (s *Service) applyAction(ctx context.Context, action *CandidateAction) error {
 	if action == nil {
 		return fmt.Errorf("action is required")
+	}
+	// The plan was built from a List snapshot; a target rewritten since then
+	// would receive a merge computed against text it no longer holds.
+	if action.TargetVersion != "" {
+		target, err := s.store.Get(action.TargetMemoryID)
+		if err != nil {
+			return err
+		}
+		if memoryVersion(target) != action.TargetVersion {
+			return fmt.Errorf("target %s changed since planning; re-run review_session_changes", action.TargetMemoryID)
+		}
 	}
 
 	switch action.Kind {
@@ -92,6 +130,7 @@ func (s *Service) applyUpdateAction(ctx context.Context, action *CandidateAction
 	updates := memory.Update{
 		Tags:     mergeTags(target.Tags, candidate.Tags),
 		Metadata: mergeMetadata(target.Metadata, candidate.Metadata),
+		Source:   memory.RevisionSourceSessionNearExact,
 	}
 	if target.Context == "" && candidate.Context != "" {
 		updates.Context = candidate.Context

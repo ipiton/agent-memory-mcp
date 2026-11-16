@@ -68,7 +68,7 @@ func BenchmarkSearch(b *testing.B) {
 			query := randomEmbedding(128)
 			b.ResetTimer()
 			for range b.N {
-				if _, err := store.Search(query, 10); err != nil {
+				if _, _, err := store.Search(query, 10); err != nil {
 					b.Fatal(err)
 				}
 			}
