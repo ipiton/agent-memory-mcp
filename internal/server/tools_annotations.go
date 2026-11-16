@@ -41,11 +41,12 @@ var (
 // without a decision here.
 var toolSafety = map[string]toolAnnotations{
 	// Repository and RAG.
-	"repo_list":       readOnlyTool,
-	"repo_read":       readOnlyTool,
-	"repo_search":     readOnlyTool,
-	"semantic_search": readOnlyTool,
-	"index_documents": idempotentTool, // rebuilds a derived index
+	"repo_list":        readOnlyTool,
+	"repo_read":        readOnlyTool,
+	"repo_search":      readOnlyTool,
+	"semantic_search":  readOnlyTool,
+	"document_context": readOnlyTool,
+	"index_documents":  idempotentTool, // rebuilds a derived index
 
 	// Memory.
 	"store_memory":               additiveTool,

@@ -95,6 +95,7 @@ var groupedSpecs = []toolGroupSpec{
 		Description: "Retrieval operations. Set action to select the retrieval mode (see the action enum).",
 		Actions: []groupAction{
 			{"semantic", "semantic_search"},
+			{"context", "document_context"},
 			{"canonical", "recall_canonical_knowledge"},
 			{"list_canonical", "list_canonical_knowledge"},
 			{"multihop", "recall_multihop"},

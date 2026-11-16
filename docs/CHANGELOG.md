@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Read several indexed sections with MCP `document_context`, within a shared Unicode-character cap and with explicit truncation. Run `index_documents` once on existing indexes to record source origins; unchanged files keep their vectors. See [context limits and examples](DOCUMENT_CONTEXT.md).
+
 ## [0.18.0] - 2026-11-15
 
 ### Added

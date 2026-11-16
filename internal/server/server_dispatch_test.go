@@ -16,6 +16,7 @@ func TestDispatchTableCompleteness(t *testing.T) {
 		"repo_read",
 		"repo_search",
 		"semantic_search",
+		"document_context",
 		"index_documents",
 		"store_memory",
 		"recall_memory",

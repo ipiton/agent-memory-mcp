@@ -215,6 +215,7 @@ type document struct {
 	Path         string
 	LastModified time.Time
 	FileHash     string
+	PhysicalPath string
 }
 
 type searchQuery struct {

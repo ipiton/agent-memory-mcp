@@ -227,7 +227,7 @@ func TestGroupedDispatchEquivalence(t *testing.T) {
 // TestGroupedListTokenSavings is the T67 acceptance bench. It measures the
 // default initial payload — the core surface a typical agent loads at
 // initialize (steward is opt-in and off by default) — and asserts the grouped
-// form is at least 40% smaller. It also pins the "8 meta-tools" outcome: the 41
+// form is at least 40% smaller. It also pins the "8 meta-tools" outcome: the 42
 // default tools collapse to 6 groups + 2 singletons (index_documents,
 // project_bank_view).
 func TestGroupedListTokenSavings(t *testing.T) {

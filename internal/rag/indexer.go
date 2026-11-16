@@ -322,6 +322,11 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		indexStartedAtKey:     startTime.Format(time.RFC3339),
 		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
 	}
+	for _, doc := range allDocs {
+		if doc.PhysicalPath != "" {
+			finalMetadata[vectorstore.SourcePathMetadataPrefix+doc.Path] = doc.PhysicalPath
+		}
+	}
 	if indexedModel != "" {
 		finalMetadata["embedding_model"] = indexedModel
 	}

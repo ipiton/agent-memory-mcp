@@ -21,7 +21,7 @@ A plugin cannot ship a binary per platform, so the first server start downloads 
 
 ## What it sets up
 
-- **Server `agent-memory`** over stdio, with the `core` profile of 17 tools ([MCP_TOOL_PROFILE](CONFIGURATION.md)), offered as 6 grouped tools: about 9 KB of schema instead of 14 KB ([MCP_TOOL_GROUPING](CONFIGURATION.md)). The 17 legacy names keep working in `tools/call`.
+- **Server `agent-memory`** over stdio, with the `core` profile of 18 tools ([MCP_TOOL_PROFILE](CONFIGURATION.md)), offered as 6 grouped tools before availability filtering ([MCP_TOOL_GROUPING](CONFIGURATION.md)). All 18 legacy names keep working in `tools/call`.
 - **Hooks**: `SessionStart` injects the project's memory, `SessionEnd` captures the session, `PreCompact` saves a checkpoint ([Hooks](HOOKS.md)).
 - **Background compilation**: after `SessionEnd`, and at `SessionStart` if anything is left, `agent-memory-mcp compile` turns captured sessions into decisions, facts, procedures and dead ends with a headless `claude -p --model haiku`, one call per summary ([Background compilation](HOOKS.md#background-compilation)).
 - **One database per project**, in `~/.local/share/agent-memory-mcp/projects/<name>-<hash>` ([MCP_DATA_SCOPE](CONFIGURATION.md)). Worktrees of a repository share it, and nothing is written into the repository.

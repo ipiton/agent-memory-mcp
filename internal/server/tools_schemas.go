@@ -253,6 +253,20 @@ func repoToolDefs() []tool {
 func ragToolDefs() []tool {
 	return []tool{
 		{
+			Name:        "document_context",
+			Description: "Indexed sections; query or section_keys; may be stale.",
+			InputSchema: map[string]any{
+				"type": "object", "additionalProperties": false,
+				"properties": map[string]any{
+					"path":         map[string]any{"type": "string"},
+					"query":        map[string]any{"type": "string", "description": "Semantic selection within this file; requires matching vectors"},
+					"section_keys": map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "items": map[string]any{"type": "string"}},
+					"max_chars":    map[string]any{"type": "integer", "minimum": 256, "maximum": 32000, "default": 12000, "description": "Unicode keys + text (not JSON)"},
+					"max_sections": map[string]any{"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+				}, "required": []string{"path"},
+			},
+		},
+		{
 			Name:        "semantic_search",
 			Description: "Hybrid search across indexed documents using semantic similarity, keyword matching, source-aware ranking, and trust metadata",
 			InputSchema: map[string]any{

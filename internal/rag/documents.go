@@ -112,7 +112,15 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 }
 
 func (ds *documentService) processFile(path string) ([]document, error) {
-	content, err := os.ReadFile(path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve source path: %w", err)
+	}
+	physicalPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve source symlinks: %w", err)
+	}
+	content, err := os.ReadFile(physicalPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -142,7 +150,7 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 	}
 
 	fileHash := calculateFileHash(cleanContent)
-	modTime := ds.getFileModTime(path)
+	modTime := ds.getFileModTime(physicalPath)
 
 	// Markdown documents are chunked along header boundaries with a
 	// breadcrumb prefix per chunk (T49 slice 1). All other source types
@@ -166,6 +174,7 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 			Path:         relPath,
 			LastModified: modTime,
 			FileHash:     fileHash,
+			PhysicalPath: physicalPath,
 		})
 	}
 

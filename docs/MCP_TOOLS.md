@@ -29,6 +29,7 @@ The catalog comes first; JSON examples for the most common tools follow it.
 | Tool | Description |
 |------|-------------|
 | `semantic_search` | Hybrid search across indexed documents with optional `source_type`, trust metadata, and `debug` explain mode |
+| `document_context` | Read several indexed sections from an allowed file within a shared character cap; [usage and limits](DOCUMENT_CONTEXT.md) |
 | `index_documents` | Re-index documents for RAG search |
 
 ### File tools
@@ -104,7 +105,7 @@ Set `MCP_TOOL_GROUPING=true` to collapse the core toolset into a handful of
 
 Groups: `repo` · `memory` · `memory_admin` · `engineering` · `search` ·
 `session`, plus the `index_documents` and `project_bank_view` singletons — the
-default surface drops from **41 tools to 8** (~42% smaller schema payload).
+default surface drops from **42 tools to 8** (about 40% smaller schema payload).
 
 - **Opt-in.** Default is `false`; the flag only changes what `tools/list` returns.
 - **Both call forms work on the server.** `tools/call` accepts the grouped form

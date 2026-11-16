@@ -65,6 +65,9 @@ func (s *SQLiteStore) CommitIndexState(update IndexStateUpdate) error {
 		if _, err := tx.Exec("DELETE FROM indexed_files WHERE file_path = ?", filePath); err != nil {
 			return fmt.Errorf("failed to delete indexed file metadata for %q: %w", filePath, err)
 		}
+		if _, err := tx.Exec("DELETE FROM index_metadata WHERE key = ?", SourcePathMetadataPrefix+filePath); err != nil {
+			return fmt.Errorf("delete source provenance: %w", err)
+		}
 	}
 
 	for _, info := range update.UpsertFiles {
@@ -128,8 +131,7 @@ func (s *SQLiteStore) SetIndexedFile(info *IndexedFileInfo) error {
 
 // DeleteIndexedFile removes indexing metadata for a file.
 func (s *SQLiteStore) DeleteIndexedFile(filePath string) error {
-	_, err := s.db.Exec("DELETE FROM indexed_files WHERE file_path = ?", filePath)
-	return err
+	return s.CommitIndexState(IndexStateUpdate{DeleteFilePaths: []string{filePath}})
 }
 
 // ChunkCountsByDocPath returns how many chunks are stored for each document
