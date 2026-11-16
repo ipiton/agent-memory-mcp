@@ -118,9 +118,19 @@ func (s *MCPServer) runSessionAnalysis(args map[string]any, options sessionAnaly
 		DryRun:           dryRun,
 		SaveRaw:          saveRaw,
 		AutoApplyLowRisk: autoApplyLowRisk,
+		PlanFingerprint:  strings.TrimSpace(mustString(args, "plan_fingerprint")),
+	}
+	if decisions := getStringMap(args, "decisions"); len(decisions) > 0 {
+		request.Decisions = make(map[string]sessionclose.Decision, len(decisions))
+		for id, decision := range decisions {
+			request.Decisions[id] = sessionclose.Decision(strings.ToLower(decision))
+		}
 	}
 
 	result, analyzeErr := sessionclose.New(s.memoryStore).Analyze(context.Background(), request)
+	if errors.Is(analyzeErr, sessionclose.ErrPlanChanged) || errors.Is(analyzeErr, sessionclose.ErrInvalidDecision) {
+		return nil, &rpcError{Code: rpcErrInvalidParams, Message: analyzeErr.Error()}
+	}
 	if analyzeErr != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: "session analysis failed", Data: analyzeErr.Error()}
 	}

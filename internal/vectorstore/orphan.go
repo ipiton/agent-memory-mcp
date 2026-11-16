@@ -90,8 +90,10 @@ func (s *SQLiteStore) CleanOrphans() (int, error) {
 
 	// Remove from the in-memory vectors.
 	s.mu.Lock()
-	for _, id := range orphanIDs {
-		delete(s.chunks, id)
+	if s.vectorsLoaded {
+		for _, id := range orphanIDs {
+			s.vectors.remove(id)
+		}
 	}
 	s.adoptIndexVersionLocked(before, after)
 	s.mu.Unlock()

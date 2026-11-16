@@ -140,6 +140,20 @@ func TestKeywordSearchStemsRussianOnly(t *testing.T) {
 	}
 }
 
+func TestNormalizeForKeywordIndexStemsOnlyCyrillicTokens(t *testing.T) {
+	cases := map[string]string{
+		"миграции миграцию":                "миграц миграц",
+		"MAKE-QUALITY-GATES-2026 sema_api": "make quality gates 2026 sema api",
+		"k8s gateway":                      "k8s gateway",
+		"apiшлюзы":                         "apiшлюзы",
+	}
+	for in, want := range cases {
+		if got := normalizeForKeywordIndex(in); got != want {
+			t.Errorf("normalizeForKeywordIndex(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestUpsertAndDeleteKeepKeywordRowsInStep(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.Upsert([]Chunk{{ID: "a", DocPath: "a.md", Content: "oldterm here", Embedding: []float32{1, 0, 0}}}); err != nil {
@@ -213,20 +227,19 @@ func TestVectorsLoadOnlyForVectorSearch(t *testing.T) {
 	if got := s.Count(); got != 1 {
 		t.Fatalf("Count = %d, want 1", got)
 	}
-	if s.vectorsLoaded || len(s.chunks) != 0 {
-		t.Fatalf("vectors in memory before any vector search: loaded=%v n=%d", s.vectorsLoaded, len(s.chunks))
+	if s.vectorsLoaded || s.vectorCount() != 0 {
+		t.Fatalf("vectors in memory before any vector search: loaded=%v n=%d", s.vectorsLoaded, s.vectorCount())
 	}
 
-	results, err := s.Search([]float32{1, 0, 0}, 5)
+	results, _, err := s.Search([]float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	if len(results) != 1 || results[0].Content != "lazy text" {
 		t.Fatalf("Search = %+v, want the chunk with its text", results)
 	}
-	if s.chunks["a"].Content != "" {
-		t.Errorf("text kept in memory next to the vector")
-	}
+	// The text cannot stay in memory next to the vector: chunkMeta has no field
+	// for it (T164).
 }
 
 func TestChunkWithoutVector(t *testing.T) {
@@ -238,7 +251,7 @@ func TestChunkWithoutVector(t *testing.T) {
 	if ids := keywordIDs(t, s, "plain"); len(ids) != 1 {
 		t.Errorf("keyword search: %v", ids)
 	}
-	results, err := s.Search([]float32{1, 0, 0}, 5)
+	results, _, err := s.Search([]float32{1, 0, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

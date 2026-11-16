@@ -36,8 +36,30 @@ func newDocumentService(cfg docServiceConfig, logger *zap.Logger) *documentServi
 	return &documentService{config: cfg, logger: logger}
 }
 
-func (ds *documentService) collectDocuments() ([]document, error) {
-	var allDocs []document
+type documentScan struct {
+	repoRoot         string
+	documents        []document
+	unavailablePaths []string
+}
+
+func (scan documentScan) isUnavailable(path string) bool {
+	target := filepath.Join(scan.repoRoot, filepath.FromSlash(path))
+	for _, prefix := range scan.unavailablePaths {
+		base := filepath.Join(scan.repoRoot, filepath.FromSlash(prefix))
+		relative, err := filepath.Rel(base, target)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (ds *documentService) collectDocuments() documentScan {
+	scan := documentScan{repoRoot: ds.config.RepoRoot}
+	unavailable := func(path string, err error) {
+		scan.unavailablePaths = append(scan.unavailablePaths, ds.relPath(path))
+		ds.logger.Warn("Index source unavailable; retaining its indexed files", zap.String("path", path), zap.Error(err))
+	}
 	// A file that yields no documents is invisible otherwise, and a silently
 	// empty index reads exactly like a correctly empty one.
 	var considered, empty int
@@ -50,7 +72,8 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 
 		info, err := os.Stat(fullPath)
 		if err != nil {
-			return nil, fmt.Errorf("access configured index source %q: %w", fullPath, err)
+			unavailable(fullPath, err)
+			continue
 		}
 
 		if !info.IsDir() {
@@ -61,19 +84,21 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				considered++
 				docs, err := ds.processFile(fullPath)
 				if err != nil {
-					return nil, fmt.Errorf("process indexed file %q: %w", fullPath, err)
+					unavailable(fullPath, err)
+					continue
 				}
 				if len(docs) == 0 {
 					empty++
 				}
-				allDocs = append(allDocs, docs...)
+				scan.documents = append(scan.documents, docs...)
 			}
 			continue
 		}
 
 		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return err
+				unavailable(path, err)
+				return nil
 			}
 			if path != fullPath && ds.shouldSkipPath(path, d.IsDir()) {
 				if d.IsDir() {
@@ -85,18 +110,18 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 				considered++
 				docs, err := ds.processFile(path)
 				if err != nil {
-					return fmt.Errorf("process indexed file %q: %w", path, err)
+					unavailable(path, err)
+					return nil
 				}
 				if len(docs) == 0 {
 					empty++
 				}
-				allDocs = append(allDocs, docs...)
+				scan.documents = append(scan.documents, docs...)
 			}
 			return nil
 		})
 		if err != nil {
-			// An incomplete scan must not turn unreadable sources into deletions.
-			return nil, fmt.Errorf("walk index source %q: %w", fullPath, err)
+			unavailable(fullPath, err)
 		}
 	}
 
@@ -104,9 +129,9 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 		zap.Strings("index_dirs", ds.config.IndexDirs),
 		zap.Int("files_considered", considered),
 		zap.Int("files_without_documents", empty),
-		zap.Int("documents", len(allDocs)))
+		zap.Int("documents", len(scan.documents)))
 
-	return allDocs, nil
+	return scan
 }
 
 func (ds *documentService) processFile(path string) ([]document, error) {
