@@ -25,6 +25,12 @@ func FormatAnalysis(result *AnalysisResult) string {
 	if result.Summary.Service != "" {
 		fmt.Fprintf(&buf, "Service: %s\n", result.Summary.Service)
 	}
+	if result.PlanFingerprint != "" {
+		fmt.Fprintf(&buf, "Plan fingerprint: %s\n", result.PlanFingerprint)
+	}
+	for _, warning := range result.Warnings {
+		fmt.Fprintf(&buf, "Warning: %s\n", warning)
+	}
 	buf.WriteString("\n")
 
 	if len(result.Delta.ExtractedEntities) > 0 {
@@ -110,6 +116,9 @@ func FormatAnalysis(result *AnalysisResult) string {
 				fmt.Fprintf(&buf, " %s", action.Title)
 			}
 			buf.WriteString("\n")
+			if action.ID != "" {
+				fmt.Fprintf(&buf, "   ID: %s\n", action.ID)
+			}
 			if action.EngineeringType != "" {
 				fmt.Fprintf(&buf, "   Engineering type: %s\n", action.EngineeringType)
 			}

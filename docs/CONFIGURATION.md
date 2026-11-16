@@ -101,10 +101,12 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_RECALL_HALFLIFE_DAYS` | `0` | T68 exponential age decay on recall scoring (half-life in days; a card this old scores at half weight). `0` disables decay — the default since T121 measured it: over 345 machine-labelled queries Hit@5 was 0.7217 with decay off against 0.1942 at the previous 30-day default, monotone in between (365d 0.6087, 180d 0.4609, 90d 0.2870), and no age bucket where decay paid for itself. Preferring the current version of a fact is already handled semantically by supersession and lifecycle status; a calendar multiplier cannot tell "written a while ago" from "no longer true". Evergreen entries (canonical knowledge, character layer) never decay |
 | `MCP_RECALL_DECAY_TYPES` | `working` | Which memory types age when decay is enabled at all. The type axis dominates the rate: at the same 30-day half-life, decaying every type scored Hit@5 0.1942 while decaying only `working` scored 0.7043 — the old behaviour aged patterns and facts, which is the knowledge the bank exists to accumulate. Empty means every type decays |
 | `MCP_RAG_KEEP_NOISE` | `false` | T49 escape hatch: keep noisy Markdown sections (Table of Contents / References / Changelog / etc.) in the index instead of dropping them at chunking time |
-| `MCP_RAG_FUSION` | `weighted` | Document ranking: `weighted`, `rrf`, `rrf-boosted`, or opt-in `semantic` (vector similarity without keyword or metadata boosts). See Hybrid retrieval below |
 | `MCP_RAG_MAX_CHUNKS_PER_DOC` | `1` | How many chunks of one document may occupy a search result list. Adjacent chunks of a file carry nearly the same score, so an uncapped top-5 unfolded into **2.07** distinct documents on 250 questions — over half the list spent on more of a file already shown. At one chunk per document that is 5.00, R@5 by document 0.5104 → 0.8676 and nDCG@5 0.6184 → 0.8927, while first-hit metrics hold (Hit@5 0.9600 → 0.9640, MRR 0.9580 → 0.9590); 207 of 250 queries improved and none got worse (T127). The cap is a preference, not a quota — when fewer documents exist than the limit asks for, the skipped chunks are added back rather than the list coming up short. `0` restores the uncapped order, `2` is the middle position (3.11 documents, R@5 0.7648) |
 | `MCP_DATA_SCOPE` | - | `project` keeps data, logs and stats outside the repository, in `$XDG_DATA_HOME/agent-memory-mcp/projects/<name>-<hash>` (`~/.local/share/...` when unset), keyed by the path of the repository's common `.git`. All worktrees share one database, and the index is built from the main checkout whichever worktree the server started in, so uncommitted documents in a worktree are not indexed. A submodule is its own project; a folder without git is keyed by its path. The data survives deleting a clone. Moving a repository changes the key: move the directory by hand or set `MCP_DATA_PATH`. `MCP_DATA_PATH`, `MCP_MEMORY_DB_PATH` and `MCP_RAG_INDEX_PATH` still win. With no user directory, as in a bare container, data goes to `<root>/.agent-memory`. The Claude Code plugin sets this; unset keeps `<root>/data` |
 | `MCP_RAG_KEYWORD_FALLBACK` | `false` | Work without any embedding model. A fresh index stores text only and queries are answered by FTS5 keywords, with `retrieval.keyword_only` and `retrieval.degraded` set. On start the index is rebuilt with vectors once a model is reachable. Off by default: on an installation that has a model, an outage must not replace good vectors, and with a stored model indexing still fails during an outage. Search during an outage falls back to keywords only when this is on. `MCP_RETRIEVAL_STRICT` wins over it |
+| `MCP_RAG_BACKGROUND_VECTOR_LOAD` | `true` | Vectors are read into memory on the first vector search, which takes seconds on an idle machine and took minutes on a loaded one, past client timeouts. With this on, a search that finds them not yet loaded starts the load in the background and answers at once from FTS5 keywords, with `retrieval.vectors_skipped`, `retrieval.keyword_only` and `retrieval.degraded` set; the next search after the load uses vectors again. Under `MCP_RETRIEVAL_STRICT` such a search fails with a "still being loaded" error instead. CLI commands always wait for the load. `false` restores waiting in the server too |
+| `MCP_RAG_VECTOR_IDLE_UNLOAD` | `30m` | Drop the vectors from memory after this long without a vector search and return the pages to the system; the next search loads them again (in the background, see above). On the 115 000-chunk Sema index the vectors take about 400 MB. `0` keeps them for good |
+| `MCP_GOMEMLIMIT_MB` | `1024` | Go runtime soft memory limit of the server, in MiB. Without it the heap grows to twice the live data before a collection. It is not a cap: the collector works harder as the heap nears it, a larger live set still runs. `GOMEMLIMIT` in the environment wins over it. `0` disables |
 | `MCP_TRIPLE_EXTRACTOR_ENABLED` | `false` | T50 knowledge-graph layer. Enable to fire an async LLM call on every memory write that extracts 3-7 (subj, rel, obj) triples powering `recall_multihop` |
 | `MCP_TRIPLE_EXTRACTOR_BASE_URL` | - | OpenAI-compatible `/chat/completions` endpoint (DeepSeek, Together, Groq, Qwen, …); falls back to `OPENAI_BASE_URL` when empty |
 | `MCP_TRIPLE_EXTRACTOR_API_KEY` | - | Bearer token for the extractor. Falls back to `OPENAI_API_KEY` **only** when `MCP_TRIPLE_EXTRACTOR_BASE_URL` is empty or equal to `OPENAI_BASE_URL`. Pointing the extractor at a third-party endpoint without giving it its own key disables extraction with an explicit message — the OpenAI key is never sent to an address it was not issued for |
@@ -191,6 +193,14 @@ Supported source types:
 - `ci_config` for GitHub Actions, GitLab CI, and Jenkins pipeline files
 - `helm`, `terraform`, and `k8s` for source-aware infra files
 
+#### What the corpus deliberately leaves out
+
+Application source code is not indexed. Any file outside the types above gets no source type and is skipped, whatever `MCP_INDEX_DIRS` points at (`classifySourceType` in `internal/rag/documents.go`).
+
+The line follows intent, not syntax. The corpus holds what an agent cannot rebuild for itself between sessions: decisions, incidents, runbooks, how the system is deployed and operated. Navigating code is a solved problem for grep, LSP and SCIP, and an accurate call graph needs type resolution rather than pattern matching; a second code index would duplicate those tools and do it worse. Reasoning: [issue #16](https://github.com/ipiton/agent-memory-mcp/issues/16).
+
+That is why Terraform, Helm, Kubernetes manifests and CI pipelines are in even though `.tf` is a language and a `Jenkinsfile` is Groovy: they describe how the system runs, which an agent cannot recover by reading code. Imperative application code stays out. The boundary is a judgement call, not a strict rule, so a new file type belongs in the corpus if it records intent or operations rather than implementation.
+
 Use `source_type` when you want to narrow retrieval to a specific class of knowledge:
 
 ```bash
@@ -202,7 +212,7 @@ The MCP `semantic_search` tool also accepts `source_type` and `debug`.
 
 ### Hybrid retrieval
 
-By default, search uses multiple ranking signals instead of cosine similarity alone.
+Search now uses multiple ranking signals instead of cosine similarity alone.
 
 Current ranking signals:
 
@@ -220,21 +230,6 @@ The retrieval pipeline now works in two stages:
 Only the merged candidate set is reranked. This keeps shared-service retrieval more predictable as the indexed corpus grows.
 
 This means a strong keyword hit in a runbook or changelog can outrank a semantically similar but less task-relevant document.
-
-Set `MCP_RAG_FUSION=semantic` to compare vector-only document ranking. It searches
-the existing vector candidates without the keyword arm or recency, source-type
-and confidence boosts. Source-type filtering and the per-document chunk cap
-still apply; trust metadata is returned but does not change this ranking.
-An explicitly configured neural reranker still runs afterwards, so disable it
-when measuring vector-only ranking.
-
-This mode requires embeddings and a vector index. A keyword-only index must be
-rebuilt with an embedding model, and an embedding failure returns an error even
-when `MCP_RAG_KEYWORD_FALLBACK=true`. Switching fusion modes does not require
-reindexing; restart a running server after changing the setting. The default
-remains `weighted`. Compare modes on your own questions; similarity scores do
-not establish that a document contains an answer or provide a calibrated
-no-answer threshold.
 
 ### Trust-aware retrieval
 

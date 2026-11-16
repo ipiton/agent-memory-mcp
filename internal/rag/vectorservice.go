@@ -34,6 +34,7 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
+	store.SetIdleUnload(cfg.VectorIdleUnload)
 
 	return &vectorService{
 		config: cfg,
@@ -44,13 +45,18 @@ func newVectorService(cfg vecServiceConfig, logger *zap.Logger) (*vectorService,
 
 func (vs *vectorService) search(ctx context.Context, query searchQuery) (*SearchResponse, error) {
 	startTime := time.Now()
+	phases := &SearchPhases{}
+	mark := time.Now()
 
 	// Pick up an index written by another process (the post-commit indexing
 	// run) before searching, instead of answering from the copy loaded when
 	// this process started.
-	if _, err := vs.store.RefreshIfStale(); err != nil {
+	reloaded, err := vs.store.RefreshIfStale()
+	if err != nil {
 		return nil, fmt.Errorf("failed to refresh index before search: %w", err)
 	}
+	phases.Reloaded = reloaded
+	phases.RefreshMs = sinceMs(mark)
 
 	path := &RetrievalPath{}
 	var semanticResults []vectorstore.SearchResult
@@ -61,18 +67,35 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	// embedder could only cost time. The start-up indexing run is what notices a
 	// model appearing.
 	keywordOnly, _ := vs.store.GetMetadata(keywordOnlyMetadataKey)
-	semanticOnly := vs.config.Fusion == "semantic"
+	semanticOnly := query.semanticOnly
+	strict := vs.config.Strict || semanticOnly
 	if semanticOnly && keywordOnly == "true" {
-		return nil, fmt.Errorf("semantic fusion requires a vector index; run index_documents with an embedding model")
+		return nil, fmt.Errorf("semantic evaluation requires a vector index; run index_documents with an embedding model")
+	}
+
+	// T177: while the vectors are still on their way into memory the semantic
+	// arm is skipped rather than waited for; the load continues in the
+	// background and a later search uses it.
+	vectorsLoading := false
+	if vs.config.BackgroundVectorLoad && keywordOnly != "true" && !vs.store.StartVectorLoad() {
+		if strict {
+			return nil, StrictModeError("vectors", "the vectors are still being loaded into memory; retry shortly")
+		}
+		vectorsLoading = true
 	}
 
 	var queryResult *embedder.EmbeddingResult
-	var err error
-	if !vs.config.KeywordFallback || keywordOnly != "true" {
+	if !vectorsLoading && (!vs.config.KeywordFallback || keywordOnly != "true") {
+		mark = time.Now()
 		queryResult, err = vs.config.Embedder.EmbedQueryDetailed(ctx, query.Query)
+		phases.EmbedMs = sinceMs(mark)
 	}
 	switch {
-	case vs.config.KeywordFallback && keywordOnly == "true" && !vs.config.Strict:
+	case vectorsLoading:
+		path.KeywordOnly = true
+		path.VectorsSkipped = "vectors are still being loaded into memory"
+		path.Degraded = true
+	case vs.config.KeywordFallback && keywordOnly == "true" && !strict:
 		path.KeywordOnly = true
 		path.Degraded = true
 	case err == nil && queryResult != nil:
@@ -80,7 +103,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		path.EmbeddingFallbacks = queryResult.Fallbacks
 		if len(queryResult.Fallbacks) > 0 {
 			path.Degraded = true
-			if vs.config.Strict {
+			if strict {
 				return nil, StrictModeError("embedding", fmt.Sprintf(
 					"provider(s) %s failed and the query was embedded by %s instead",
 					strings.Join(queryResult.Fallbacks, ", "), queryResult.Provider))
@@ -92,15 +115,19 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 			return nil, fmt.Errorf("embedding model mismatch: index was built with %s but current query model is %s. Run index_documents to rebuild the index", storedModel, queryResult.ModelID)
 		}
 
-		semanticResults, err = vs.store.Search(queryResult.Embedding, semanticLimit)
+		var timing vectorstore.SearchTiming
+		semanticResults, timing, err = vs.store.Search(queryResult.Embedding, semanticLimit)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load semantic candidates: %w", err)
 		}
+		phases.VectorLoadMs = durationMs(timing.Load)
+		phases.VectorRankMs = durationMs(timing.Rank)
+		phases.VectorContentMs = durationMs(timing.Content)
 		if keywordOnly == "true" {
 			path.KeywordOnly = true
 			path.Degraded = true
 		}
-	case vs.config.KeywordFallback && !vs.config.Strict && !semanticOnly:
+	case vs.config.KeywordFallback && !strict && !semanticOnly:
 		vs.logger.Warn("Query could not be embedded, answering from keywords", zap.Error(err))
 		path.KeywordOnly = true
 		path.Degraded = true
@@ -112,9 +139,11 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 
 	var keywordResults []vectorstore.SearchResult
 	if !semanticOnly {
+		mark = time.Now()
 		keywordResults, err = vs.store.KeywordSearch(query.Query, keywordLimit)
+		phases.KeywordMs = sinceMs(mark)
 	}
-	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !vs.config.Strict {
+	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !strict {
 		path.KeywordSkipped = "keyword index is still being built"
 		path.Degraded = true
 		keywordResults, err = nil, nil
@@ -123,17 +152,23 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to load keyword candidates: %w", err)
 	}
 
-	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug, newFusionSettings(vs.config.Fusion, vs.config.RRFK), vs.config.MaxChunksPerDoc)
+	mark = time.Now()
+	fusion := newFusionSettings(vs.config.Fusion, vs.config.RRFK)
+	fusion.semanticOnly = semanticOnly
+	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug, fusion, vs.config.MaxChunksPerDoc)
+	phases.FusionMs = sinceMs(mark)
 
 	// Neural reranker pass — strictly opt-in. Any error or timeout falls back
 	// to hybrid ordering without bubbling an error to the caller, unless strict
 	// mode asked for the opposite.
 	if vs.config.Reranker != nil && len(searchResults) > 1 {
+		mark = time.Now()
 		reranked, rerankErr := vs.applyReranker(ctx, query.Query, searchResults, contents, debugInfo)
+		phases.RerankMs = sinceMs(mark)
 		if rerankErr != nil {
 			path.Degraded = true
 			path.RerankSkipped = rerankErrorReason(rerankErr)
-			if vs.config.Strict {
+			if strict {
 				return nil, StrictModeError("rerank", rerankErr.Error())
 			}
 		} else {
@@ -144,6 +179,26 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 			searchResults = reranked
 		}
 	}
+
+	phases.TotalMs = sinceMs(startTime)
+	if debugInfo != nil {
+		debugInfo.Phases = phases
+	}
+	// One line per search, so a day of logs can be split by phase without
+	// asking every caller to pass debug=true.
+	vs.logger.Info("Search phases",
+		zap.Float64("total_ms", phases.TotalMs),
+		zap.Float64("refresh_ms", phases.RefreshMs),
+		zap.Bool("reloaded", phases.Reloaded),
+		zap.Float64("embed_ms", phases.EmbedMs),
+		zap.Float64("vector_load_ms", phases.VectorLoadMs),
+		zap.Float64("vector_rank_ms", phases.VectorRankMs),
+		zap.Float64("vector_content_ms", phases.VectorContentMs),
+		zap.Float64("keyword_ms", phases.KeywordMs),
+		zap.Float64("fusion_ms", phases.FusionMs),
+		zap.Float64("rerank_ms", phases.RerankMs),
+		zap.Int("query_words", len(strings.Fields(query.Query))),
+	)
 
 	return &SearchResponse{
 		Query:      query.Query,
@@ -472,4 +527,12 @@ func (vs *vectorService) detectModelID(ctx context.Context, text string) (string
 
 func (vs *vectorService) removeDocument(path string) error {
 	return vs.store.DeleteByDocPath(path)
+}
+
+// sinceMs and durationMs report phase times in milliseconds with microsecond
+// resolution: most phases of a warm search finish well under 1 ms.
+func sinceMs(t time.Time) float64 { return durationMs(time.Since(t)) }
+
+func durationMs(d time.Duration) float64 {
+	return float64(d.Microseconds()) / 1000
 }

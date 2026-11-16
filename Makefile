@@ -1,6 +1,6 @@
 BINARY_NAME=agent-memory-mcp
 
-.PHONY: build run test vet fmt-check local-smoke plugin-smoke plugin-pin plugin-install-check eval eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
+.PHONY: build run test vet fmt-check local-smoke plugin-smoke plugin-pin plugin-install-check eval eval-compare eval-update eval-rerank eval-corpus eval-real eval-recall eval-permute eval-flatten
 
 # Build next to the binary and rename over it. Writing in place while the
 # launchd instances run it leaves macOS with a stale code-signature cache for
@@ -52,7 +52,12 @@ plugin-pin:
 # Run the RAG retrieval evaluation harness. Fails if Hit Rate@5 or MRR
 # regress by more than 0.05 from the committed baseline.
 eval:
-	go test -tags=eval ./internal/rag/eval/
+	go test -tags=eval ./internal/rag ./internal/rag/eval/
+
+# Compare configured hybrid and semantic-only ranking on the same fixture index.
+# This is a measurement, not a second baseline gate.
+eval-compare:
+	go test -tags=eval ./internal/rag/eval/ -count=1 -v -run '^TestRetrievalEvalCompareRankings$$'
 
 # Refresh the committed retrieval baseline. Commit the updated
 # internal/rag/eval/testdata/baseline.json alongside the change that

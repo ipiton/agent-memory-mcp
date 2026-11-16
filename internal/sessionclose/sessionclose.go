@@ -36,6 +36,13 @@ type AnalyzeRequest struct {
 	DryRun           bool                  `json:"dry_run"`
 	SaveRaw          bool                  `json:"save_raw"`
 	AutoApplyLowRisk bool                  `json:"auto_apply_low_risk"`
+	// PlanFingerprint, when set on a write, must equal the fingerprint of the
+	// plan recomputed now; otherwise Analyze returns ErrPlanChanged (T139).
+	PlanFingerprint string `json:"plan_fingerprint,omitempty"`
+	// Decisions overrides the auto-apply policy per action id. It requires
+	// PlanFingerprint: a verdict only means something against the plan it was
+	// given for. Actions it does not name keep the default policy.
+	Decisions map[string]Decision `json:"decisions,omitempty"`
 }
 
 type ActionState string
@@ -48,6 +55,7 @@ const (
 )
 
 type CandidateAction struct {
+	ID              string                 `json:"id,omitempty"`
 	Kind            ActionKind             `json:"kind"`
 	Handling        ActionHandling         `json:"handling,omitempty"`
 	State           ActionState            `json:"state,omitempty"`
@@ -56,6 +64,7 @@ type CandidateAction struct {
 	StorageType     memory.Type            `json:"storage_type,omitempty"`
 	TargetMemoryID  string                 `json:"target_memory_id,omitempty"`
 	TargetTitle     string                 `json:"target_title,omitempty"`
+	TargetVersion   string                 `json:"target_version,omitempty"`
 	AppliedMemoryID string                 `json:"applied_memory_id,omitempty"`
 	Confidence      float64                `json:"confidence,omitempty"`
 	Rationale       string                 `json:"rationale,omitempty"`
@@ -76,6 +85,8 @@ type AnalysisResult struct {
 	Review           ReviewSummary          `json:"review,omitempty"`
 	AvailableActions []AvailableAction      `json:"available_actions,omitempty"`
 	RawSummarySaved  string                 `json:"raw_summary_saved,omitempty"`
+	PlanFingerprint  string                 `json:"plan_fingerprint,omitempty"`
+	Warnings         []string               `json:"warnings,omitempty"`
 }
 
 type ConsolidationStats struct {
@@ -171,14 +182,32 @@ func (s *Service) Analyze(ctx context.Context, req AnalyzeRequest) (*AnalysisRes
 	})
 	actions = annotateHandling(actions, summary.Mode)
 	actions = initializeActionStates(actions)
+	assignActionIDs(actions)
+	fingerprint := planFingerprint(actions)
+
+	if !req.DryRun {
+		if len(req.Decisions) > 0 && req.PlanFingerprint == "" {
+			return nil, fmt.Errorf("%w: decisions require plan_fingerprint from review_session_changes", ErrInvalidDecision)
+		}
+		if req.PlanFingerprint != "" && req.PlanFingerprint != fingerprint {
+			return nil, fmt.Errorf("%w: reviewed %s, now %s; re-run review_session_changes", ErrPlanChanged, req.PlanFingerprint, fingerprint)
+		}
+		if err := validateDecisions(actions, req.Decisions); err != nil {
+			return nil, err
+		}
+	}
 
 	result := &AnalysisResult{
-		DryRun:         req.DryRun,
-		Summary:        summary,
-		Delta:          delta,
-		Actions:        actions,
-		ActionCounts:   countActions(actions),
-		HandlingCounts: countHandling(actions),
+		DryRun:          req.DryRun,
+		Summary:         summary,
+		Delta:           delta,
+		Actions:         actions,
+		ActionCounts:    countActions(actions),
+		HandlingCounts:  countHandling(actions),
+		PlanFingerprint: fingerprint,
+	}
+	if !req.DryRun && req.AutoApplyLowRisk && req.PlanFingerprint == "" && hasAutoApplyKnowledge(actions) {
+		result.Warnings = append(result.Warnings, "applied without plan_fingerprint: the plan was recomputed now and may differ from what review_session_changes showed; pass plan_fingerprint to apply exactly the reviewed plan")
 	}
 
 	if !req.DryRun {
@@ -272,7 +301,35 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 	// session summary or a /finalize "Task complete:" record), fold this summary
 	// into it instead of creating a second near-identical episodic. Cross-session
 	// duplicates are left to the steward (T69).
-	if recordKind == memory.RecordKindSessionSummary {
+	// T186: a record that names its agent session folds into that session's
+	// record of the same kind, at any age, by appending the new tail.
+	sessionID := strings.TrimSpace(mem.Metadata[memory.MetadataAgentSessionID])
+	isCheckpoint := recordKind == memory.RecordKindSessionCheckpoint
+	if sessionID != "" && (isCheckpoint || recordKind == memory.RecordKindSessionSummary) {
+		target, err := s.findSessionRecord(ctx, mem, sessionID, isCheckpoint)
+		if err != nil {
+			return "", err
+		}
+		if target != nil {
+			updates := memory.Update{
+				Tags:     mergeTags(target.Tags, mem.Tags),
+				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+				Source:   memory.RevisionSourceSessionFold,
+			}
+			if folded := foldSessionTail(target.Content, mem.Content); folded != strings.TrimSpace(target.Content) {
+				updates.Content = folded
+			}
+			if mem.Importance > target.Importance {
+				importance := mem.Importance
+				updates.Importance = &importance
+			}
+			if err := s.store.Update(ctx, target.ID, updates); err != nil {
+				return "", err
+			}
+			return target.ID, nil
+		}
+		mem.Content = capSessionRecord(mem.Content)
+	} else if recordKind == memory.RecordKindSessionSummary {
 		target, err := s.findConsolidationTarget(ctx, mem)
 		if err != nil {
 			return "", err
@@ -281,6 +338,7 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 			updates := memory.Update{
 				Tags:     mergeTags(target.Tags, mem.Tags),
 				Metadata: mergeMetadata(target.Metadata, mem.Metadata),
+				Source:   memory.RevisionSourceSessionConsolidate,
 			}
 			if shouldReplaceContent(target.Content, mem.Content) {
 				updates.Content = mem.Content
@@ -305,6 +363,8 @@ func (s *Service) SaveRawSummaryWithOptions(ctx context.Context, summary memory.
 // consolidationWindow bounds how far back the session-close writer looks for an
 // existing terminal episodic of the same slug to fold into. It covers a single
 // working session; cross-session duplicates are deferred to the steward (T69).
+// Since T186 it applies only to records without an agent session id (a manual
+// close_session, an old bank): with an id, findSessionRecord matches at any age.
 const consolidationWindow = 6 * time.Hour
 
 // findConsolidationTarget returns the most recent terminal episodic memory of

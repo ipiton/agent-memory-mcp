@@ -198,8 +198,27 @@ func (ms *Store) updateLocked(ctx context.Context, id string, updates Update, em
 		return err
 	}
 
-	if err := updateMemoryRow(ms.db, m); err != nil {
-		return err
+	// T155: a content change keeps the text it replaces. The revision and the
+	// overwrite share one transaction, so neither lands without the other.
+	if m.Content == current.Content {
+		if err := updateMemoryRow(ms.db, m); err != nil {
+			return err
+		}
+	} else {
+		tx, err := ms.db.Begin()
+		if err != nil {
+			return fmt.Errorf("update memory: begin: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		if err := insertRevision(tx, current, m.UpdatedAt, updates.Source); err != nil {
+			return err
+		}
+		if err := updateMemoryRow(tx, m); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("update memory: commit: %w", err)
+		}
 	}
 
 	ms.mu.Lock()
@@ -226,6 +245,9 @@ type Update struct {
 	Context    string            `json:"context,omitempty"`
 	Importance *float64          `json:"importance,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
+	// Source names who replaces the content (RevisionSource*); it is recorded
+	// with the revision of the old text. Ignored when the content is unchanged.
+	Source string `json:"-"`
 }
 
 // Delete removes a memory by ID from both the database and cache.
@@ -238,6 +260,11 @@ func (ms *Store) Delete(ctx context.Context, id string) error {
 
 	if _, err := ms.db.ExecContext(ctx, "DELETE FROM memory_triples WHERE memory_id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete triples for memory: %w", err)
+	}
+	// T155: delete removes the record's old texts too — it stays the way to
+	// take a text out of the bank entirely.
+	if _, err := ms.db.ExecContext(ctx, "DELETE FROM memory_revisions WHERE memory_id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete revisions for memory: %w", err)
 	}
 	if _, err := ms.db.ExecContext(ctx, "DELETE FROM memories WHERE id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete memory: %w", err)
@@ -639,6 +666,11 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if updatedPrimary.Content != primary.Content {
+		if err := insertRevision(tx, primary, now, RevisionSourceMergeDuplicates); err != nil {
+			return nil, err
+		}
+	}
 	if err := updateMemoryRow(tx, updatedPrimary); err != nil {
 		return nil, err
 	}

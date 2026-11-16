@@ -26,8 +26,10 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	//   char-v1     — naive char-budget splitter (initial)
 	//   skeleton-v1 — T49: Markdown skeleton tree + breadcrumb prefix +
 	//                 section-aware boundaries + heuristic noise filter.
-	// Pre-T49 indices upgrade automatically on the next index call.
-	const chunkerVersion = "skeleton-v1"
+	//   skeleton-v2 — T143: a Markdown table is cut between rows only, and a
+	//                 piece that starts among its rows repeats its header.
+	// Older indices upgrade automatically on the next index call.
+	const chunkerVersion = "skeleton-v2"
 
 	allDocs, err := re.docService.collectDocuments()
 	if err != nil {

@@ -9,7 +9,7 @@ func temporalToolDefs() []tool {
 				"type": "object",
 				"properties": map[string]any{
 					"query":   map[string]any{"type": "string", "description": "Search query"},
-					"as_of":   map[string]any{"type": "string", "description": "RFC3339 timestamp — retrieve knowledge valid at this time"},
+					"as_of":   map[string]any{"type": "string", "format": "date-time", "description": "RFC3339 timestamp — retrieve knowledge valid at this time"},
 					"context": map[string]any{"type": "string", "description": "Optional context filter"},
 					"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
 					"format":  map[string]any{"type": "string", "enum": []string{"text", "json"}, "default": "text"},

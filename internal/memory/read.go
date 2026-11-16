@@ -1030,13 +1030,16 @@ func (ms *Store) CountByType() map[Type]int {
 // all (T120). These are stored, confirmed and counted like any other record,
 // but semantic recall never reaches the cosine for them — the model check
 // fails first and they fall through to text matching.
+//
+// Review-queue cards are left out: since T84 they are stored without a vector
+// on purpose, and counting them raised a false "encoder refused" alarm (T189).
 func (ms *Store) CountWithoutEmbedding() int {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
 	n := 0
 	for _, m := range ms.memories {
-		if len(m.Embedding) == 0 {
+		if len(m.Embedding) == 0 && !isReviewQueueCached(m) {
 			n++
 		}
 	}

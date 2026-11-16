@@ -1,3 +1,5 @@
+//go:build eval
+
 package rag
 
 import (
@@ -16,7 +18,7 @@ func TestSemanticFusionPreservesSemanticOrder(t *testing.T) {
 	keywordOnly := vectorstore.Chunk{ID: "keyword-only", DocPath: "docs/words.md", Content: "Matching words", LastModified: time.Now()}
 	semantic := []vectorstore.SearchResult{{Chunk: strong, Score: 0.62}, {Chunk: weak, Score: 0.15}}
 	keyword := []vectorstore.SearchResult{{Chunk: weak, Score: 90}, {Chunk: keywordOnly, Score: 100}}
-	rows, contents, debug := buildHybridSearchResults("query terms", "", semantic, keyword, 3, 3, true, newFusionSettings("semantic", 60), 1)
+	rows, contents, debug := buildHybridSearchResults("query terms", "", semantic, keyword, 3, 3, true, fusionSettings{semanticOnly: true}, 1)
 	if len(rows) != 2 || rows[0].ID != "strong" || rows[1].ID != "weak" {
 		t.Fatalf("semantic order = %+v", rows)
 	}
@@ -43,7 +45,7 @@ func TestSemanticFusionHonorsFilterAndDocumentCap(t *testing.T) {
 		{Chunk: vectorstore.Chunk{ID: "decision", DocPath: "docs/adr/decision.md", Content: "decision"}, Score: 0.7},
 		{Chunk: vectorstore.Chunk{ID: "b-0", DocPath: "docs/b.md", Content: "other"}, Score: 0.6},
 	}
-	rows, contents, _ := buildHybridSearchResults("query", "docs", semantic, nil, 4, 2, false, newFusionSettings("semantic", 60), 1)
+	rows, contents, _ := buildHybridSearchResults("query", "docs", semantic, nil, 4, 2, false, fusionSettings{semanticOnly: true}, 1)
 	if len(rows) != 2 || rows[0].ID != "a-0" || rows[1].ID != "b-0" || contents[1] != "other" {
 		t.Fatalf("filtered/capped results = %+v, %v", rows, contents)
 	}
@@ -61,7 +63,7 @@ func TestSemanticFusionTiesDoNotDependOnDates(t *testing.T) {
 			{Chunk: vectorstore.Chunk{ID: "z", DocPath: "docs/z.md", LastModified: z}, Score: 0.7},
 			{Chunk: vectorstore.Chunk{ID: "a", DocPath: "docs/a.md", LastModified: a}, Score: 0.7},
 		}
-		rows, _, _ := buildHybridSearchResults("query", "", semantic, nil, 2, 1, false, newFusionSettings("semantic", 60), 1)
+		rows, _, _ := buildHybridSearchResults("query", "", semantic, nil, 2, 1, false, fusionSettings{semanticOnly: true}, 1)
 		if len(rows) != 1 || rows[0].ID != "a" {
 			t.Fatalf("reverseDates=%v: tied result = %+v", reverseDates, rows)
 		}
@@ -75,10 +77,12 @@ func TestSemanticFusionSearchDoesNotNeedKeywords(t *testing.T) {
 	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	engine.vecService.config.Fusion = "semantic"
 	engine.vecService.config.Strict = true
 	engine.vecService.store = buildingStore{Store: engine.vecService.store}
-	response := searchRunbook(t, engine)
+	response, err := engine.SearchSemanticForEval(context.Background(), "rollback ingress", 5, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(response.Results) == 0 || response.Retrieval.Degraded || response.Retrieval.KeywordSkipped != "" {
 		t.Fatalf("semantic response = %+v", response)
 	}
@@ -89,8 +93,7 @@ func TestSemanticFusionRefusesKeywordOnlyIndex(t *testing.T) {
 	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	engine.vecService.config.Fusion = "semantic"
-	_, err := engine.vecService.search(context.Background(), searchQuery{Query: "rollback ingress", Limit: 5})
+	_, err := engine.SearchSemanticForEval(context.Background(), "rollback ingress", 5, "", false)
 	if err == nil || !strings.Contains(err.Error(), "index_documents") {
 		t.Fatalf("keyword-only index error = %v", err)
 	}
@@ -103,9 +106,8 @@ func TestSemanticFusionDoesNotFallBackWhenEmbeddingFails(t *testing.T) {
 	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	engine.vecService.config.Fusion = "semantic"
 	engine.vecService.config.Embedder = testEmbedderAt(t, deadEmbeddingURL(t))
-	_, err := engine.vecService.search(context.Background(), searchQuery{Query: "unseen rollback query", Limit: 5})
+	_, err := engine.SearchSemanticForEval(context.Background(), "unseen rollback query", 5, "", false)
 	if err == nil {
 		t.Fatal("semantic search silently fell back to keywords")
 	}
