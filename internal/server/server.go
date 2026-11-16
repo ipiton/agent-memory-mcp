@@ -91,6 +91,7 @@ type MCPServer struct {
 // (Round 3 H17); New orchestrates them in order.
 func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	fileLogger := initFileLogger(cfg)
+	applyMemoryLimit(cfg, fileLogger)
 	ragEngine := initRAGEngine(cfg, fileLogger)
 	memoryStore, emb := initMemoryStore(cfg, fileLogger)
 
@@ -299,7 +300,7 @@ func (s *MCPServer) handleNotification(req rpcRequest) {
 func (s *MCPServer) dispatch(req rpcRequest) (any, *rpcError) {
 	switch req.Method {
 	case "initialize":
-		return s.handleInitialize(req.Params)
+		return s.handleInitialize(req.client, req.Params)
 	case "resources/list":
 		return s.handleResourcesList(req.Params)
 	case "resources/read":
@@ -400,8 +401,14 @@ func (s *MCPServer) logClientProtocolVersion(params json.RawMessage) {
 	)
 }
 
-func (s *MCPServer) handleInitialize(params json.RawMessage) (any, *rpcError) {
+func (s *MCPServer) handleInitialize(client string, params json.RawMessage) (any, *rpcError) {
 	s.logClientProtocolVersion(params)
+	if s.sessionTracker != nil {
+		var p initializeParams
+		if json.Unmarshal(params, &p) == nil {
+			s.sessionTracker.SetClientName(client, p.ClientInfo.Name)
+		}
+	}
 
 	return map[string]any{
 		"protocolVersion": protocolVersion,

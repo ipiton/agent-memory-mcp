@@ -69,7 +69,7 @@ func TestRefreshIfStalePicksUpAnotherProcessIndexing(t *testing.T) {
 		t.Fatalf("expected the reader to see 2 chunks after reload, got %d", got)
 	}
 
-	results, err := reader.Search([]float32{0, 1, 0}, 5)
+	results, _, err := reader.Search([]float32{0, 1, 0}, 5)
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

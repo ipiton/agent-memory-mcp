@@ -125,6 +125,40 @@ discovery cost dominates; leave it off for **interactive debugging** where seein
 each tool by name is clearer. Policy reference: [`docs/concepts/lifecycle.md`](concepts/lifecycle.md)
 covers the related archive-sweep surface.
 
+### Tool safety annotations
+
+Every tool in `tools/list` carries the MCP `annotations` object with all four
+hints set explicitly (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`), so a client can ask for confirmation on the dangerous tools
+without listing their names. The hints are advisory; the server does not refuse
+a call because of them. `openWorldHint` is `false` everywhere: every tool works
+on the local bank, the local index or allowlisted local files.
+
+- **Read-only** (`readOnlyHint: true`): repo, search and recall tools, reports,
+  `review_session_changes`, `drift_scan`, `steward_inbox`, `steward_status`.
+- **Writes, not destructive**: the `store_*` tools, `index_documents`,
+  `mark_outdated`, `promote_to_canonical`, sediment moves, `verify_entry`,
+  `resolve_review_item`, `resolve_review_queue`, `recount_references`,
+  `steward_policy`. They add entries or change metadata another tool can set back.
+- **Destructive** (`destructiveHint: true`): the tools below delete, merge,
+  archive or overwrite entries.
+
+| Tool | Deletes / merges / archives / overwrites | `dry_run` | Why no other guard |
+|------|------------------------------------------|-----------|--------------------|
+| `delete_memory` | hard delete | none | one explicit ID; the hint is the gate |
+| `update_memory` | overwrites content, no history | none | one explicit ID; the hint is the gate |
+| `merge_duplicates` | merges, archives the duplicates | none | explicit IDs; `conflicts_report` is the preview |
+| `close_session`, `analyze_session` | updates and merges with `auto_apply_low_risk` | default `true` | — |
+| `accept_session_changes` | always auto-applies low-risk updates and merges | none | `review_session_changes` is the preview |
+| `end_task` | outdates working memories of a task | default `false` | default kept: flipping it would turn existing calls into silent no-ops |
+| `sweep_archive` | runs `end_task` on every archived slug | default `false` | same as `end_task` |
+| `steward_run` | deletes expired working memories, merges duplicates | default `true` | — |
+| `steward_inbox_resolve` | carries out `merge` and `delete` verbs | none | the inbox item it resolves is the preview |
+
+With `MCP_TOOL_GROUPING=true` a meta-tool takes the strictest hints of its
+actions: `memory`, `memory_admin` and `session` are destructive as a whole,
+`search` is read-only.
+
 ## Calling convention
 
 All tools are invoked via the standard MCP `tools/call` JSON-RPC method. Examples below show the `params` block only — wrap them in:
@@ -470,6 +504,22 @@ Persists the raw summary plus auto-applies the `auto_apply: true` actions from `
     "mode": "coding",
     "context": "agent-memory-mcp",
     "service": "agent-memory-mcp"
+  }
+}
+```
+
+Without `plan_fingerprint` the plan is recomputed at accept time, so it can differ from what `review_session_changes` showed if the bank changed in between; the response then carries a `warnings` entry. To apply exactly the reviewed plan, pass the `plan_fingerprint` that `review_session_changes` returned for the same summary. If any action, its target or the target's content changed since review, the call fails with `session plan changed since review` and writes nothing, not even the raw summary — re-run the review.
+
+`decisions` overrides the auto-apply policy per action, keyed by the action `id` from the review (requires `plan_fingerprint`): `update` / `merge` apply that action into its target whatever its risk handling, `keep_existing` / `reject` skip it. Actions not listed follow the low-risk policy. An unknown id or verdict fails the call before any write.
+
+```json
+{
+  "name": "accept_session_changes",
+  "arguments": {
+    "summary": "…",
+    "context": "agent-memory-mcp",
+    "plan_fingerprint": "plan_3f9c…",
+    "decisions": {"act_81d2…": "reject", "act_07aa…": "update"}
   }
 }
 ```

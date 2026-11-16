@@ -297,10 +297,24 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		logger, _ = config.Build()
 	}
 
+	// T175: a start under memory pressure once took 11 minutes and nothing said
+	// which part. One line per finished step, so a stalled start shows the last
+	// step that completed and a slow one shows where the time went.
+	stepStart := time.Now()
+	logStep := func(step string, fields ...zap.Field) {
+		now := time.Now()
+		logger.Info("Memory store startup step", append([]zap.Field{
+			zap.String("step", step),
+			zap.Duration("elapsed", now.Sub(stepStart)),
+		}, fields...)...)
+		stepStart = now
+	}
+
 	db, err := dbutil.OpenSQLite(dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open memory database: %w", err)
 	}
+	logStep("open")
 
 	// Create schema for memories
 	schema := `
@@ -335,6 +349,7 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to migrate memory schema: %w", err)
 	}
+	logStep("schema")
 	// T87: one-time repair of rows whose content/title were byte-truncated
 	// mid-rune before the rune-aware fix. Gated on PRAGMA user_version so it runs
 	// a single full-table scan once, not on every boot — the write boundary now
@@ -345,6 +360,7 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 	} else if repaired > 0 {
 		logger.Warn("Repaired memories with invalid UTF-8 content/title", zap.Int("repaired", repaired))
 	}
+	logStep("utf8_repair")
 
 	store := &Store{
 		db:           db,
@@ -362,6 +378,7 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to load memories: %w", err)
 	}
+	logStep("cache_load", zap.Int("memories", len(store.memories)))
 	if errs := store.LoadErrors(); errs > 0 {
 		logger.Warn("Some memories failed to load from database",
 			zap.Int("load_errors", errs),
@@ -747,6 +764,23 @@ func ensureMemorySchema(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_recall_events_memory_id ON recall_events(memory_id);
 	CREATE INDEX IF NOT EXISTS idx_recall_events_at ON recall_events(at);`); err != nil {
+		return err
+	}
+
+	// T155: the text a content update replaced. Without it recall_as_of
+	// answered a past date with today's text, and a heuristic rewrite left no
+	// trace. No embedding — revisions never take part in search. No FK, like
+	// recall_events; Delete removes a record's revisions explicitly.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS memory_revisions (
+		memory_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		content TEXT NOT NULL,
+		title TEXT,
+		replaced_at DATETIME NOT NULL,
+		replaced_by_path TEXT NOT NULL,
+		PRIMARY KEY (memory_id, revision)
+	);
+	CREATE INDEX IF NOT EXISTS idx_memory_revisions_path ON memory_revisions(replaced_by_path);`); err != nil {
 		return err
 	}
 

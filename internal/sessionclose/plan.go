@@ -91,6 +91,7 @@ func (s *Service) planActions(ctx context.Context, summary memory.SessionSummary
 		if bestMatch != nil {
 			action.TargetMemoryID = bestMatch.ID
 			action.TargetTitle = memory.DisplayTitle(bestMatch, 80)
+			action.TargetVersion = memoryVersion(bestMatch)
 			action.DecisionTrace = append(action.DecisionTrace, matchTrace...)
 			linked = append(linked, bestMatch.ID)
 		}

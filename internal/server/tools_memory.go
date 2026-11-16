@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ipiton/agent-memory-mcp/internal/memory"
@@ -230,7 +231,7 @@ func (s *MCPServer) callUpdateMemory(args map[string]any) (any, *rpcError) {
 		return nil, &rpcError{Code: rpcErrInvalidParams, Message: "id parameter is required"}
 	}
 
-	updates := memory.Update{}
+	updates := memory.Update{Source: memory.RevisionSourceUpdateMemory}
 	if p.Content != "" {
 		content := strings.TrimSpace(p.Content)
 		if err := userio.ValidateMemoryContent(content); err != nil {
@@ -392,6 +393,24 @@ func (s *MCPServer) callMemoryStats(_ map[string]any) (any, *rpcError) {
 		}
 		if v := dedupSkips["empty"]; v > 0 {
 			fmt.Fprintf(&buf, "- empty: %d\n", v)
+		}
+	}
+
+	// T155: how many times each path replaced a record's text — the rewrite
+	// rate of the heuristics that run without an agent.
+	revisions, err := s.memoryStore.CountRevisionsByPath(context.Background())
+	if err != nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "failed to count content revisions", Data: err.Error()}
+	}
+	if len(revisions) > 0 {
+		paths := make([]string, 0, len(revisions))
+		for path := range revisions {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		buf.WriteString("\nContent revisions by path:\n")
+		for _, path := range paths {
+			fmt.Fprintf(&buf, "- %s: %d\n", path, revisions[path])
 		}
 	}
 

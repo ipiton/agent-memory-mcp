@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -32,6 +33,29 @@ func (ms *Store) RecallAsOf(ctx context.Context, query string, asOf time.Time, f
 
 	if limit > 0 && len(filtered) > limit {
 		filtered = filtered[:limit]
+	}
+
+	// T155: a record rewritten after asOf answers with the text it carried
+	// then, not today's. The swap happens on a copy — the result must not
+	// write the old text back into the cache.
+	for i, r := range filtered {
+		rev, err := ms.revisionAsOf(ctx, r.Memory.ID, asOf)
+		if err != nil {
+			return nil, err
+		}
+		if rev == nil {
+			continue
+		}
+		m := copyMemory(r.Memory)
+		m.Content = rev.Content
+		m.Title = rev.Title
+		if m.Metadata == nil {
+			m.Metadata = make(map[string]string)
+		}
+		m.Metadata[MetadataContentAsOfRevision] = strconv.Itoa(rev.Revision)
+		swapped := *r
+		swapped.Memory = m
+		filtered[i] = &swapped
 	}
 	return filtered, nil
 }
