@@ -29,7 +29,7 @@ The catalog comes first; JSON examples for the most common tools follow it.
 | Tool | Description |
 |------|-------------|
 | `semantic_search` | Hybrid search across indexed documents with optional `source_type`, trust metadata, and `debug` explain mode |
-| `document_context` | Read several indexed sections from an allowed file within a shared character cap; [usage and limits](DOCUMENT_CONTEXT.md) |
+| `document_context` | Read several indexed sections from an allowed file within a shared character cap (full profile); [usage and limits](DOCUMENT_CONTEXT.md) |
 | `index_documents` | Re-index documents for RAG search |
 
 ### File tools

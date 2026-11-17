@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 	"go.uber.org/zap"
@@ -106,9 +107,13 @@ func (s *MCPServer) formatSearchResults(results *rag.SearchResponse) string {
 		buf.WriteString("\n\n")
 	}
 
+	showSectionKeys := s.configSnapshot().ToolProfile != config.ToolProfileCore
 	for i, result := range results.Results {
 		fmt.Fprintf(&buf, "%d. **%s** (relevance: %.2f)\n", i+1, result.Title, result.Score)
 		fmt.Fprintf(&buf, "   Path: %s\n", result.Path)
+		if showSectionKeys && result.SectionKey != "" {
+			fmt.Fprintf(&buf, "   Section key: %s\n", result.SectionKey)
+		}
 		if result.SourceType != "" {
 			fmt.Fprintf(&buf, "   Source type: %s\n", result.SourceType)
 		}

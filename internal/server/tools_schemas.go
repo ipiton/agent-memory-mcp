@@ -254,11 +254,11 @@ func ragToolDefs() []tool {
 	return []tool{
 		{
 			Name:        "document_context",
-			Description: "Indexed sections; query or section_keys; may be stale.",
+			Description: "After semantic_search, read sections of one file within a shared character budget. Use query or section_keys, or omit both for document order. Indexed text may be stale.",
 			InputSchema: map[string]any{
 				"type": "object", "additionalProperties": false,
 				"properties": map[string]any{
-					"path":         map[string]any{"type": "string"},
+					"path":         map[string]any{"type": "string", "description": "Index-root-relative file path from semantic_search"},
 					"query":        map[string]any{"type": "string", "description": "Semantic selection within this file; requires matching vectors"},
 					"section_keys": map[string]any{"type": "array", "minItems": 1, "maxItems": 8, "items": map[string]any{"type": "string"}},
 					"max_chars":    map[string]any{"type": "integer", "minimum": 256, "maximum": 32000, "default": 12000, "description": "Unicode keys + text (not JSON)"},

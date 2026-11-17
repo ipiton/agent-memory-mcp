@@ -17,7 +17,7 @@ the chunking pipeline.
 
 ```bash
 # Full eval (requires the eval build tag):
-go test -tags=eval ./internal/rag/eval/
+go test -tags=eval ./internal/rag ./internal/rag/eval/
 
 # Or via the Makefile:
 make eval
@@ -26,6 +26,38 @@ make eval
 `go test ./...` skips the eval test (it stays behind `//go:build eval`), so
 the default suite is unaffected. Only the pure-unit metrics tests
 (`HitRateAtK`, `MRR`, `AggregateMetrics`) run in the default suite.
+
+## Comparing hybrid and semantic-only ranking
+
+```sh
+make eval-compare
+```
+
+For each document cap (0 and 1), this indexes the public fixture once and runs both
+arms against that same index, encoder, QA set and `K=5`. It prints aggregate Hit@5,
+MRR and per-type metrics, with the fusion mode, cutoff and document cap. It does
+not write the committed baseline or apply its quality threshold to the comparison
+arm. A lower semantic score is a valid measurement; `make eval` still checks the
+normal hybrid baseline and also runs the evaluation-only regression tests.
+
+Semantic-only selection uses the existing bounded vector candidates and cosine
+scores. It skips keyword retrieval and recency/source/confidence boosts, uses
+chunk IDs to break score ties, and retains source filters, trust metadata and the
+document cap. If a reranker is configured on the harness, it still runs for both
+arms; the default comparison has none. Missing vectors, provider fallback,
+background vector loading and reranker failure cannot silently substitute a
+different retrieval method.
+
+For a different corpus or encoder, construct the existing `HarnessConfig` with
+its paths and optional `Embeddings`, then call `h.CompareRankings(ctx)`. The result
+contains aggregate metrics, without source text, document paths or questions.
+`RunAll` and `RunQuery` retain their configured hybrid behavior. The engine's
+`SearchSemanticForEval` entry point exists only with `-tags=eval`; release builds
+and MCP expose no new search mode or `MCP_RAG_FUSION` value.
+
+The stock encoder hashes ASCII tokens into 64 dimensions. It tests pipeline and
+ranking mechanics, not multilingual embedding quality. Use a real encoder for
+model-quality conclusions, and keep private corpora and question sets out of git.
 
 ## Updating the baseline
 

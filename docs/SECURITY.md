@@ -51,7 +51,11 @@ Reference docs:
 
 - The server uses a **PathGuard** that restricts file access to explicitly allowlisted paths
 - Path traversal attacks are prevented by resolving and validating all paths
-- Only paths under `MCP_ROOT` and `MCP_ALLOW_DIRS` are accessible
+- Repository file tools apply `MCP_ALLOW_DIRS` relative to `MCP_ROOT`.
+- `document_context` applies the same relative allowlist to the configured
+  index root. In project scope this is the main checkout, which owns the
+  shared worktree index. The tool returns indexed content. See
+  [document context paths and freshness](DOCUMENT_CONTEXT.md).
 
 ### HTTP mode
 

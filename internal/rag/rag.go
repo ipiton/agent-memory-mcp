@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -215,14 +214,14 @@ type document struct {
 	Path         string
 	LastModified time.Time
 	FileHash     string
-	PhysicalPath string
 }
 
 type searchQuery struct {
-	Query      string
-	Limit      int
-	SourceType string
-	Debug      bool
+	semanticOnly bool
+	Query        string
+	Limit        int
+	SourceType   string
+	Debug        bool
 }
 
 type indexResult struct {
@@ -397,99 +396,33 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 
 // Search performs a hybrid search query across indexed documents.
 func (re *Engine) Search(ctx context.Context, query string, limit int, sourceType string, debug bool) (*SearchResponse, error) {
+	return re.search(ctx, searchQuery{Query: query, Limit: limit, SourceType: sourceType, Debug: debug})
+}
+
+func (re *Engine) search(ctx context.Context, query searchQuery) (*SearchResponse, error) {
 	if re == nil || re.vecService == nil {
 		return nil, fmt.Errorf("RAG engine not available")
 	}
-
-	if limit <= 0 {
-		limit = re.config.RAG.MaxResults
+	if query.Limit <= 0 {
+		query.Limit = re.config.RAG.MaxResults
 	}
-	if limit > re.config.RAG.MaxResults {
-		limit = re.config.RAG.MaxResults
+	if query.Limit > re.config.RAG.MaxResults {
+		query.Limit = re.config.RAG.MaxResults
 	}
-
-	result, err := re.vecService.search(ctx, searchQuery{
-		Query:      query,
-		Limit:      limit,
-		SourceType: sourceType,
-		Debug:      debug,
-	})
+	result, err := re.vecService.search(ctx, query)
 	if err != nil {
 		re.logger.Error("Vector search failed",
 			zap.Error(err),
-			zap.String("query", query),
-			zap.Int("limit", limit),
+			zap.String("query", query.Query),
+			zap.Int("limit", query.Limit),
 		)
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
-
 	// Returned as-is rather than rebuilt field by field. The copy this
 	// replaces dropped RetrievalPath the moment it was added (T99) — it is
 	// already a *SearchResponse from the same package, so the copy bought
 	// nothing and cost a field.
 	return result, nil
-}
-
-// IndexDocuments performs incremental indexing of documents in configured directories.
-// SectionExpansion is the result of ExpandSection: the resolved doc and
-// section, plus every chunk that belongs to the section in document order
-// (with the breadcrumb prefix stripped from each chunk so callers see only
-// the section body). FullText is the chunks joined by a blank line — useful
-// for an LLM call that wants the entire section in one go.
-type SectionExpansion struct {
-	DocPath     string   `json:"doc_path"`
-	SectionPath []string `json:"section_path"`
-	SectionKey  string   `json:"section_key"`
-	Chunks      []string `json:"chunks"`
-	FullText    string   `json:"full_text"`
-}
-
-// ExpandSection returns every chunk belonging to (docPath, sectionKey) in
-// document order. sectionKey is the canonical " > "-joined breadcrumb path
-// surfaced by SearchResult.SectionKey — pass it back unchanged.
-//
-// Intended use: caller runs Search, finds a relevant chunk, then calls
-// ExpandSection to load the whole containing section before handing context
-// to the LLM. This is the "pointer-based context" half of T49: search
-// returns a pointer (chunk + section), expansion materialises the full
-// section.
-//
-// Returns an error if the engine has no vector store. Returns a result with
-// Chunks==nil when no chunks match — callers should treat that as a
-// not-found, not an error.
-func (re *Engine) ExpandSection(_ context.Context, docPath, sectionKey string) (*SectionExpansion, error) {
-	if re == nil || re.vecService == nil || re.vecService.store == nil {
-		return nil, fmt.Errorf("RAG engine not available")
-	}
-	docPath = strings.TrimSpace(docPath)
-	sectionKey = strings.TrimSpace(sectionKey)
-	if docPath == "" || sectionKey == "" {
-		return nil, fmt.Errorf("doc_path and section_key are required")
-	}
-
-	chunks, err := re.vecService.store.ChunksByDocPath(docPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chunks for %s: %w", docPath, err)
-	}
-
-	expansion := &SectionExpansion{
-		DocPath:    docPath,
-		SectionKey: sectionKey,
-	}
-	for _, chunk := range chunks {
-		path, body, ok := ExtractBreadcrumb(chunk.Content)
-		if !ok || SectionKey(path) != sectionKey {
-			continue
-		}
-		if expansion.SectionPath == nil {
-			expansion.SectionPath = path
-		}
-		expansion.Chunks = append(expansion.Chunks, body)
-	}
-	if len(expansion.Chunks) > 0 {
-		expansion.FullText = strings.Join(expansion.Chunks, "\n\n")
-	}
-	return expansion, nil
 }
 
 // SetReranker replaces the engine's neural reranker at runtime. It is

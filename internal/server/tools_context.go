@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ipiton/agent-memory-mcp/internal/config"
+	"github.com/ipiton/agent-memory-mcp/internal/paths"
 	"github.com/ipiton/agent-memory-mcp/internal/rag"
 	"github.com/ipiton/agent-memory-mcp/internal/userio"
 )
@@ -61,7 +63,18 @@ func (s *MCPServer) callDocumentContext(args map[string]any) (any, *rpcError) {
 			return invalid(err.Error())
 		}
 	}
-	abs, err := s.pathGuard.Resolve(params.Path)
+	engine, guard, indexRoot := s.documentContextReader()
+	if guard == nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "index path guard not available"}
+	}
+	root, err := filepath.EvalSymlinks(indexRoot)
+	if err != nil {
+		return invalid("index root is unavailable")
+	}
+	if rel, err := guard.RelPath(root); err != nil || rel != "." {
+		return invalid("index root changed since path authorization was configured; restart the server")
+	}
+	abs, err := guard.Resolve(params.Path)
 	if err != nil {
 		return invalid(err.Error())
 	}
@@ -69,22 +82,38 @@ func (s *MCPServer) callDocumentContext(args map[string]any) (any, *rpcError) {
 	if err != nil || !info.Mode().IsRegular() {
 		return invalid("path must identify an existing allowed regular file")
 	}
-	indexRoot := s.config.RAG.IndexRoot
-	if indexRoot == "" {
-		indexRoot = s.config.RootPath
+	if engine == nil {
+		return nil, &rpcError{Code: rpcErrServerError, Message: "RAG engine not available"}
 	}
+	options.AuthorizedRoot = root
 	logicalPath := filepath.ToSlash(filepath.Clean(params.Path))
-	indexedPath, err := filepath.EvalSymlinks(filepath.Join(indexRoot, logicalPath))
-	if err != nil || indexedPath != abs {
-		return invalid("indexed source does not match the allowed file")
-	}
-	if err := s.requireRAGEngine(); err != nil {
-		return nil, err
-	}
-	options.AuthorizedPath = abs
-	response, err := s.getRagEngine().DocumentContext(context.Background(), logicalPath, options)
+	response, err := engine.DocumentContext(context.Background(), logicalPath, options)
 	if err != nil {
 		return nil, &rpcError{Code: rpcErrServerError, Message: err.Error()}
 	}
 	return toolResultJSON(response), nil
+}
+
+// Use the same configured allowlist relative to the tree that owns the index.
+// Preserve the original rules on reload, just as repository file reads do.
+func newIndexPathGuard(indexRoot string, repoGuard *paths.Guard) *paths.Guard {
+	if indexRoot == "" || repoGuard == nil {
+		return nil
+	}
+	roots := repoGuard.AllowedRoots()
+	cfg := config.Config{RootPath: indexRoot, AllowedPaths: make([]string, 0, len(roots))}
+	for _, root := range roots {
+		cfg.AllowedPaths = append(cfg.AllowedPaths, root.Rel)
+	}
+	guard, _ := paths.NewGuard(cfg)
+	return guard
+}
+
+func (s *MCPServer) documentContextReader() (*rag.Engine, *paths.Guard, string) {
+	s.ragMu.RLock()
+	defer s.ragMu.RUnlock()
+	if s.config.RAG.IndexRoot != "" {
+		return s.ragEngine, s.indexPathGuard, s.config.RAG.IndexRoot
+	}
+	return s.ragEngine, s.pathGuard, s.config.RootPath
 }

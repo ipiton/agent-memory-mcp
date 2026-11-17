@@ -9,31 +9,15 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/ipiton/agent-memory-mcp/internal/config"
 	"github.com/ipiton/agent-memory-mcp/internal/embedder"
-	"github.com/ipiton/agent-memory-mcp/internal/paths"
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 )
 
 func newDocumentContextTestEngine(t *testing.T, chunks []vectorstore.Chunk) *Engine {
 	t.Helper()
 	e := newRerankTestEngine(t, chunks)
-	e.repoRoot = t.TempDir()
+	e.repoRoot = resolvedTestRoot(t, t.TempDir())
 	metadata := map[string]string{indexRootMetadataKey: e.repoRoot, indexStateMetadataKey: indexStateReady}
-	for _, chunk := range chunks {
-		path := filepath.Join(e.repoRoot, chunk.DocPath)
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("Fixture source."), 0600); err != nil {
-			t.Fatal(err)
-		}
-		physical, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		metadata[vectorstore.SourcePathMetadataPrefix+chunk.DocPath] = physical
-	}
 	if err := e.vecService.store.CommitIndexState(vectorstore.IndexStateUpdate{Metadata: metadata}); err != nil {
 		t.Fatal(err)
 	}
@@ -186,60 +170,122 @@ func TestDocumentContextRefusesAnIncompleteIndex(t *testing.T) {
 	}
 }
 
-func TestDocumentContextKeepsTheAuthorizedSourceAcrossSymlinkRetargets(t *testing.T) {
-	e := newDocumentContextTestEngine(t, []vectorstore.Chunk{breadcrumbChunk("docs/a.md-0", "docs/a.md", "Guide", []string{"Guide"}, "Indexed source A")})
-	a := filepath.Join(t.TempDir(), "a")
-	link := filepath.Join(e.repoRoot, "docs")
-	if err := os.Rename(link, a); err != nil {
-		t.Fatal(err)
-	}
-	physicalA, err := filepath.EvalSymlinks(filepath.Join(a, "a.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := e.vecService.store.SetMetadata(vectorstore.SourcePathMetadataPrefix+"docs/a.md", physicalA); err != nil {
-		t.Fatal(err)
-	}
-	b := t.TempDir()
-	if err := os.WriteFile(filepath.Join(b, "a.md"), []byte("Source B"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(b, link); err != nil {
-		t.Fatal(err)
-	}
-	guard, err := paths.NewGuard(config.Config{RootPath: e.repoRoot, AllowedPaths: []string{"docs"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	authorized, err := guard.Resolve("docs/a.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(link); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(a, link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := e.DocumentContext(context.Background(), "docs/a.md", ContextOptions{AuthorizedPath: authorized}); err == nil {
-		t.Fatal("source A disclosed using source B authorization")
-	}
-}
+type contextNoCacheStore struct{ vectorstore.Store }
 
-type contextSnapshotOnlyStore struct{ vectorstore.Store }
-
-func (s contextSnapshotOnlyStore) RefreshIfStale() (bool, error) {
+func (s contextNoCacheStore) RefreshIfStale() (bool, error) {
 	return false, errors.New("global vector cache unavailable")
 }
 
 func TestDocumentContextDoesNotRequireTheGlobalVectorCache(t *testing.T) {
-	e := newDocumentContextTestEngine(t, []vectorstore.Chunk{breadcrumbChunk("docs/a.md-0", "docs/a.md", "Guide", []string{"Guide"}, "Read from the document snapshot")})
-	e.vecService.store = contextSnapshotOnlyStore{Store: e.vecService.store}
+	e := newDocumentContextTestEngine(t, []vectorstore.Chunk{breadcrumbChunk("docs/a.md-0", "docs/a.md", "Guide", []string{"Guide"}, "Read from the document index")})
+	e.vecService.store = contextNoCacheStore{Store: e.vecService.store}
 	result, err := e.DocumentContext(context.Background(), "docs/a.md", ContextOptions{SectionKeys: []string{"Guide"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Sections) != 1 || result.Sections[0].Text != "Read from the document snapshot" {
+	if len(result.Sections) != 1 || result.Sections[0].Text != "Read from the document index" {
 		t.Fatalf("context=%+v", result)
+	}
+}
+
+type contextChangingStore struct{ vectorstore.Store }
+
+func (s contextChangingStore) ChunksByDocPath(path string) ([]vectorstore.Chunk, error) {
+	chunks, err := s.Store.ChunksByDocPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return chunks, s.Store.CommitIndexState(vectorstore.IndexStateUpdate{
+		Metadata: map[string]string{"last_indexed": "fixture publication", indexStateMetadataKey: indexStateReady},
+	})
+}
+
+func TestDocumentContextRejectsIndexPublicationDuringRead(t *testing.T) {
+	e := semanticContextEngine(t)
+	e.vecService.store = contextChangingStore{Store: e.vecService.store}
+	_, err := e.DocumentContext(context.Background(), "docs/a.md", ContextOptions{Query: "question"})
+	if err == nil || !strings.Contains(err.Error(), "index changed") {
+		t.Fatalf("publication during document read = %v", err)
+	}
+}
+
+func TestDocumentContextAgreesWithExpandSection(t *testing.T) {
+	e := newDocumentContextTestEngine(t, []vectorstore.Chunk{
+		breadcrumbChunk("a.md-10", "a.md", "Guide", []string{"Guide", "Steps"}, "after ten"),
+		breadcrumbChunk("a.md-2", "a.md", "Guide", []string{"Guide", "Steps"}, "after two"),
+	})
+	const key = "Guide > Steps"
+	expansion, err := e.ExpandSection(context.Background(), "a.md", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.DocumentContext(context.Background(), "a.md", ContextOptions{SectionKeys: []string{key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sections) != 1 || got.Sections[0].Text != expansion.FullText || expansion.FullText != "after two\n\nafter ten" {
+		t.Fatalf("context = %+v, expansion = %+v", got, expansion)
+	}
+}
+
+func TestDocumentContextIncludesChunksWithoutBreadcrumbsInMixedFile(t *testing.T) {
+	const path = "guide.md"
+	e := newDocumentContextTestEngine(t, []vectorstore.Chunk{
+		breadcrumbChunk(path+"-0", path, "Guide", []string{path}, "First structured section."),
+		{ID: path + "-1", DocPath: path, Title: "Guide", Content: "Headingless qualification.", Embedding: []float32{0, 1}},
+	})
+	got, err := e.DocumentContext(context.Background(), path, ContextOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Sections) != 2 || got.Sections[0].SectionKey == got.Sections[1].SectionKey ||
+		got.Sections[1].Text != "Headingless qualification." || got.SectionsOmitted != 0 {
+		t.Fatalf("mixed context = %+v", got)
+	}
+	selected, err := e.DocumentContext(context.Background(), path, ContextOptions{
+		SectionKeys: []string{got.Sections[1].SectionKey},
+	})
+	if err != nil || len(selected.Sections) != 1 || selected.Sections[0].Text != "Headingless qualification." {
+		t.Fatalf("explicit fallback key: context = %+v, error = %v", selected, err)
+	}
+}
+
+type contextLegacyPublishingStore struct{ vectorstore.Store }
+
+func (s contextLegacyPublishingStore) ChunksByDocPath(path string) ([]vectorstore.Chunk, error) {
+	chunks, err := s.Store.ChunksByDocPath(path)
+	if err != nil {
+		return nil, err
+	}
+	return chunks, s.Store.SetMetadata("last_indexed", "legacy publication")
+}
+
+func TestDocumentContextDetectsPublicationByLegacyWriter(t *testing.T) {
+	e := semanticContextEngine(t)
+	if err := e.vecService.store.SetMetadata("index_generation", "1"); err != nil {
+		t.Fatal(err)
+	}
+	e.vecService.store = contextLegacyPublishingStore{Store: e.vecService.store}
+	_, err := e.DocumentContext(context.Background(), "docs/a.md", ContextOptions{Query: "question"})
+	if err == nil || !strings.Contains(err.Error(), "index changed") {
+		t.Fatalf("legacy publication during document read = %v", err)
+	}
+}
+
+func TestDocumentContextKeepsAuthorizedRootForTheRead(t *testing.T) {
+	e := semanticContextEngine(t)
+	authorized := resolvedTestRoot(t, t.TempDir())
+	alias := filepath.Join(t.TempDir(), "moving-root")
+	// The alias now points to a different root than the one the guard checked.
+	if err := os.Symlink(e.repoRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	e.repoRoot = alias
+	_, err := e.DocumentContext(context.Background(), "docs/a.md", ContextOptions{
+		AuthorizedRoot: authorized,
+		SectionKeys:    []string{"Guide > Limits"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "index source root does not match") {
+		t.Fatalf("index authorized through a moved alias: %v", err)
 	}
 }

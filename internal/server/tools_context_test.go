@@ -41,14 +41,19 @@ func newContextTestServer(t *testing.T) *MCPServer {
 		{ID: "doc.md-0", DocPath: "doc.md", Title: "Guide", Content: "[Guide > Plan]\n\n" + strings.Repeat("界", 400), Embedding: []float32{1, 0}},
 		{ID: "doc.md-1", DocPath: "doc.md", Title: "Guide", Content: "[Guide > Result]\n\nThe result is not confirmed.", Embedding: []float32{0, 1}},
 	})
-	if err := os.WriteFile(filepath.Join(s.config.RootPath, "doc.md"), []byte("An indexed source."), 0600); err != nil {
-		t.Fatal(err)
-	}
-	physical, err := filepath.EvalSymlinks(filepath.Join(s.config.RootPath, "doc.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{Metadata: map[string]string{"index_root": s.config.RootPath, "index_state": "ready", vectorstore.SourcePathMetadataPrefix + "doc.md": physical}}); err != nil {
+	if err := os.WriteFile(filepath.Join(s.config.RootPath, "doc.md"), []byte("An indexed source."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(s.config.RootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitIndexState(vectorstore.IndexStateUpdate{
+		Metadata: map[string]string{"index_root": root, "index_state": "ready"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	closeErr := store.Close()
@@ -90,8 +95,21 @@ func readContextTool(t *testing.T, s *MCPServer, name string, args map[string]an
 func TestDocumentContextReadsSeveralSectionsThroughMCP(t *testing.T) {
 	s := newContextTestServer(t)
 	s.config.ToolProfile = config.ToolProfileCore
+	if listedTools(t, s)["document_context"] {
+		t.Fatal("document_context listed in core profile")
+	}
+	args := map[string]any{"path": "doc.md"}
+	if err := callTool(t, s, "document_context", args); err == nil || err.Code != rpcErrMethodNotFound {
+		t.Fatalf("core profile accepted direct context: %+v", err)
+	}
+	s.config.ToolGrouping = true
+	if err := callTool(t, s, "search", map[string]any{"action": "context", "path": "doc.md"}); err == nil {
+		t.Fatal("core profile accepted grouped context")
+	}
+	s.config.ToolProfile = config.ToolProfileFull
+	s.config.ToolGrouping = false
 	if !listedTools(t, s)["document_context"] {
-		t.Fatal("context tool missing from core profile")
+		t.Fatal("document_context missing from full profile")
 	}
 	body := readContextTool(t, s, "document_context", map[string]any{"path": "doc.md", "section_keys": []string{"Guide > Plan", "Guide > Result"}, "max_chars": 256})
 	if len(body.Sections) != 2 || body.CharsReturned > 256 || !body.Truncated {
@@ -112,7 +130,7 @@ func TestDocumentContextReadsSeveralSectionsThroughMCP(t *testing.T) {
 	}
 }
 
-func TestDocumentContextCannotBypassAllowlistOrReadAnotherIndexRoot(t *testing.T) {
+func TestDocumentContextCannotBypassAllowlist(t *testing.T) {
 	s := newContextTestServer(t)
 	guard, err := paths.NewGuard(config.Config{RootPath: s.config.RootPath, AllowedPaths: []string{"allowed"}})
 	if err != nil {
@@ -123,28 +141,6 @@ func TestDocumentContextCannotBypassAllowlistOrReadAnotherIndexRoot(t *testing.T
 		if err := callTool(t, s, "document_context", map[string]any{"path": path}); err == nil || err.Code != rpcErrInvalidParams {
 			t.Fatalf("path=%s error=%+v", path, err)
 		}
-	}
-	guard, err = paths.NewGuard(config.Config{RootPath: s.config.RootPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.pathGuard = guard
-	s.config.RAG.IndexRoot = t.TempDir()
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	if err := os.WriteFile(outside, []byte("Outside allowed root."), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(s.config.RootPath, "escape.md")); err != nil {
-		t.Fatal(err)
-	}
-	if err := callTool(t, s, "document_context", map[string]any{"path": "escape.md"}); err == nil || err.Code != rpcErrInvalidParams {
-		t.Fatalf("symlink escape: %+v", err)
-	}
-	if err := os.WriteFile(filepath.Join(s.config.RAG.IndexRoot, "doc.md"), []byte("Other root."), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := callTool(t, s, "document_context", map[string]any{"path": "doc.md"}); err == nil || err.Code != rpcErrInvalidParams {
-		t.Fatalf("cross-root: %+v", err)
 	}
 }
 
@@ -193,59 +189,114 @@ func TestDocumentContextRejectsDatabaseFromAnotherRoot(t *testing.T) {
 	}
 }
 
-func TestDocumentContextBindsConfiguredSymlinksToTheirIndexedPhysicalSource(t *testing.T) {
-	s := newTestServer(t, "")
-	a, b := t.TempDir(), t.TempDir()
-	for path, text := range map[string]string{a: "Original indexed text.", b: "Replacement indexed text."} {
-		if err := os.WriteFile(filepath.Join(path, "file.md"), []byte("# Guide\n\n## Result\n\n"+text), 0600); err != nil {
+func TestDocumentContextUsesSharedIndexRootFromLinkedCheckout(t *testing.T) {
+	checkout, indexRoot := t.TempDir(), t.TempDir()
+	makeFile := func(root, name, text string) {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	link := filepath.Join(s.config.RootPath, "docs")
-	if err := os.Symlink(a, link); err != nil {
+	makeFile(indexRoot, "docs/main-only.md", "# Operations\n\n## Rollback\n\nUse rollback for the previous revision.")
+	makeFile(checkout, "docs/local.md", "A checkout-only file.")
+	makeFile(indexRoot, "blocked/private.md", "# Outside allowlist\n\nDo not return this.")
+	outside := t.TempDir()
+	makeFile(outside, "external.md", "# External\n\nDo not return this.")
+	if err := os.Symlink(filepath.Join(outside, "external.md"), filepath.Join(indexRoot, "docs/escape.md")); err != nil {
 		t.Fatal(err)
 	}
-	s.config.AllowedPaths = []string{"docs"}
-	s.config.RAG = config.RAGConfig{Enabled: true, IndexPath: t.TempDir(), IndexDirs: []string{"docs/file.md"}, KeywordFallback: true}
-	s.config.Embeddings.Mode = "local-only"
-	s.config.Embeddings.Dimension = 2
-	s.config.Embeddings.OllamaBaseURL = "http://127.0.0.1:1"
-	guard, err := paths.NewGuard(s.config)
+
+	cfg := config.Config{
+		RootPath: checkout, AllowedPaths: []string{"docs"}, ToolProfile: config.ToolProfileFull,
+		RAG: config.RAGConfig{Enabled: true, IndexRoot: indexRoot, IndexPath: t.TempDir(),
+			IndexDirs: []string{"docs", "blocked"}, ChunkSize: 2000, MaxResults: 10, KeywordFallback: true},
+		Embeddings: config.EmbeddingsConfig{Mode: "local-only", Dimension: 2,
+			OllamaBaseURL: "http://127.0.0.1:1", MaxRetries: 1},
+	}
+	guard, err := paths.NewGuard(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.pathGuard = guard
-	s.ragEngine = rag.NewEngine(s.config, nil)
-	if s.ragEngine == nil {
-		t.Fatal("engine unavailable")
-	}
+	s := New(cfg, guard)
 	t.Cleanup(s.ragEngine.Stop)
 	if err := s.ragEngine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	body := readContextTool(t, s, "document_context", map[string]any{"path": "docs/file.md"})
-	if len(body.Sections) == 0 || !strings.Contains(body.Sections[0].Text, "Original indexed text.") {
-		t.Fatalf("unchanged symlink refused: %+v", body)
+	search, rErr := s.callSemanticSearch(map[string]any{"query": "rollback"})
+	if rErr != nil {
+		t.Fatal(rErr.Message)
 	}
-	if err := os.Remove(link); err != nil {
+	result := search.(toolResult).Content[0].Text
+	if !strings.Contains(result, "Path: docs/main-only.md") || !strings.Contains(result, "Section key: Operations > Rollback") {
+		t.Fatalf("search did not expose the context pointer: %s", result)
+	}
+	body := readContextTool(t, s, "document_context", map[string]any{
+		"path": "docs/main-only.md", "section_keys": []string{"Operations > Rollback"},
+	})
+	if len(body.Sections) != 1 || body.Sections[0].Text != "Use rollback for the previous revision." {
+		t.Fatalf("shared-index context = %+v", body)
+	}
+	for _, path := range []string{"blocked/private.md", "docs/escape.md", "../docs/main-only.md", "docs/local.md"} {
+		if err := callTool(t, s, "document_context", map[string]any{"path": path}); err == nil || err.Code != rpcErrInvalidParams {
+			t.Fatalf("path %s escaped index-root authorization: %+v", path, err)
+		}
+	}
+	if err := callTool(t, s, "repo_read", map[string]any{"path": "docs/main-only.md"}); err == nil {
+		t.Fatal("repository reads must still use the linked checkout")
+	}
+}
+
+func TestDocumentContextRejectsIndexAfterRootSymlinkRetarget(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	for root, content := range map[string]string{first: "First tree content.", second: "Second tree content."} {
+		if err := os.WriteFile(filepath.Join(root, "guide.md"), []byte("# Guide\n\n"+content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(first, alias); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(b, link); err != nil {
+	cfg := config.Config{
+		RootPath: alias,
+		RAG: config.RAGConfig{
+			Enabled: true, IndexPath: t.TempDir(), IndexDirs: []string{"guide.md"},
+			ChunkSize: 2000, MaxResults: 10, KeywordFallback: true,
+		},
+		Embeddings: config.EmbeddingsConfig{
+			Mode: "local-only", Dimension: 2, OllamaBaseURL: "http://127.0.0.1:1", MaxRetries: 1,
+		},
+	}
+	start := func() *MCPServer {
+		t.Helper()
+		guard, err := paths.NewGuard(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := New(cfg, guard)
+		t.Cleanup(s.ragEngine.Stop)
+		return s
+	}
+	original := start()
+	if err := original.ragEngine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	guard, err = paths.NewGuard(s.config)
-	if err != nil {
+	got := readContextTool(t, original, "document_context", map[string]any{"path": "guide.md"})
+	if len(got.Sections) != 1 || got.Sections[0].Text != "First tree content." {
+		t.Fatalf("context from original symlink root = %+v", got)
+	}
+	if err := os.Remove(alias); err != nil {
 		t.Fatal(err)
 	}
-	s.pathGuard = guard
-	if err := callTool(t, s, "document_context", map[string]any{"path": "docs/file.md"}); err == nil {
-		t.Fatal("old source text disclosed after symlink retarget")
-	}
-	if err := s.ragEngine.IndexDocuments(context.Background()); err != nil {
+	if err := os.Symlink(second, alias); err != nil {
 		t.Fatal(err)
 	}
-	body = readContextTool(t, s, "document_context", map[string]any{"path": "docs/file.md"})
-	if len(body.Sections) == 0 || !strings.Contains(body.Sections[0].Text, "Replacement indexed text.") {
-		t.Fatalf("new source unavailable after indexing: %+v", body)
+	restarted := start()
+	if err := callTool(t, restarted, "document_context", map[string]any{"path": "guide.md"}); err == nil || !strings.Contains(err.Message, "index source root does not match") {
+		t.Fatalf("retargeted root should refuse the old database: %+v", err)
 	}
 }

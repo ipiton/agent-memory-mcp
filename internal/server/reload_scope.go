@@ -56,6 +56,7 @@ func restartRequiredChanges(old, next config.Config) []string {
 	add("MCP_EMBEDDING_MODE", old.Embeddings.Mode != next.Embeddings.Mode)
 	add("MCP_EMBEDDING_TIMEOUT", old.Embeddings.Timeout != next.Embeddings.Timeout)
 	add("MCP_EMBEDDING_MAX_RETRIES", old.Embeddings.MaxRetries != next.Embeddings.MaxRetries)
+	add("OLLAMA_EMBEDDING_MODEL (memory)", old.Embeddings.OllamaModel != next.Embeddings.OllamaModel)
 
 	// The HTTP listener is bound at startup.
 	add("MCP_HTTP_MODE", old.HTTP.Mode != next.HTTP.Mode)

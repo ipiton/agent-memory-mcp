@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +23,12 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	defer re.indexMu.Unlock()
 
 	startTime := time.Now().UTC()
+	// Store the resolved root so retargeting a root symlink cannot authorize
+	// another tree's indexed text on the next server startup.
+	indexRoot := re.repoRoot
+	if resolved, err := filepath.EvalSymlinks(indexRoot); err == nil {
+		indexRoot = resolved
+	}
 	// chunkerVersion bumps trigger a full rebuild on next IndexDocuments.
 	//   char-v1     — naive char-budget splitter (initial)
 	//   skeleton-v1 — T49: Markdown skeleton tree + breadcrumb prefix +
@@ -100,7 +107,7 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			zap.Int("stale_files", stale))
 	}
 
-	if err := re.checkIndexRoot(allDocs, indexedFiles); err != nil {
+	if err := re.checkIndexRoot(indexRoot, allDocs, indexedFiles); err != nil {
 		return err
 	}
 
@@ -315,17 +322,16 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	}
 	sort.Strings(deletePaths)
 
+	if resolved, err := filepath.EvalSymlinks(re.repoRoot); err == nil && resolved != indexRoot {
+		return fmt.Errorf("index source root changed during indexing; retry")
+	}
+
 	finalMetadata := map[string]string{
 		"chunker_version":     chunkerVersion,
-		indexRootMetadataKey:  re.repoRoot,
+		indexRootMetadataKey:  indexRoot,
 		indexStateMetadataKey: indexStateReady,
 		indexStartedAtKey:     startTime.Format(time.RFC3339),
 		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
-	}
-	for _, doc := range allDocs {
-		if doc.PhysicalPath != "" {
-			finalMetadata[vectorstore.SourcePathMetadataPrefix+doc.Path] = doc.PhysicalPath
-		}
 	}
 	if indexedModel != "" {
 		finalMetadata["embedding_model"] = indexedModel
@@ -378,12 +384,12 @@ func (re *Engine) AllowRootChange() {
 // A changed root alone is not enough: a moved repository keeps its relative
 // paths and has nothing to lose. An index with no recorded root predates the
 // stamp and is judged the same way.
-func (re *Engine) checkIndexRoot(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
+func (re *Engine) checkIndexRoot(indexRoot string, currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
 	if re.allowRootChange {
 		return nil
 	}
 	oldRoot, _ := re.vecService.store.GetMetadata(indexRootMetadataKey)
-	if oldRoot == re.repoRoot {
+	if oldRoot == indexRoot {
 		return nil
 	}
 	_, toRemove := re.calculateIndexChanges(currentDocs, indexedFiles, false)

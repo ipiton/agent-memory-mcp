@@ -170,7 +170,7 @@ check "a grouped call works" "$OUT" "the smokeword fact"
 cp "$DATA/config.env" "$WORK/config.env.orig"
 echo "MCP_TOOL_GROUPING=false" >>"$DATA/config.env"
 OUT="$(session '[]')"
-check "config.env turns grouping off" "$OUT" "tools: 18"
+check "config.env turns grouping off" "$OUT" "tools: 17"
 cp "$WORK/config.env.orig" "$DATA/config.env"
 
 OUT="$(plugin_env "$PLUGIN/scripts/launch.sh" hook context-inject 2>&1)"

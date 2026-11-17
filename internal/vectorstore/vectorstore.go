@@ -2,7 +2,6 @@
 package vectorstore
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -35,7 +34,6 @@ type Store interface {
 	StartVectorLoad() bool
 	AllChunks() ([]Chunk, error)
 	ChunksByDocPath(docPath string) ([]Chunk, error)
-	ReadDocumentSnapshot(ctx context.Context, docPath string) (*DocumentSnapshot, error)
 	Count() int
 	Close() error
 	// Metadata
@@ -912,10 +910,7 @@ func (s *SQLiteStore) queryChunks(query string, args ...any) ([]Chunk, error) {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	return s.scanChunks(rows)
-}
 
-func (s *SQLiteStore) scanChunks(rows *sql.Rows) ([]Chunk, error) {
 	var chunks []Chunk
 	for rows.Next() {
 		var chunk Chunk

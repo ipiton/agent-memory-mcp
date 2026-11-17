@@ -2,10 +2,10 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,9 +23,9 @@ const (
 // ContextOptions chooses indexed sections within one document. A query and
 // explicit section keys are mutually exclusive; neither selects document order.
 type ContextOptions struct {
-	// AuthorizedPath is supplied by the MCP path guard, never by tool arguments.
-	// Compare it as captured; resolving it again would reopen a symlink race.
-	AuthorizedPath string   `json:"-"`
+	// AuthorizedRoot is the resolved index root used by the server's path guard.
+	// Keep that identity for the entire read even if the configured alias moves.
+	AuthorizedRoot string   `json:"-"`
 	Query          string   `json:"query,omitempty"`
 	SectionKeys    []string `json:"section_keys,omitempty"`
 	MaxChars       int      `json:"max_chars,omitempty"`
@@ -101,48 +101,18 @@ func (re *Engine) DocumentContext(ctx context.Context, docPath string, options C
 	if options.MaxSections == 0 {
 		options.MaxSections = DefaultContextSections
 	}
-	store := re.vecService.store
-	snapshot, err := store.ReadDocumentSnapshot(ctx, docPath)
+	chunks, model, err := re.readContextChunks(docPath, options.AuthorizedRoot, strings.TrimSpace(options.Query) != "")
 	if err != nil {
-		return nil, fmt.Errorf("load indexed document: %w", err)
+		return nil, err
 	}
-	root, err := filepath.EvalSymlinks(snapshot.Metadata[indexRootMetadataKey])
-	if err != nil || snapshot.Metadata[indexRootMetadataKey] == "" {
-		return nil, fmt.Errorf("index source root is unknown; run index_documents")
-	}
-	expected, err := filepath.EvalSymlinks(re.repoRoot)
-	if err != nil || root != expected {
-		return nil, fmt.Errorf("index source root does not match this repository; use a separate index")
-	}
-	if snapshot.Metadata[indexStateMetadataKey] != indexStateReady {
-		return nil, fmt.Errorf("index is incomplete or rebuilding; finish index_documents before reading context")
-	}
-	absSource, err := filepath.Abs(filepath.Join(re.repoRoot, docPath))
-	if err != nil {
-		return nil, fmt.Errorf("resolve source path: %w", err)
-	}
-	currentSource, err := filepath.EvalSymlinks(absSource)
-	storedSource := snapshot.Metadata[vectorstore.SourcePathMetadataPrefix+docPath]
-	if err != nil || storedSource != currentSource || (options.AuthorizedPath != "" && storedSource != options.AuthorizedPath) {
-		return nil, fmt.Errorf("indexed source origin is missing or changed; run index_documents")
-	}
-	chunks := snapshot.Chunks
 	if len(chunks) == 0 {
 		return nil, fmt.Errorf("document is not indexed: %s", docPath)
 	}
-	// Chunk IDs end in an unpadded sequence; lexical order puts 10 before 2.
-	sort.SliceStable(chunks, func(i, j int) bool {
-		a, ea := strconv.Atoi(chunks[i].ID[strings.LastIndex(chunks[i].ID, "-")+1:])
-		b, eb := strconv.Atoi(chunks[j].ID[strings.LastIndex(chunks[j].ID, "-")+1:])
-		if ea == nil && eb == nil && a != b {
-			return a < b
-		}
-		return chunks[i].ID < chunks[j].ID
-	})
+
 	var queryVector []float32
 	selection := "document_order"
 	if strings.TrimSpace(options.Query) != "" {
-		queryVector, err = re.contextQueryVector(ctx, options.Query, snapshot.Metadata)
+		queryVector, err = re.contextQueryVector(ctx, options.Query, model)
 		if err != nil {
 			return nil, err
 		}
@@ -150,35 +120,27 @@ func (re *Engine) DocumentContext(ctx context.Context, docPath string, options C
 	} else if len(options.SectionKeys) > 0 {
 		selection = "explicit"
 	}
+
+	indexed := collectIndexedSections(chunks, docPath)
+
 	var candidates []contextCandidate
-	positions := map[string]int{}
-	for _, chunk := range chunks {
+	positions := make(map[string]int, len(indexed))
+	for i, section := range indexed {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		path, body, ok := ExtractBreadcrumb(chunk.Content)
-		key := SectionKey(path)
-		if !ok {
-			key, body = chunk.Title, chunk.Content
-			if key == "" {
-				key = docPath
-			}
-		}
-		score := 0.0
+		candidate := contextCandidate{key: section.key, text: section.text(), order: i}
 		if queryVector != nil {
-			if len(chunk.Embedding) != len(queryVector) {
-				return nil, fmt.Errorf("document vectors are missing or incompatible; run index_documents")
+			candidate.score = -1
+			for _, vector := range section.vectors {
+				if len(vector) != len(queryVector) {
+					return nil, fmt.Errorf("document vectors are missing or incompatible; run index_documents")
+				}
+				candidate.score = max(candidate.score, vectorstore.CosineSimilarity(queryVector, vector))
 			}
-			score = vectorstore.CosineSimilarity(queryVector, chunk.Embedding)
 		}
-		pos, exists := positions[key]
-		if !exists {
-			positions[key] = len(candidates)
-			candidates = append(candidates, contextCandidate{key: key, text: body, score: score, order: len(candidates)})
-		} else {
-			candidates[pos].text += "\n\n" + body
-			candidates[pos].score = max(candidates[pos].score, score)
-		}
+		positions[candidate.key] = i
+		candidates = append(candidates, candidate)
 	}
 	available := len(candidates)
 	if selection == "semantic" {
@@ -258,10 +220,75 @@ func boundedContextSections(candidates []contextCandidate, maxChars int) ([]Cont
 	return sections, chars
 }
 
-func (re *Engine) contextQueryVector(ctx context.Context, query string, metadata map[string]string) ([]float32, error) {
-	if metadata[keywordOnlyMetadataKey] == "true" {
-		return nil, fmt.Errorf("semantic context requires vectors; run index_documents or use section_keys")
+// Indexing marks the store dirty before writes and advances its publication
+// stamps at the end of a run. Bracket the ordinary document read to detect a
+// publication by the writer while loading its chunks and metadata.
+func (re *Engine) readContextChunks(docPath, expectedRoot string, semantic bool) ([]vectorstore.Chunk, string, error) {
+	store := re.vecService.store
+	metadata := func(key string) (string, error) {
+		value, err := store.GetMetadata(key)
+		if errors.Is(err, vectorstore.ErrMetadataNotFound) {
+			return "", nil
+		}
+		return value, err
 	}
+	version := func() ([2]string, error) {
+		generation, err := metadata("index_generation")
+		if err != nil {
+			return [2]string{}, err
+		}
+		stamp, err := metadata("last_indexed")
+		return [2]string{generation, stamp}, err
+	}
+	before, err := version()
+	if err != nil {
+		return nil, "", err
+	}
+	state, err := store.GetMetadata(indexStateMetadataKey)
+	if err != nil || state != indexStateReady {
+		return nil, "", fmt.Errorf("index is incomplete or rebuilding; finish index_documents before reading context")
+	}
+	recordedRoot, err := store.GetMetadata(indexRootMetadataKey)
+	if err != nil || recordedRoot == "" {
+		return nil, "", fmt.Errorf("index source root is unknown; run index_documents")
+	}
+	if expectedRoot == "" {
+		expectedRoot, err = filepath.EvalSymlinks(re.repoRoot)
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve index root: %w", err)
+		}
+	}
+	if filepath.Clean(recordedRoot) != expectedRoot {
+		return nil, "", fmt.Errorf("index source root does not match this repository; use a separate index or re-index a legacy symlinked root")
+	}
+
+	var model string
+	if semantic {
+		model, err = store.GetMetadata("embedding_model")
+		if err != nil || model == "" {
+			return nil, "", fmt.Errorf("semantic context requires a vector index; run index_documents or use section_keys")
+		}
+	}
+	chunks, err := store.ChunksByDocPath(docPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("load indexed document: %w", err)
+	}
+
+	state, err = store.GetMetadata(indexStateMetadataKey)
+	if err != nil || state != indexStateReady {
+		return nil, "", fmt.Errorf("index is incomplete or rebuilding; finish index_documents before reading context")
+	}
+	after, err := version()
+	if err != nil {
+		return nil, "", err
+	}
+	if before != after {
+		return nil, "", fmt.Errorf("index changed while reading context; retry")
+	}
+	return chunks, model, nil
+}
+
+func (re *Engine) contextQueryVector(ctx context.Context, query, model string) ([]float32, error) {
 	result, err := re.vecService.config.Embedder.EmbedQueryDetailed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed context query: %w", err)
@@ -272,7 +299,6 @@ func (re *Engine) contextQueryVector(ctx context.Context, query string, metadata
 	if len(result.Fallbacks) > 0 {
 		return nil, fmt.Errorf("document context does not allow embedding fallback")
 	}
-	model := metadata["embedding_model"]
 	if model == "" || model != result.ModelID {
 		return nil, fmt.Errorf("context embedding model mismatch or unknown; run index_documents")
 	}

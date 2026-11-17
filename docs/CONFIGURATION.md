@@ -35,8 +35,8 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `MCP_MAX_SEARCH_RESULTS` | `200` | Hard cap for `repo_search` result count |
 | `MCP_MAX_DEPTH` | `3` | Max directory recursion depth for `repo_list` |
 | `MCP_STDIO_MODE` | `line` | Stdio framing: `line` (newline-delimited) or `lsp` (Content-Length headers) |
-| `MCP_TOOL_PROFILE` | `full` | `core` offers and accepts 18 tools: search, bounded document context, memory, typed memory and session review. A call to anything else is refused on the server, not only hidden from `tools/list`. `full` is every tool. The Claude Code plugin sets `core` |
-| `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (42→8 tools in the full catalog; 18→6 in the core profile, before availability filtering). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. The Claude Code plugin turns it on. See [Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency) |
+| `MCP_TOOL_PROFILE` | `full` | `core` offers and accepts 17 tools chosen from real usage: search, memory, typed memory and session review. A call to anything else is refused on the server, not only hidden from `tools/list`. `full` is every tool. The Claude Code plugin sets `core` |
+| `MCP_TOOL_GROUPING` | `false` | Collapse the core toolset into grouped meta-tools on `tools/list` to cut the discovery schema payload (42→8 tools before availability filtering in the full profile). `tools/call` accepts both grouped (`memory`+`action`) and legacy names regardless. With the `core` profile it is 17→6 tools, 14→9 KB. The Claude Code plugin turns it on. See [Tool grouping mode](MCP_TOOLS.md#tool-grouping-mode-token-efficiency) |
 | `MCP_COMPILE_BACKGROUND` | `false` | `context-inject` stops asking the session's model to process pending summaries, and `compile --detach` does it with a headless `claude`. The Claude Code plugin turns it on. See [Background compilation](HOOKS.md#background-compilation) |
 | `MCP_COMPILE_MODEL` | `haiku` | Model for `compile` |
 | `MCP_COMPILE_CLAUDE_BIN` | `claude` | The `claude` executable for `compile`, for hooks whose `PATH` does not have it |
@@ -53,6 +53,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
+| `OLLAMA_EMBEDDING_MODEL` | unset | Pin a single Ollama model. Unset keeps `bge-m3:latest` followed by `mxbai-embed-large:latest`; an explicit model never falls back to those defaults. Set `MCP_EMBEDDING_DIMENSION` to match the model. Restart the server for memory embeddings, then rebuild the document index and re-embed memories when switching models |
 | `LLAMACPP_BASE_URL` | - | llama.cpp OpenAI-compatible base URL (e.g. `http://127.0.0.1:8080/v1`); empty disables it |
 | `LLAMACPP_EMBEDDING_MODEL` | `bge-m3` | llama.cpp embedding model label (used only when `LLAMACPP_BASE_URL` is set). The label is part of the derived model id stored on every record, so changing it invalidates the bank exactly as changing the model does — see `docs/EMBEDDING_MIGRATION.md` |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
@@ -132,6 +133,12 @@ RAG indexing scans supported docs and engineering text files, but you can furthe
 - `MCP_REDACT_SECRETS=true` to redact common secret-like lines and private key blocks before indexing
 
 This is especially important if you use hosted embedding providers or shared HTTP mode.
+
+A directory explicitly listed in `MCP_INDEX_DIRS` may be a symbolic link. Indexing
+follows that directory and retains paths under the configured link, so replacing
+`docs` with a link to the same files keeps their indexed paths. Excludes also use
+those logical paths. Directory links found inside a scanned directory are not
+followed, preventing link cycles; list such a directory explicitly to index it.
 
 ### Automatic session tracking
 

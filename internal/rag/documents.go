@@ -73,11 +73,14 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 			continue
 		}
 
-		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
+		// DirFS follows a configured directory symlink while WalkDir still skips
+		// directory symlinks encountered below it, avoiding recursive link cycles.
+		err = fs.WalkDir(os.DirFS(fullPath), ".", func(rel string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if path != fullPath && ds.shouldSkipPath(path, d.IsDir()) {
+			path := filepath.Join(fullPath, rel)
+			if rel != "." && ds.shouldSkipPath(path, d.IsDir()) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
@@ -112,15 +115,7 @@ func (ds *documentService) collectDocuments() ([]document, error) {
 }
 
 func (ds *documentService) processFile(path string) ([]document, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve source path: %w", err)
-	}
-	physicalPath, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve source symlinks: %w", err)
-	}
-	content, err := os.ReadFile(physicalPath)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -150,7 +145,7 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 	}
 
 	fileHash := calculateFileHash(cleanContent)
-	modTime := ds.getFileModTime(physicalPath)
+	modTime := ds.getFileModTime(path)
 
 	// Markdown documents are chunked along header boundaries with a
 	// breadcrumb prefix per chunk (T49 slice 1). All other source types
@@ -174,7 +169,6 @@ func (ds *documentService) processFile(path string) ([]document, error) {
 			Path:         relPath,
 			LastModified: modTime,
 			FileHash:     fileHash,
-			PhysicalPath: physicalPath,
 		})
 	}
 
