@@ -183,6 +183,7 @@ type EmbeddingsConfig struct {
 	OpenAIBaseURL   string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
 	OpenAIModel     string // OpenAI embedding model (default: text-embedding-3-small)
 	OllamaBaseURL   string // Ollama base URL (default: http://localhost:11434)
+	OllamaModel     string // OLLAMA_EMBEDDING_MODEL; empty keeps the default model fallback chain.
 	LlamaCPPBaseURL string // llama.cpp OpenAI-compatible base URL; empty = disabled. Env: LLAMACPP_BASE_URL
 	LlamaCPPModel   string // llama.cpp embedding model (default: bge-m3). Env: LLAMACPP_EMBEDDING_MODEL
 	Dimension       int    // Embedding vector dimension (default: 1024)
@@ -421,6 +422,7 @@ type envValues struct {
 	openaiBaseURL                    string
 	openaiModel                      string
 	ollamaBaseURL                    string
+	ollamaModel                      string
 	llamaCPPBaseURL                  string
 	llamaCPPModel                    string
 	embeddingDimension               int
@@ -532,6 +534,7 @@ func readEnvValues(dotenv map[string]string) (envValues, error) {
 		openaiBaseURL:                    s.String("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		openaiModel:                      s.String("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
 		ollamaBaseURL:                    s.String("OLLAMA_BASE_URL", "http://localhost:11434"),
+		ollamaModel:                      strings.TrimSpace(s.String("OLLAMA_EMBEDDING_MODEL", "")),
 		llamaCPPBaseURL:                  s.String("LLAMACPP_BASE_URL", ""),
 		llamaCPPModel:                    s.String("LLAMACPP_EMBEDDING_MODEL", "bge-m3"),
 		embeddingDimension:               s.Int("MCP_EMBEDDING_DIMENSION", 1024),
@@ -731,6 +734,7 @@ func resolvePaths(ev envValues) (Config, error) {
 			OpenAIBaseURL:   ev.openaiBaseURL,
 			OpenAIModel:     ev.openaiModel,
 			OllamaBaseURL:   ev.ollamaBaseURL,
+			OllamaModel:     ev.ollamaModel,
 			LlamaCPPBaseURL: strings.TrimSpace(ev.llamaCPPBaseURL),
 			LlamaCPPModel:   ev.llamaCPPModel,
 			Dimension:       ev.embeddingDimension,
@@ -1172,6 +1176,7 @@ func (c Config) EmbedderConfig() embedder.Config {
 		OpenAIBaseURL:   c.Embeddings.OpenAIBaseURL,
 		OpenAIModel:     c.Embeddings.OpenAIModel,
 		OllamaBaseURL:   c.Embeddings.OllamaBaseURL,
+		OllamaModel:     c.Embeddings.OllamaModel,
 		LlamaCPPBaseURL: c.Embeddings.LlamaCPPBaseURL,
 		LlamaCPPModel:   c.Embeddings.LlamaCPPModel,
 		Dimension:       c.Embeddings.Dimension,

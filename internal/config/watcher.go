@@ -120,6 +120,7 @@ type ragFingerprint struct {
 	OpenAIBaseURL     string
 	OpenAIModel       string
 	OllamaBaseURL     string
+	OllamaModel       string
 	ChunkSize         int
 	ChunkOverlap      int
 	AutoIndex         bool
@@ -141,6 +142,7 @@ func ragFingerprintOf(c Config) ragFingerprint {
 		OpenAIBaseURL:     c.Embeddings.OpenAIBaseURL,
 		OpenAIModel:       c.Embeddings.OpenAIModel,
 		OllamaBaseURL:     c.Embeddings.OllamaBaseURL,
+		OllamaModel:       c.Embeddings.OllamaModel,
 		ChunkSize:         c.RAG.ChunkSize,
 		ChunkOverlap:      c.RAG.ChunkOverlap,
 		AutoIndex:         c.RAG.AutoIndex,

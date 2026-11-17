@@ -41,6 +41,7 @@ Embeddings.OpenAIAPIKey=oa-key
 Embeddings.OpenAIBaseURL=http://oa.local
 Embeddings.OpenAIModel=oa-model
 Embeddings.OllamaBaseURL=http://ol.local
+Embeddings.OllamaModel=ollama-model
 Embeddings.LlamaCPPBaseURL=http://lc.local
 Embeddings.LlamaCPPModel=lc-model
 Embeddings.Dimension=512

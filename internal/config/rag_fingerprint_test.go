@@ -30,6 +30,7 @@ func TestRAGFingerprintFieldSetIsPinned(t *testing.T) {
 		"IndexPath",
 		"JinaAPIKey",
 		"OllamaBaseURL",
+		"OllamaModel",
 		"OpenAIAPIKey",
 		"OpenAIBaseURL",
 		"OpenAIModel",
@@ -78,6 +79,7 @@ func TestRAGFingerprintReadsEveryField(t *testing.T) {
 			OpenAIBaseURL: "https://example.test/v1",
 			OpenAIModel:   "model",
 			OllamaBaseURL: "http://localhost:11434",
+			OllamaModel:   "embeddinggemma:300m",
 		},
 	}
 

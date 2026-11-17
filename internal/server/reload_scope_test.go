@@ -28,6 +28,7 @@ func TestRestartRequiredChangesNamesUnappliedSettings(t *testing.T) {
 		{"root path", func(c *config.Config) { c.RootPath = "/tmp/other" }, "MCP_ROOT (path guard)"},
 		{"tool grouping", func(c *config.Config) { c.ToolGrouping = true }, "MCP_TOOL_GROUPING"},
 		{"strict retrieval", func(c *config.Config) { c.RetrievalStrict = true }, "MCP_RETRIEVAL_STRICT"},
+		{"Ollama memory model", func(c *config.Config) { c.Embeddings.OllamaModel = "embeddinggemma:300m" }, "OLLAMA_EMBEDDING_MODEL (memory)"},
 		{"review-queue suppression", func(c *config.Config) { c.Session.SuppressReviewQueueWrites = true }, "SEMA_MCP_SUPPRESS_REVIEW_QUEUE_WRITES"},
 	}
 
