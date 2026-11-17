@@ -154,11 +154,26 @@ func TestIndexMissingOptionalSourceDoesNotBlockHealthyUpdates(t *testing.T) {
 }
 
 func TestIndexUnavailableSubdirectoryDoesNotBlockSiblings(t *testing.T) {
+	t.Run("directory", func(t *testing.T) { testUnavailableSubdirectory(t, false) })
+	t.Run("configured symlink", func(t *testing.T) { testUnavailableSubdirectory(t, true) })
+}
+
+func testUnavailableSubdirectory(t *testing.T, linked bool) {
+	t.Helper()
 	srv := newBatchEmbeddingServer(t)
 	t.Cleanup(srv.Close)
 	root := newRootProject(t, "a.md", "z-deleted.md")
 	writeCorpusFile(t, root, "docs/hidden/kept.md", "# Kept\n\nprotected material\n")
 	writeCorpusFile(t, root, "docs/hidden-other/deleted.md", "# Removed\n\nold material\n")
+	if linked {
+		if err := os.Rename(filepath.Join(root, "docs"), filepath.Join(root, "source")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("source", filepath.Join(root, "docs")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	engine := newRootEngine(t, root, t.TempDir(), srv.URL)
 	if err := engine.IndexDocuments(context.Background()); err != nil {
 		t.Fatal(err)
@@ -180,6 +195,11 @@ func TestIndexUnavailableSubdirectoryDoesNotBlockSiblings(t *testing.T) {
 	if _, err := os.ReadDir(hidden); err == nil {
 		t.Skip("filesystem permits reading")
 	}
+	scan := engine.docService.collectDocuments()
+	if !reflect.DeepEqual(scan.unavailablePaths, []string{"docs/hidden"}) {
+		t.Fatalf("scan failure paths = %v, want [docs/hidden]", scan.unavailablePaths)
+	}
+
 	for _, path := range []string{"docs/z-deleted.md", "docs/hidden-other/deleted.md"} {
 		if err := os.Remove(filepath.Join(root, path)); err != nil {
 			t.Fatal(err)
@@ -541,5 +561,78 @@ func TestIndexPartialDeletionPreservesKeywordOnlyUpgrade(t *testing.T) {
 		if len(chunk.Embedding) == 0 {
 			t.Fatalf("chunk %s has no vector after model recovery", chunk.ID)
 		}
+	}
+}
+
+func TestIndexUnavailableSourceStillPrunesExplicitExclusions(t *testing.T) {
+	for _, rule := range []string{"directory", "glob"} {
+		t.Run(rule, func(t *testing.T) {
+			srv := newBatchEmbeddingServer(t)
+			t.Cleanup(srv.Close)
+			root := newRootProject(t, "private/removed.md", "public.md")
+			engine := newRootEngine(t, root, t.TempDir(), srv.URL)
+			ctx := context.Background()
+			if err := engine.IndexDocuments(ctx); err != nil {
+				t.Fatal(err)
+			}
+			switch rule {
+			case "directory":
+				engine.docService.config.IndexExcludeDirs = []string{"docs/private"}
+			case "glob":
+				engine.docService.config.IndexExcludeGlobs = []string{"docs/private/*.md"}
+			}
+			if err := os.Rename(filepath.Join(root, "docs"), filepath.Join(root, "offline")); err != nil {
+				t.Fatal(err)
+			}
+			if !engine.needsIndexing() {
+				t.Fatal("configured exclusion was not detected")
+			}
+			if err := engine.IndexDocuments(ctx); err != nil {
+				t.Fatal(err)
+			}
+			assertIndexed(t, engine, "docs/public.md")
+			removed, err := engine.vecService.store.ChunksByDocPath("docs/private/removed.md")
+			if err != nil || len(removed) != 0 {
+				t.Fatalf("excluded chunks = %v, err = %v", removed, err)
+			}
+		})
+	}
+}
+
+func TestIndexRootAdoptionCannotKeepUnavailableForeignFiles(t *testing.T) {
+	srv := newBatchEmbeddingServer(t)
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	indexPath := t.TempDir()
+	oldRoot := newRootProject(t, "a.md", "b.md", "c.md")
+	oldEngine := newRootEngine(t, oldRoot, indexPath, srv.URL)
+	writeCorpusFile(t, oldRoot, "README.md", "# Old\n\nOld project.")
+	oldEngine.docService.config.IndexDirs = []string{"docs", "README.md"}
+	if err := oldEngine.IndexDocuments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	nextRoot := newRootProject(t, "a.md", "b.md", "c.md")
+	writeCorpusFile(t, nextRoot, "README.md", "# New\n\nNew project.")
+	if err := os.Rename(filepath.Join(nextRoot, "docs", "c.md"), filepath.Join(nextRoot, "missing")); err != nil {
+		t.Fatal(err)
+	}
+	engine := newRootEngine(t, nextRoot, indexPath, srv.URL)
+	engine.docService.config.IndexDirs = []string{"docs/a.md", "docs/b.md", "docs/c.md", "README.md"}
+	if err := engine.IndexDocuments(ctx); err == nil || !strings.Contains(err.Error(), "cannot adopt") {
+		t.Fatalf("automatic root adoption = %v", err)
+	}
+	recordedRoot, err := engine.vecService.store.GetMetadata(indexRootMetadataKey)
+	if err != nil || recordedRoot != oldRoot {
+		t.Fatalf("index root = %q, err = %v", recordedRoot, err)
+	}
+	assertIndexed(t, engine, "README.md", "docs/a.md", "docs/b.md", "docs/c.md")
+	engine.AllowRootChange()
+	if err := engine.IndexDocuments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertIndexed(t, engine, "README.md", "docs/a.md", "docs/b.md")
+	removed, err := engine.vecService.store.ChunksByDocPath("docs/c.md")
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("foreign chunks = %v, err = %v", removed, err)
 	}
 }

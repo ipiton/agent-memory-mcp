@@ -367,11 +367,11 @@ configured and contributes zero files is therefore reported by name (T97) —
 omitting it would make it look like a root nobody had configured. Common
 causes: it holds no supported file types, or `MCP_INDEX_EXCLUDE_DIRS` /
 `MCP_INDEX_EXCLUDE_GLOBS` filtered everything out. A missing or unreadable
-configured path is logged; its indexed records and chunks are retained while
-accessible sources continue to update. A missing optional path that has never
+configured path is logged. Records and chunks for paths still included in the
+configuration are retained while accessible sources continue to update. A missing optional path that has never
 been indexed does not block the run. Restore the path and retry, or remove an
 intentionally retired source from `MCP_INDEX_DIRS`. A model or chunker rebuild
-waits for unavailable indexed sources before changing the index.
+waits for unavailable indexed sources that are still included before changing the index.
 
 ## Engineering workflow tools
 

@@ -35,6 +35,7 @@ type Config struct {
 	OpenAIBaseURL string // OpenAI-compatible base URL (default: https://api.openai.com/v1)
 	OpenAIModel   string // Embedding model (default: text-embedding-3-small)
 	OllamaBaseURL string
+	OllamaModel   string // Empty keeps the default Ollama model fallback chain.
 	// llama.cpp (llama-server --embedding) exposes an OpenAI-compatible
 	// /v1/embeddings endpoint. Opt-in: only joins the provider chain when
 	// LlamaCPPBaseURL is non-empty. Works in local-only mode.
@@ -125,6 +126,7 @@ func New(config Config, logger *zap.Logger) (*Embedder, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	config.OllamaModel = strings.TrimSpace(config.OllamaModel)
 	// Default to Ollama only when no other local backend is configured. With
 	// llama.cpp wired up, an empty OLLAMA_BASE_URL means "don't use Ollama" —
 	// forcing the default left a dead provider in the fallback chain, so every
@@ -241,7 +243,7 @@ func (e *Embedder) embedWithTaskDetailed(ctx context.Context, text string, task 
 	}
 
 	if e.localOnlyMode() {
-		return nil, fmt.Errorf("local-only embedding mode failed: start Ollama at %s and pull bge-m3 or mxbai-embed-large, or disable MCP_EMBEDDING_MODE=local-only", e.config.OllamaBaseURL)
+		return nil, fmt.Errorf("local-only embedding mode failed: start Ollama at %s and pull %s, or disable MCP_EMBEDDING_MODE=local-only", e.config.OllamaBaseURL, strings.Join(e.ollamaModels(), " or "))
 	}
 	return nil, e.exhaustedError("embedding", fallbacks)
 }
@@ -310,7 +312,7 @@ func (e *Embedder) batchEmbedWithTaskDetailed(ctx context.Context, texts []strin
 	}
 
 	if e.localOnlyMode() {
-		return nil, fmt.Errorf("local-only batch embedding failed: start Ollama at %s and pull bge-m3 or mxbai-embed-large, or disable MCP_EMBEDDING_MODE=local-only", e.config.OllamaBaseURL)
+		return nil, fmt.Errorf("local-only batch embedding failed: start Ollama at %s and pull %s, or disable MCP_EMBEDDING_MODE=local-only", e.config.OllamaBaseURL, strings.Join(e.ollamaModels(), " or "))
 	}
 	return nil, e.exhaustedError("batch embedding", fallbacks)
 }
@@ -396,10 +398,18 @@ func (e *Embedder) candidates(task string) []providerCandidate {
 		add(llamaCPPAdapter{embedder: e})
 	}
 	if e.config.OllamaBaseURL != "" {
-		add(ollamaAdapter{embedder: e, model: defaultOllamaPrimaryModel})
-		add(ollamaAdapter{embedder: e, model: defaultOllamaBackupModel})
+		for _, model := range e.ollamaModels() {
+			add(ollamaAdapter{embedder: e, model: model})
+		}
 	}
 	return out
+}
+
+func (e *Embedder) ollamaModels() []string {
+	if e.config.OllamaModel != "" {
+		return []string{e.config.OllamaModel}
+	}
+	return []string{defaultOllamaPrimaryModel, defaultOllamaBackupModel}
 }
 
 func (e *Embedder) validateEmbedding(providerName string, embedding []float32) bool {

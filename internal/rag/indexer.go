@@ -108,18 +108,26 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		return fmt.Errorf("no documents found to index")
 	}
 
+	oldRoot, _ := store.GetMetadata(indexRootMetadataKey)
+	if oldRoot != re.repoRoot && re.allowRootChange {
+		// An explicit replacement must not import unscanned records from the old root.
+		scan.unavailablePaths = nil
+	}
 	protectedFiles := 0
 	for path := range indexedFiles {
-		if scan.isUnavailable(path) {
+		if re.preservesUnavailablePath(scan, path) {
 			protectedFiles++
 		}
+	}
+	if oldRoot != re.repoRoot && protectedFiles > 0 {
+		return fmt.Errorf("cannot adopt the index from a different or unknown root while %d indexed file(s) are unavailable; restore the sources or use --allow-root-change", protectedFiles)
 	}
 	if needsRebuild && protectedFiles > 0 {
 		return fmt.Errorf("cannot rebuild index while %d indexed file(s) are unavailable; restore sources or remove them from MCP_INDEX_DIRS and retry", protectedFiles)
 	}
 	toAdd, toRemove := re.calculateScanChanges(scan, indexedFiles, needsRebuild)
 	// An unavailable source alone is not an index update.
-	if len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
+	if oldRoot == re.repoRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
 		return nil
 	}
 
@@ -406,18 +414,22 @@ func (re *Engine) checkIndexRoot(currentDocs []document, indexedFiles map[string
 		re.repoRoot, oldRoot, len(toRemove), len(indexedFiles))
 }
 
+func (re *Engine) preservesUnavailablePath(scan documentScan, path string) bool {
+	return scan.isUnavailable(path) && re.docService.admitsPath(path)
+}
+
 // A failed scan cannot establish deletions or replacements under its path.
 func (re *Engine) calculateScanChanges(scan documentScan, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) ([]document, []string) {
 	toAdd, toRemove := re.calculateIndexChanges(scan.documents, indexedFiles, forceRebuild)
 	safeAdd := toAdd[:0]
 	for _, doc := range toAdd {
-		if !scan.isUnavailable(doc.Path) {
+		if !re.preservesUnavailablePath(scan, doc.Path) {
 			safeAdd = append(safeAdd, doc)
 		}
 	}
 	safeRemove := toRemove[:0]
 	for _, path := range toRemove {
-		if !scan.isUnavailable(path) {
+		if !re.preservesUnavailablePath(scan, path) {
 			safeRemove = append(safeRemove, path)
 		}
 	}

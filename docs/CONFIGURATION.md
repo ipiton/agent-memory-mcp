@@ -53,6 +53,7 @@ kill -HUP $(pgrep agent-memory-mcp)
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama URL (local fallback) |
+| `OLLAMA_EMBEDDING_MODEL` | unset | Pin a single Ollama model. Unset keeps `bge-m3:latest` followed by `mxbai-embed-large:latest`; an explicit model never falls back to those defaults. Set `MCP_EMBEDDING_DIMENSION` to match the model. Restart the server for memory embeddings, then rebuild the document index and re-embed memories when switching models |
 | `LLAMACPP_BASE_URL` | - | llama.cpp OpenAI-compatible base URL (e.g. `http://127.0.0.1:8080/v1`); empty disables it |
 | `LLAMACPP_EMBEDDING_MODEL` | `bge-m3` | llama.cpp embedding model label (used only when `LLAMACPP_BASE_URL` is set). The label is part of the derived model id stored on every record, so changing it invalidates the bank exactly as changing the model does — see `docs/EMBEDDING_MIGRATION.md` |
 | `MCP_EMBEDDING_MODE` | `auto` | Embedding mode: `auto` or `local-only` |
@@ -124,7 +125,7 @@ The recommended solo-local preset stores them under `.agent-memory/`.
 
 ### Indexing safety controls
 
-Unavailable sources are logged by path. Indexing retains existing records and chunks under each failed path while updating accessible sources, including deleting files from directories that were scanned successfully. A missing optional file that has never been indexed (for example, `CHANGELOG.md`) does not block indexing. Restore unavailable sources and retry; to retire a configured source intentionally, remove its entry from `MCP_INDEX_DIRS`. A model or chunker change requires a complete rebuild, so that run fails before changing the index if any indexed source is unavailable. This prevents old vectors from being labelled with the new model or chunker.
+Unavailable sources are logged by path. Indexing retains existing records and chunks under failed paths that are still included in the configuration. Newly excluded paths are pruned even when their source is unavailable. Accessible sources continue to update. A missing optional file that has never been indexed (for example, `CHANGELOG.md`) does not block indexing. Restore unavailable sources and retry; to retire a configured source intentionally, remove its entry from `MCP_INDEX_DIRS`. A model or chunker change requires a complete rebuild, so that run fails before changing the index if any included indexed source is unavailable. This prevents old vectors from being labelled with the new model or chunker. Automatic adoption of another index root also waits for these sources. An explicit `--allow-root-change` replacement does not carry over unscanned records from the old root.
 
 RAG indexing scans supported docs and engineering text files, but you can further reduce risk with explicit controls:
 
@@ -134,6 +135,12 @@ RAG indexing scans supported docs and engineering text files, but you can furthe
 - `MCP_REDACT_SECRETS=true` to redact common secret-like lines and private key blocks before indexing
 
 This is especially important if you use hosted embedding providers or shared HTTP mode.
+
+A directory explicitly listed in `MCP_INDEX_DIRS` may be a symbolic link. Indexing
+follows that directory and retains paths under the configured link, so replacing
+`docs` with a link to the same files keeps their indexed paths. Excludes also use
+those logical paths. Directory links found inside a scanned directory are not
+followed, preventing link cycles; list such a directory explicitly to index it.
 
 ### Automatic session tracking
 

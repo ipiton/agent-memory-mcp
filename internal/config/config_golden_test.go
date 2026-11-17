@@ -57,6 +57,7 @@ func h13GoldenEnv(t *testing.T) {
 		"OPENAI_BASE_URL":                         "http://oa.local",
 		"OPENAI_EMBEDDING_MODEL":                  "oa-model",
 		"OLLAMA_BASE_URL":                         "http://ol.local",
+		"OLLAMA_EMBEDDING_MODEL":                  "ollama-model",
 		"LLAMACPP_BASE_URL":                       "http://lc.local",
 		"LLAMACPP_EMBEDDING_MODEL":                "lc-model",
 		"MCP_EMBEDDING_DIMENSION":                 "512",
@@ -161,6 +162,7 @@ func serializeConfigForGolden(c Config) string {
 	p("Embeddings.OpenAIBaseURL", c.Embeddings.OpenAIBaseURL)
 	p("Embeddings.OpenAIModel", c.Embeddings.OpenAIModel)
 	p("Embeddings.OllamaBaseURL", c.Embeddings.OllamaBaseURL)
+	p("Embeddings.OllamaModel", c.Embeddings.OllamaModel)
 	p("Embeddings.LlamaCPPBaseURL", c.Embeddings.LlamaCPPBaseURL)
 	p("Embeddings.LlamaCPPModel", c.Embeddings.LlamaCPPModel)
 	p("Embeddings.Dimension", c.Embeddings.Dimension)

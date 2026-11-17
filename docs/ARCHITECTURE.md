@@ -25,7 +25,7 @@ The server supports three embedding providers in `auto` mode:
 
 1. **Jina AI** (primary) -- `jina-embeddings-v3`, native 1024 dimensions, multilingual
 2. **OpenAI** (fallback) -- `text-embedding-3-small` or any OpenAI-compatible API. Native dimension is 1536; the server requests `dimensions=1024` via the OpenAI MRL parameter to match the rest of the stack
-3. **Ollama** (local fallback) -- `bge-m3`, native 1024 dimensions, runs locally for free
+3. **Ollama** (local fallback) -- `bge-m3` with `mxbai-embed-large` fallback by default, or one model selected with `OLLAMA_EMBEDDING_MODEL`; runs locally. Set `MCP_EMBEDDING_DIMENSION` to match a selected model
 
 All three are normalized to the same vector dimension (`MCP_EMBEDDING_DIMENSION`, default `1024`), but they are **not** interchangeable: each model has its own embedding space. Matching dimensions do not make cosine similarity safe across different models — that is why the server tags every memory with its `embedding_model` and refuses to mix them at recall time.
 

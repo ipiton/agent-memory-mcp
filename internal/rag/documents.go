@@ -58,7 +58,7 @@ func (ds *documentService) collectDocuments() documentScan {
 	scan := documentScan{repoRoot: ds.config.RepoRoot}
 	unavailable := func(path string, err error) {
 		scan.unavailablePaths = append(scan.unavailablePaths, ds.relPath(path))
-		ds.logger.Warn("Index source unavailable; retaining its indexed files", zap.String("path", path), zap.Error(err))
+		ds.logger.Warn("Index source unavailable", zap.String("path", path), zap.Error(err))
 	}
 	// A file that yields no documents is invisible otherwise, and a silently
 	// empty index reads exactly like a correctly empty one.
@@ -95,12 +95,15 @@ func (ds *documentService) collectDocuments() documentScan {
 			continue
 		}
 
-		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
+		// DirFS follows a configured directory symlink while WalkDir still skips
+		// directory symlinks encountered below it, avoiding recursive link cycles.
+		err = fs.WalkDir(os.DirFS(fullPath), ".", func(rel string, d fs.DirEntry, err error) error {
+			path := filepath.Join(fullPath, rel)
 			if err != nil {
 				unavailable(path, err)
 				return nil
 			}
-			if path != fullPath && ds.shouldSkipPath(path, d.IsDir()) {
+			if rel != "." && ds.shouldSkipPath(path, d.IsDir()) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
@@ -213,6 +216,39 @@ func (ds *documentService) relPath(abs string) string {
 		return filepath.ToSlash(filepath.Base(abs))
 	}
 	return filepath.ToSlash(rel)
+}
+
+// An unavailable file is preserved only if an active source would still
+// admit its logical path. Exclusions can be evaluated without opening it.
+func (ds *documentService) admitsPath(logicalPath string) bool {
+	target := filepath.Join(ds.config.RepoRoot, filepath.FromSlash(logicalPath))
+	if ds.shouldSkipPath(target, false) {
+		return false
+	}
+	for _, source := range ds.config.IndexDirs {
+		root := source
+		if !filepath.IsAbs(root) {
+			root = filepath.Join(ds.config.RepoRoot, root)
+		}
+		root = filepath.Clean(root)
+		rel, err := filepath.Rel(root, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		admitted := true
+		if rel != "." {
+			for dir := filepath.Dir(target); dir != root; dir = filepath.Dir(dir) {
+				if ds.shouldSkipPath(dir, true) {
+					admitted = false
+					break
+				}
+			}
+		}
+		if admitted {
+			return true
+		}
+	}
+	return false
 }
 
 func (ds *documentService) shouldSkipPath(absPath string, isDir bool) bool {

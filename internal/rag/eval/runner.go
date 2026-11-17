@@ -59,9 +59,11 @@ type HarnessConfig struct {
 // Harness wires up a temporary RAG engine against a test corpus and exposes
 // a convenient RunAll method for evaluating a whole QA set.
 type Harness struct {
-	engine  *rag.Engine
-	queries []QAQuery
-	k       int
+	engine          *rag.Engine
+	queries         []QAQuery
+	k               int
+	fusion          string
+	maxChunksPerDoc int
 }
 
 // NewHarness builds a Harness that can be used in the enclosing test.
@@ -149,18 +151,24 @@ func NewHarness(t *testing.T, cfg HarnessConfig) *Harness {
 	}
 
 	return &Harness{
-		engine:  engine,
-		queries: queries,
-		k:       cfg.K,
+		engine:          engine,
+		queries:         queries,
+		k:               cfg.K,
+		fusion:          ragCfg.RAG.Fusion,
+		maxChunksPerDoc: cfg.MaxChunksPerDoc,
 	}
 }
 
 // RunAll executes every loaded QAQuery and returns both raw results and the
 // aggregate metrics.
 func (h *Harness) RunAll(ctx context.Context) ([]QAResult, *EvalMetrics, error) {
+	return h.runAll(ctx, false)
+}
+
+func (h *Harness) runAll(ctx context.Context, semanticOnly bool) ([]QAResult, *EvalMetrics, error) {
 	results := make([]QAResult, 0, len(h.queries))
 	for _, q := range h.queries {
-		r, err := h.RunQuery(ctx, q)
+		r, err := h.runQuery(ctx, q, semanticOnly)
 		if err != nil {
 			return nil, nil, fmt.Errorf("query %s: %w", q.ID, err)
 		}
@@ -170,10 +178,42 @@ func (h *Harness) RunAll(ctx context.Context) ([]QAResult, *EvalMetrics, error) 
 	return results, metrics, nil
 }
 
+// RankingComparison contains aggregate measurements only, without source text or
+// questions. Hybrid uses the harness's configured fusion; its default is weighted.
+type RankingComparison struct {
+	HybridFusion    string       `json:"hybrid_fusion"`
+	K               int          `json:"k"`
+	MaxChunksPerDoc int          `json:"max_chunks_per_doc"`
+	Hybrid          *EvalMetrics `json:"hybrid"`
+	Semantic        *EvalMetrics `json:"semantic"`
+}
+
+// CompareRankings measures both arms against the same index and QA set. It does
+// not change RunAll, the engine configuration, or the committed baseline.
+func (h *Harness) CompareRankings(ctx context.Context) (*RankingComparison, error) {
+	_, hybrid, err := h.runAll(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("hybrid comparison: %w", err)
+	}
+	_, semantic, err := h.runAll(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("semantic comparison: %w", err)
+	}
+	return &RankingComparison{HybridFusion: h.fusion, K: h.k, MaxChunksPerDoc: h.maxChunksPerDoc, Hybrid: hybrid, Semantic: semantic}, nil
+}
+
 // RunQuery runs a single QAQuery through the engine and returns the matched
 // QAResult including rank of the first expected doc ID.
 func (h *Harness) RunQuery(ctx context.Context, q QAQuery) (QAResult, error) {
-	resp, err := h.engine.Search(ctx, q.Question, h.k, q.SourceType, true)
+	return h.runQuery(ctx, q, false)
+}
+
+func (h *Harness) runQuery(ctx context.Context, q QAQuery, semanticOnly bool) (QAResult, error) {
+	search := h.engine.Search
+	if semanticOnly {
+		search = h.engine.SearchSemanticForEval
+	}
+	resp, err := search(ctx, q.Question, h.k, q.SourceType, true)
 	if err != nil {
 		return QAResult{Query: q, FirstHit: -1}, err
 	}
