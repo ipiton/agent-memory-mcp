@@ -218,10 +218,11 @@ type document struct {
 }
 
 type searchQuery struct {
-	Query      string
-	Limit      int
-	SourceType string
-	Debug      bool
+	semanticOnly bool
+	Query        string
+	Limit        int
+	SourceType   string
+	Debug        bool
 }
 
 type indexResult struct {
@@ -396,32 +397,28 @@ func NewEngine(cfg config.Config, fileLogger *logger.FileLogger) *Engine {
 
 // Search performs a hybrid search query across indexed documents.
 func (re *Engine) Search(ctx context.Context, query string, limit int, sourceType string, debug bool) (*SearchResponse, error) {
+	return re.search(ctx, searchQuery{Query: query, Limit: limit, SourceType: sourceType, Debug: debug})
+}
+
+func (re *Engine) search(ctx context.Context, query searchQuery) (*SearchResponse, error) {
 	if re == nil || re.vecService == nil {
 		return nil, fmt.Errorf("RAG engine not available")
 	}
-
-	if limit <= 0 {
-		limit = re.config.RAG.MaxResults
+	if query.Limit <= 0 {
+		query.Limit = re.config.RAG.MaxResults
 	}
-	if limit > re.config.RAG.MaxResults {
-		limit = re.config.RAG.MaxResults
+	if query.Limit > re.config.RAG.MaxResults {
+		query.Limit = re.config.RAG.MaxResults
 	}
-
-	result, err := re.vecService.search(ctx, searchQuery{
-		Query:      query,
-		Limit:      limit,
-		SourceType: sourceType,
-		Debug:      debug,
-	})
+	result, err := re.vecService.search(ctx, query)
 	if err != nil {
 		re.logger.Error("Vector search failed",
 			zap.Error(err),
-			zap.String("query", query),
-			zap.Int("limit", limit),
+			zap.String("query", query.Query),
+			zap.Int("limit", query.Limit),
 		)
 		return nil, fmt.Errorf("search failed: %w", err)
 	}
-
 	// Returned as-is rather than rebuilt field by field. The copy this
 	// replaces dropped RetrievalPath the moment it was added (T99) — it is
 	// already a *SearchResponse from the same package, so the copy bought

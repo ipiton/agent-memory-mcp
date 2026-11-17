@@ -67,13 +67,18 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	// embedder could only cost time. The start-up indexing run is what notices a
 	// model appearing.
 	keywordOnly, _ := vs.store.GetMetadata(keywordOnlyMetadataKey)
+	semanticOnly := query.semanticOnly
+	strict := vs.config.Strict || semanticOnly
+	if semanticOnly && keywordOnly == "true" {
+		return nil, fmt.Errorf("semantic evaluation requires a vector index; run index_documents with an embedding model")
+	}
 
 	// T177: while the vectors are still on their way into memory the semantic
 	// arm is skipped rather than waited for; the load continues in the
 	// background and a later search uses it.
 	vectorsLoading := false
 	if vs.config.BackgroundVectorLoad && keywordOnly != "true" && !vs.store.StartVectorLoad() {
-		if vs.config.Strict {
+		if strict {
 			return nil, StrictModeError("vectors", "the vectors are still being loaded into memory; retry shortly")
 		}
 		vectorsLoading = true
@@ -90,7 +95,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		path.KeywordOnly = true
 		path.VectorsSkipped = "vectors are still being loaded into memory"
 		path.Degraded = true
-	case vs.config.KeywordFallback && keywordOnly == "true" && !vs.config.Strict:
+	case vs.config.KeywordFallback && keywordOnly == "true" && !strict:
 		path.KeywordOnly = true
 		path.Degraded = true
 	case err == nil && queryResult != nil:
@@ -98,7 +103,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		path.EmbeddingFallbacks = queryResult.Fallbacks
 		if len(queryResult.Fallbacks) > 0 {
 			path.Degraded = true
-			if vs.config.Strict {
+			if strict {
 				return nil, StrictModeError("embedding", fmt.Sprintf(
 					"provider(s) %s failed and the query was embedded by %s instead",
 					strings.Join(queryResult.Fallbacks, ", "), queryResult.Provider))
@@ -122,7 +127,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 			path.KeywordOnly = true
 			path.Degraded = true
 		}
-	case vs.config.KeywordFallback && !vs.config.Strict:
+	case vs.config.KeywordFallback && !strict && !semanticOnly:
 		vs.logger.Warn("Query could not be embedded, answering from keywords", zap.Error(err))
 		path.KeywordOnly = true
 		path.Degraded = true
@@ -132,10 +137,13 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		return nil, fmt.Errorf("failed to embed query: %w", err)
 	}
 
-	mark = time.Now()
-	keywordResults, err := vs.store.KeywordSearch(query.Query, keywordLimit)
-	phases.KeywordMs = sinceMs(mark)
-	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !vs.config.Strict {
+	var keywordResults []vectorstore.SearchResult
+	if !semanticOnly {
+		mark = time.Now()
+		keywordResults, err = vs.store.KeywordSearch(query.Query, keywordLimit)
+		phases.KeywordMs = sinceMs(mark)
+	}
+	if errors.Is(err, vectorstore.ErrKeywordIndexBuilding) && len(semanticResults) > 0 && !strict {
 		path.KeywordSkipped = "keyword index is still being built"
 		path.Degraded = true
 		keywordResults, err = nil, nil
@@ -145,7 +153,9 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 	}
 
 	mark = time.Now()
-	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug, newFusionSettings(vs.config.Fusion, vs.config.RRFK), vs.config.MaxChunksPerDoc)
+	fusion := newFusionSettings(vs.config.Fusion, vs.config.RRFK)
+	fusion.semanticOnly = semanticOnly
+	searchResults, contents, debugInfo := buildHybridSearchResults(query.Query, query.SourceType, semanticResults, keywordResults, vs.store.Count(), query.Limit, query.Debug, fusion, vs.config.MaxChunksPerDoc)
 	phases.FusionMs = sinceMs(mark)
 
 	// Neural reranker pass — strictly opt-in. Any error or timeout falls back
@@ -158,7 +168,7 @@ func (vs *vectorService) search(ctx context.Context, query searchQuery) (*Search
 		if rerankErr != nil {
 			path.Degraded = true
 			path.RerankSkipped = rerankErrorReason(rerankErr)
-			if vs.config.Strict {
+			if strict {
 				return nil, StrictModeError("rerank", rerankErr.Error())
 			}
 		} else {
