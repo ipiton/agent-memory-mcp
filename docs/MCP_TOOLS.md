@@ -365,9 +365,14 @@ query against a corpus that never included the material returns "no results",
 which is indistinguishable from "there is nothing like that". A root that is
 configured and contributes zero files is therefore reported by name (T97) —
 omitting it would make it look like a root nobody had configured. Common
-causes: the path does not exist under `MCP_ROOT`, it holds no supported file
-types, or `MCP_INDEX_EXCLUDE_DIRS` / `MCP_INDEX_EXCLUDE_GLOBS` filtered
-everything out.
+causes: it holds no supported file types, or `MCP_INDEX_EXCLUDE_DIRS` /
+`MCP_INDEX_EXCLUDE_GLOBS` filtered everything out. A missing or unreadable
+configured path is logged. Records and chunks for paths still included in the
+configuration are retained. Paths outside the failed paths continue to update.
+A missing optional path that has never been indexed does not block the run. Restore the path and retry. To retire a
+source, remove coverage from every configured root or add an indexing exclusion,
+then re-index. A model or chunker rebuild
+waits for unavailable indexed sources that are still included before changing the index.
 
 ## Engineering workflow tools
 

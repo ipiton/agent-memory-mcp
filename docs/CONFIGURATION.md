@@ -125,6 +125,8 @@ The recommended solo-local preset stores them under `.agent-memory/`.
 
 ### Indexing safety controls
 
+Unavailable sources are logged by path. Indexing retains existing records and chunks under failed paths that are still included in the configuration. Newly excluded paths are pruned even when their source is unavailable. Sources outside the failed paths continue to update. A missing optional file that has never been indexed (for example, `CHANGELOG.md`) does not block indexing. Restore unavailable sources and retry. To retire a source intentionally, remove all coverage for its path from `MCP_INDEX_DIRS` or add an indexing exclusion, then run indexing. A model or chunker change requires a complete rebuild, so that run fails before changing the index if any included indexed source is unavailable. This prevents old vectors from being labelled with the new model or chunker. Automatic adoption of another index root also waits for these sources. An explicit `--allow-root-change` replacement does not carry over unscanned records from the old root.
+
 RAG indexing scans supported docs and engineering text files, but you can further reduce risk with explicit controls:
 
 - built-in excluded directories such as `.git`, `.agent-memory`, `node_modules`, `logs`, and `.terraform`

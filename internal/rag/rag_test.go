@@ -423,10 +423,11 @@ func TestDocumentServiceCollectDocumentsSkipsExcludedDir(t *testing.T) {
 		ChunkOverlap:     200,
 	}, nil)
 
-	docs, err := ds.collectDocuments()
-	if err != nil {
-		t.Fatalf("collectDocuments: %v", err)
+	scan := ds.collectDocuments()
+	if len(scan.unavailablePaths) > 0 {
+		t.Fatalf("unavailable sources: %v", scan.unavailablePaths)
 	}
+	docs := scan.documents
 	if len(docs) != 1 {
 		t.Fatalf("len(docs) = %d, want 1", len(docs))
 	}
@@ -455,10 +456,11 @@ func TestDocumentServiceCollectDocumentsSkipsExcludedGlob(t *testing.T) {
 		ChunkOverlap:      200,
 	}, nil)
 
-	docs, err := ds.collectDocuments()
-	if err != nil {
-		t.Fatalf("collectDocuments: %v", err)
+	scan := ds.collectDocuments()
+	if len(scan.unavailablePaths) > 0 {
+		t.Fatalf("unavailable sources: %v", scan.unavailablePaths)
 	}
+	docs := scan.documents
 	if len(docs) != 1 {
 		t.Fatalf("len(docs) = %d, want 1", len(docs))
 	}
@@ -490,10 +492,11 @@ func TestDocumentServiceIndexesMarkdownOutsideDocs(t *testing.T) {
 		ChunkOverlap: 200,
 	}, nil)
 
-	docs, err := ds.collectDocuments()
-	if err != nil {
-		t.Fatalf("collectDocuments: %v", err)
+	scan := ds.collectDocuments()
+	if len(scan.unavailablePaths) > 0 {
+		t.Fatalf("unavailable sources: %v", scan.unavailablePaths)
 	}
+	docs := scan.documents
 
 	got := map[string]bool{}
 	for _, d := range docs {
@@ -527,10 +530,11 @@ func TestDocumentServiceIndexesHeadlessMarkdown(t *testing.T) {
 		ChunkOverlap: 200,
 	}, nil)
 
-	docs, err := ds.collectDocuments()
-	if err != nil {
-		t.Fatalf("collectDocuments: %v", err)
+	scan := ds.collectDocuments()
+	if len(scan.unavailablePaths) > 0 {
+		t.Fatalf("unavailable sources: %v", scan.unavailablePaths)
 	}
+	docs := scan.documents
 	if len(docs) == 0 {
 		t.Fatal("headless markdown produced no documents")
 	}

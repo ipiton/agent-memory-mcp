@@ -74,10 +74,11 @@ func TestCollectDirectorySymlinkHonorsExcludesAndSkipsNestedLinks(t *testing.T) 
 		IndexExcludeDirs:  []string{"linked/private"},
 		IndexExcludeGlobs: []string{"linked/draft.md"},
 	}, nil)
-	docs, err := ds.collectDocuments()
-	if err != nil {
-		t.Fatal(err)
+	scan := ds.collectDocuments()
+	if len(scan.unavailablePaths) != 0 {
+		t.Fatalf("unexpected unavailable paths: %v", scan.unavailablePaths)
 	}
+	docs := scan.documents
 	if len(docs) != 1 || docs[0].Path != "linked/guide.md" || docs[0].ID != "linked/guide.md-0" {
 		t.Fatalf("collected documents = %+v, want only linked/guide.md", docs)
 	}
