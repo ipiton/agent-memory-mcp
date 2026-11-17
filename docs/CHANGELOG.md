@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Select a single Ollama embedding model with `OLLAMA_EMBEDDING_MODEL`; unset keeps the existing model fallback chain. Set its matching dimension and re-index when switching models.
 
+### Fixed
+
+- Index directories explicitly configured through symbolic links, preserving document paths and exclusions. Replacing a directory with a link no longer silently removes its indexed documents.
+
 ## [0.18.0] - 2026-11-15
 
 ### Added
