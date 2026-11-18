@@ -37,7 +37,7 @@ import (
 // else has committed.
 //
 // The check is one PRAGMA on a pinned connection. The reload it can trigger is
-// the real cost — 83ms for 4574 records with embeddings, measured — and the
+// the real cost — 83ms for 4574 records, about a second of CPU for 33k — and the
 // ticker is what bounds it: at most one reload per interval however many writes
 // land, so a 100-record archive sweep pays a few reloads rather than a hundred.
 const foreignWriteInterval = 2 * time.Second
@@ -97,11 +97,16 @@ func (ms *Store) WatchForeignWrites(ctx context.Context) error {
 				if current == last {
 					continue
 				}
+				// No cache to refresh yet. last stays behind, so a commit that
+				// lands during the first load is picked up right after it.
+				if !ms.cacheLoaded.Load() {
+					continue
+				}
 				last = current
 				// The daemon's own writes bump this too: the pool serves them
 				// from a different connection than the pinned one, so they are
 				// indistinguishable from a CLI's. Reloading anyway is the safe
-				// direction — a redundant reload costs 83ms, a missed one costs
+				// direction — a redundant reload costs CPU, a missed one costs
 				// invisibility until restart.
 				if err := ms.reloadForForeignWrite(); err != nil {
 					ms.logger.Warn("Cache reload after a foreign write failed", zap.Error(err))
@@ -117,14 +122,9 @@ func (ms *Store) WatchForeignWrites(ctx context.Context) error {
 	return nil
 }
 
-// reloadForForeignWrite rebuilds the cache under the write lock.
-//
-// writeMu, not just mu: the documented order is writeMu → mu, and a reload that
-// took only mu could land between a writer's row update and its cache update,
-// so the writer would then publish a cache entry built before the reload.
+// reloadForForeignWrite rebuilds the cache. It takes no write lock: the build
+// re-reads whatever the store's own writers commit while it runs (T175).
 func (ms *Store) reloadForForeignWrite() error {
-	ms.writeMu.Lock()
-	defer ms.writeMu.Unlock()
 	return ms.loadMemoriesToCache()
 }
 

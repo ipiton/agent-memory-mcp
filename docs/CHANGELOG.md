@@ -12,8 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Select a single Ollama embedding model with `OLLAMA_EMBEDDING_MODEL`; unset keeps the existing model fallback chain. Set its matching dimension and re-index when switching models.
 - The evaluation harness can compare hybrid and semantic-only ranking on one index. Run `make eval-compare`; server ranking settings are unchanged.
 
+### Changed
+
+- The server no longer waits for the memory cache before it starts, so document search is available sooner. Memory tools wait up to 5 seconds for the cache, then return a retryable `starting` error. If the cache cannot be loaded, they stay listed and return an error. `/health` adds `memory_ready`; `memory_available` now means the store is open.
+
 ### Fixed
 
+- The `auto-capture`, `checkpoint` and `close-session` hooks no longer load the whole memory bank when they only need one context, which reduces their time and memory use.
+- Reads and writes no longer wait while the memory cache is rebuilt after another process writes to the bank.
 - A stdio client no longer waits for the server to load on a busy machine. `initialize` is answered at once and `tools/list` within 20 seconds at most; until the stores are ready, other requests wait up to the same limit and then return a `starting` error to retry. The vector and memory stores log each startup step with its duration.
 - Index directories explicitly configured through symbolic links, preserving document paths and exclusions. Replacing a directory with a link no longer silently removes its indexed documents.
 - Indexing retains files under unavailable source paths while updating accessible sources. Missing optional paths no longer stop indexing. A model or chunker rebuild waits until indexed sources are available.

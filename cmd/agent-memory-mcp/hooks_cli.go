@@ -316,7 +316,7 @@ func runAutoCapture(args []string) error {
 	}
 	defer unlock()
 
-	store, cleanup, err := initMemoryStore(cfg)
+	store, cleanup, err := initHookMemoryStore(cfg)
 	if err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func runCheckpoint(args []string) error {
 	}
 	defer unlock()
 
-	store, cleanup, err := initMemoryStore(cfg)
+	store, cleanup, err := initHookMemoryStore(cfg)
 	if err != nil {
 		return err
 	}
