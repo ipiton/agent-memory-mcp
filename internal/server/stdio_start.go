@@ -96,9 +96,16 @@ func (st *StdioStart) handle(req rpcRequest) *rpcResponse {
 		tools := starting.toolDefsFor(st.cfg.RAG.Enabled, st.cfg.Memory.Enabled, st.cfg.Memory.Enabled && st.cfg.Steward.Enabled)
 		return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: starting.toolsListResult(tools)}
 	}
-	return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{
+	return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: startingError(
+		"server is still starting: the indexes and the memory cache are loading; retry in a few seconds",
+	)}
+}
+
+// startingError is the retryable answer for work the server cannot do yet.
+func startingError(message string) *rpcError {
+	return &rpcError{
 		Code:    rpcErrServerError,
-		Message: "server is still starting: the indexes and the memory cache are loading; retry in a few seconds",
+		Message: message,
 		Data:    map[string]any{"status": "starting", "retry_after_seconds": 5},
-	}}
+	}
 }

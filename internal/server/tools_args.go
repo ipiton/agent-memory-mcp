@@ -2,8 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/ipiton/agent-memory-mcp/internal/memory"
 )
 
 func parseParams[T any](args map[string]any) (T, error) {
@@ -133,11 +137,27 @@ func getStringSlice(args map[string]any, key string) []string {
 	}
 }
 
+// memoryReadyWait is how long a memory tool waits for the bank to finish loading
+// before it answers "starting". A normal start fits inside it, so a client only
+// sees the error on a machine that is short of CPU or memory (T175).
+const memoryReadyWait = 5 * time.Second
+
 func (s *MCPServer) requireMemoryStore() *rpcError {
 	if s.memoryStore == nil {
 		return &rpcError{Code: rpcErrServerError, Message: "Memory store not available"}
 	}
-	return nil
+	return memoryReadyError(s.memoryStore.WaitCacheReady(memoryReadyWait))
+}
+
+func memoryReadyError(err error) *rpcError {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, memory.ErrCacheLoading):
+		return startingError("server is still starting: the memory cache is loading; retry in a few seconds")
+	default:
+		return &rpcError{Code: rpcErrServerError, Message: "Memory store not available", Data: err.Error()}
+	}
 }
 
 func (s *MCPServer) requireRAGEngine() *rpcError {

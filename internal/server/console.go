@@ -98,10 +98,12 @@ func buildHTTPMux(server *MCPServer) http.Handler {
 		if !authorizeHTTPRequest(w, r, authToken) {
 			return
 		}
+		store := server.getMemoryStore()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "ok",
 			"rag_available":    server.getRagEngine() != nil,
-			"memory_available": server.getMemoryStore() != nil,
+			"memory_available": store != nil,
+			"memory_ready":     store != nil && store.CacheReady(),
 		})
 	})
 
