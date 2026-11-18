@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -171,16 +172,28 @@ type Store struct {
 	db       *sql.DB
 	logger   *zap.Logger
 	embedder embedder.Service
-	writeMu  sync.Mutex       // serializes write operations (Store, Update, Delete, Merge, Promote)
-	mu       sync.RWMutex     // protects in-memory cache (memories, contextIndex)
+	writeMu  sync.Mutex   // serializes write operations (Store, Update, Delete, Merge, Promote)
+	mu       sync.RWMutex // protects in-memory cache (memories, contextIndex)
+	// loadMu lets one cache build run at a time. Order: writeMu → loadMu → mu.
+	loadMu sync.Mutex
+	// loadDirty, guarded by mu, is non-nil while a build runs and names the
+	// records written since it started: their rows may be newer than its scan.
+	loadDirty map[string]struct{}
+	// afterCacheScan runs between a build's scan and its catch-up. Test seam.
+	afterCacheScan func()
+	// cacheLoaded is true once memories holds the whole bank. Until then the
+	// tables stay empty and context-scoped reads go to the file (T175).
+	cacheLoaded atomic.Bool
+	// closeCtx ends the work that scales with the bank when the store closes.
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
+	// bgMu guards the background load state and orders it against Close.
+	bgMu     sync.Mutex
+	bgDone   chan struct{}
+	bgErr    error
+	logStart func(step string, fields ...zap.Field)
 	accessCh chan accessEvent // batched access stats updates
 	accessWG sync.WaitGroup
-	// reembedCancel stops the startup re-embed that maybeStartBackgroundReembed
-	// launches. Close waits on accessWG, so without a way to cancel the walk a
-	// short-lived process (the hooks CLI) could not exit until the whole bank
-	// had been re-embedded. Assigned once inside NewStore before the store is
-	// handed to the caller, read only by Close — no lock needed.
-	reembedCancel context.CancelFunc
 	// watcher converges the cache on writes made by other processes (T116).
 	// nil in the CLI, where a process re-reads the file on every invocation.
 	watchMu sync.Mutex
@@ -287,8 +300,48 @@ func (ms *Store) SedimentEnabled() bool {
 	return ms.sedimentEnabled.Load()
 }
 
-// NewStore creates a new Store backed by a SQLite database at dbPath.
+// NewStore creates a new Store backed by a SQLite database at dbPath and loads
+// the whole bank into its cache before returning.
 func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*Store, error) {
+	store, err := openStore(dbPath, embedder, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load memories into cache — must succeed before starting background workers.
+	if err := store.loadMemoriesToCache(); err != nil {
+		store.closeCancel()
+		close(store.accessCh)
+		_ = store.db.Close()
+		return nil, fmt.Errorf("failed to load memories: %w", err)
+	}
+	store.logCacheLoaded()
+
+	store.accessWG.Add(1)
+	go store.accessStatsWorker()
+
+	store.maybeStartBackgroundReembed()
+
+	return store, nil
+}
+
+// OpenStoreDeferred opens the store without loading the bank (T175). Reads of
+// one context go to the file, anything that needs the whole bank loads it on
+// first use, and StartCacheLoad loads it ahead of time. The startup re-embed
+// runs only after a StartCacheLoad, so a short-lived hook never triggers it.
+func OpenStoreDeferred(dbPath string, embedder embedder.Service, logger *zap.Logger) (*Store, error) {
+	store, err := openStore(dbPath, embedder, logger)
+	if err != nil {
+		return nil, err
+	}
+	store.accessWG.Add(1)
+	go store.accessStatsWorker()
+	return store, nil
+}
+
+// openStore opens the database and brings its schema up to date. The cache is
+// left empty and no worker is running yet.
+func openStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*Store, error) {
 	// Create nop logger if not provided
 	if logger == nil {
 		config := zap.NewProductionConfig()
@@ -361,8 +414,19 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		logger.Warn("Repaired memories with invalid UTF-8 content/title", zap.Int("repaired", repaired))
 	}
 	logStep("utf8_repair")
+	if backfill, err := backfillMergedDuplicatesOnce(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to backfill merged duplicates: %w", err)
+	} else if backfill.updated > 0 || backfill.skippedCycles > 0 {
+		logger.Info("Backfilled temporal fields of merged duplicates",
+			zap.Int("updated", backfill.updated),
+			zap.Int("skipped_cycles", backfill.skippedCycles),
+		)
+	}
+	logStep("merged_duplicates_backfill")
 
-	store := &Store{
+	closeCtx, closeCancel := context.WithCancel(context.Background())
+	return &Store{
 		db:           db,
 		logger:       logger,
 		embedder:     embedder,
@@ -370,99 +434,272 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		memories:     make(map[string]*cachedMemory),
 		contextIndex: make(map[string]map[string]*cachedMemory),
 		now:          time.Now,
-	}
+		closeCtx:     closeCtx,
+		closeCancel:  closeCancel,
+		logStart:     logStep,
+	}, nil
+}
 
-	// Load memories into cache — must succeed before starting background workers.
-	if err := store.loadMemoriesToCache(); err != nil {
-		close(store.accessCh)
-		_ = db.Close()
-		return nil, fmt.Errorf("failed to load memories: %w", err)
-	}
-	logStep("cache_load", zap.Int("memories", len(store.memories)))
-	if errs := store.LoadErrors(); errs > 0 {
-		logger.Warn("Some memories failed to load from database",
+// logCacheLoaded closes the startup log with the load that just finished.
+func (ms *Store) logCacheLoaded() {
+	ms.logStart("cache_load", zap.Int("memories", ms.Count()))
+	if errs := ms.LoadErrors(); errs > 0 {
+		ms.logger.Warn("Some memories failed to load from database",
 			zap.Int("load_errors", errs),
 		)
 	}
-
-	store.accessWG.Add(1)
-	go store.accessStatsWorker()
-
-	store.maybeStartBackgroundReembed()
-
-	return store, nil
 }
 
+// ErrCacheLoading means the bank is still being read into the cache.
+var ErrCacheLoading = errors.New("memory cache is still loading")
+
+// CacheReady reports whether the whole bank is in the cache.
+func (ms *Store) CacheReady() bool {
+	return ms.cacheLoaded.Load()
+}
+
+// ensureCache loads the bank unless it is already loaded. A failure is not
+// remembered: the next caller tries again.
+func (ms *Store) ensureCache() error {
+	if ms.cacheLoaded.Load() {
+		return nil
+	}
+	ms.loadMu.Lock()
+	defer ms.loadMu.Unlock()
+	if ms.cacheLoaded.Load() {
+		return nil
+	}
+	return ms.loadCacheLocked()
+}
+
+// requireCache is ensureCache for reads that have no error to return. They see
+// an empty bank after a failure, so the failure has to reach the log.
+func (ms *Store) requireCache() {
+	if err := ms.ensureCache(); err != nil {
+		ms.logger.Error("Memory cache could not be loaded", zap.Error(err))
+	}
+}
+
+// StartCacheLoad loads the bank in the background and returns a channel closed
+// when that attempt ends. Calling it during an attempt joins that attempt; after
+// a failed one it starts another.
+func (ms *Store) StartCacheLoad() <-chan struct{} {
+	ms.bgMu.Lock()
+	defer ms.bgMu.Unlock()
+
+	if ms.bgDone != nil {
+		select {
+		case <-ms.bgDone:
+		default:
+			return ms.bgDone
+		}
+	}
+	done := make(chan struct{})
+	ms.bgDone = done
+	if ms.cacheLoaded.Load() || ms.closeCtx.Err() != nil {
+		close(done)
+		return done
+	}
+
+	// Under bgMu, which Close takes before it cancels: a store being closed
+	// never gets here, so this Add cannot race with Close's Wait.
+	ms.accessWG.Add(1)
+	go func() {
+		defer ms.accessWG.Done()
+		err := ms.ensureCache()
+		ms.bgMu.Lock()
+		ms.bgErr = err
+		ms.bgMu.Unlock()
+		close(done)
+		if err != nil {
+			if ms.closeCtx.Err() == nil {
+				ms.logger.Error("Memory cache could not be loaded", zap.Error(err))
+			}
+			return
+		}
+		ms.logCacheLoaded()
+		ms.maybeStartBackgroundReembed()
+	}()
+	return done
+}
+
+// WaitCacheReady starts the load if needed and waits up to wait for it. It
+// returns nil once the bank is loaded, ErrCacheLoading if the load is still
+// running, and the load's error if it failed.
+func (ms *Store) WaitCacheReady(wait time.Duration) error {
+	if ms.cacheLoaded.Load() {
+		return nil
+	}
+	done := ms.StartCacheLoad()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		return ErrCacheLoading
+	}
+	if ms.cacheLoaded.Load() {
+		return nil
+	}
+	if err := ms.closeCtx.Err(); err != nil {
+		return err
+	}
+	ms.bgMu.Lock()
+	defer ms.bgMu.Unlock()
+	return fmt.Errorf("failed to load memories: %w", ms.bgErr)
+}
+
+// loadMemoriesToCache rebuilds the cache from the file.
+//
+// T175: the scan costs about a second of CPU on a 33k bank and minutes on a
+// starved machine, and it used to run under mu, so every read waited behind it.
+// The new tables are built aside and published in one short critical section.
+// Readers keep the previous tables meanwhile; writers keep working, and what
+// they commit after the scan began is re-read from the file before publishing.
 func (ms *Store) loadMemoriesToCache() error {
-	// T90 D4: the same column list and the same parser as every other reader.
-	rows, err := ms.db.Query("SELECT " + memoryColumns + " FROM memories")
+	ms.loadMu.Lock()
+	defer ms.loadMu.Unlock()
+	return ms.loadCacheLocked()
+}
+
+// loadCacheLocked does the build. Caller MUST hold ms.loadMu.
+func (ms *Store) loadCacheLocked() error {
+	ms.mu.Lock()
+	ms.loadDirty = make(map[string]struct{})
+	ms.mu.Unlock()
+	published := false
+	defer func() {
+		if !published {
+			ms.mu.Lock()
+			ms.loadDirty = nil
+			ms.mu.Unlock()
+		}
+	}()
+
+	memories := make(map[string]*cachedMemory)
+	contextIndex := make(map[string]map[string]*cachedMemory)
+	loadErrors, err := ms.scanCache(memories, contextIndex)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
+	if ms.afterCacheScan != nil {
+		ms.afterCacheScan()
+	}
 
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
+	for {
+		ms.mu.Lock()
+		if len(ms.loadDirty) == 0 {
+			ms.memories = memories
+			ms.contextIndex = contextIndex
+			ms.loadErrors = loadErrors
+			ms.loadDirty = nil
+			ms.cacheLoaded.Store(true)
+			published = true
+			// T76a: the mean is a property of the loaded corpus, so it is computed
+			// here — one pass while everything is already in hand — rather than on
+			// first use, where it would land in the middle of a query.
+			vectors := make([][]float32, 0, len(memories))
+			for _, cm := range memories {
+				if len(cm.Embedding) > 0 {
+					vectors = append(vectors, cm.Embedding)
+				}
+			}
+			ms.center.Store(newEmbeddingCenter(vectors))
+			ms.mu.Unlock()
+			return nil
+		}
+		ids := make([]string, 0, len(ms.loadDirty))
+		for id := range ms.loadDirty {
+			ids = append(ids, id)
+		}
+		ms.loadDirty = make(map[string]struct{})
+		ms.mu.Unlock()
 
-	ms.memories = make(map[string]*cachedMemory)
-	ms.contextIndex = make(map[string]map[string]*cachedMemory)
-	ms.loadErrors = 0
-
-	for rows.Next() {
-		m, err := scanMemoryRowCounting(rows, &ms.loadErrors)
+		fresh, err := ms.getBatch(ids)
 		if err != nil {
-			ms.logger.Warn("Failed to scan memory", zap.Error(err))
-			ms.loadErrors++
-			continue
+			return err
 		}
-
-		// T87: name the record and sanitize the cache when content/title carry
-		// invalid UTF-8 (startup repair normally fixes these first; this is the
-		// backstop against silent degradation that memory_stats under-counted).
-		if !utf8.ValidString(m.Content) || !utf8.ValidString(m.Title) {
-			ms.logger.Warn("Memory has invalid UTF-8; sanitized in cache", zap.String("id", m.ID))
-			m.Content = sanitizeUTF8(m.Content)
-			m.Title = sanitizeUTF8(m.Title)
-			ms.loadErrors++
-		}
-
-		ms.cacheSetLocked(toCachedMemory(m))
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	// T76a: the mean is a property of the loaded corpus, so it is computed
-	// here — one pass while everything is already in hand — rather than on
-	// first use, where it would land in the middle of a query.
-	vectors := make([][]float32, 0, len(ms.memories))
-	for _, cm := range ms.memories {
-		if len(cm.Embedding) > 0 {
-			vectors = append(vectors, cm.Embedding)
-		}
-	}
-	ms.center.Store(newEmbeddingCenter(vectors))
-
-	return nil
-}
-
-// cacheSetLocked adds or updates a memory in the cache and context index.
-// Caller MUST hold ms.mu for writing.
-func (ms *Store) cacheSetLocked(m *cachedMemory) {
-	if old, exists := ms.memories[m.ID]; exists && old.Context != m.Context {
-		if idx, ok := ms.contextIndex[old.Context]; ok {
-			delete(idx, m.ID)
-			if len(idx) == 0 {
-				delete(ms.contextIndex, old.Context)
+		for _, id := range ids {
+			if m, ok := fresh[id]; ok {
+				cacheSet(memories, contextIndex, ms.cachedFromRow(m, &loadErrors))
+			} else {
+				cacheDelete(memories, contextIndex, id)
 			}
 		}
 	}
-	ms.memories[m.ID] = m
-	if m.Context != "" {
-		if ms.contextIndex[m.Context] == nil {
-			ms.contextIndex[m.Context] = make(map[string]*cachedMemory)
+}
+
+// scanCache reads every row into the given tables and returns the number of
+// rows that needed repair or could not be decoded.
+func (ms *Store) scanCache(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory) (int, error) {
+	// T90 D4: the same column list and the same parser as every other reader.
+	rows, err := ms.db.QueryContext(ms.closeCtx, "SELECT "+memoryColumns+" FROM memories")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	loadErrors := 0
+	for rows.Next() {
+		m, err := scanMemoryRowCounting(rows, &loadErrors)
+		if err != nil {
+			ms.logger.Warn("Failed to scan memory", zap.Error(err))
+			loadErrors++
+			continue
 		}
-		ms.contextIndex[m.Context][m.ID] = m
+		cacheSet(memories, contextIndex, ms.cachedFromRow(m, &loadErrors))
+	}
+	return loadErrors, rows.Err()
+}
+
+// cachedFromRow turns a row read from the file into its cache entry.
+func (ms *Store) cachedFromRow(m *Memory, loadErrors *int) *cachedMemory {
+	// T87: name the record and sanitize the cache when content/title carry
+	// invalid UTF-8 (startup repair normally fixes these first; this is the
+	// backstop against silent degradation that memory_stats under-counted).
+	if !utf8.ValidString(m.Content) || !utf8.ValidString(m.Title) {
+		ms.logger.Warn("Memory has invalid UTF-8; sanitized in cache", zap.String("id", m.ID))
+		m.Content = sanitizeUTF8(m.Content)
+		m.Title = sanitizeUTF8(m.Title)
+		*loadErrors++
+	}
+	return toCachedMemory(m)
+}
+
+// cacheSetLocked adds or updates a memory in the cache and context index. Before
+// the bank is loaded it only records the change: the row is in the file, and a
+// partly filled cache must never look like the bank.
+// Caller MUST hold ms.mu for writing.
+func (ms *Store) cacheSetLocked(m *cachedMemory) {
+	ms.markLoadDirtyLocked(m.ID)
+	if ms.cacheLoaded.Load() {
+		cacheSet(ms.memories, ms.contextIndex, m)
+	}
+}
+
+// markLoadDirtyLocked tells a running cache build that this record's row has
+// changed. Caller MUST hold ms.mu for writing and have committed the row.
+func (ms *Store) markLoadDirtyLocked(id string) {
+	if ms.loadDirty != nil {
+		ms.loadDirty[id] = struct{}{}
+	}
+}
+
+func cacheSet(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory, m *cachedMemory) {
+	if old, exists := memories[m.ID]; exists && old.Context != m.Context {
+		if idx, ok := contextIndex[old.Context]; ok {
+			delete(idx, m.ID)
+			if len(idx) == 0 {
+				delete(contextIndex, old.Context)
+			}
+		}
+	}
+	memories[m.ID] = m
+	if m.Context != "" {
+		if contextIndex[m.Context] == nil {
+			contextIndex[m.Context] = make(map[string]*cachedMemory)
+		}
+		contextIndex[m.Context][m.ID] = m
 	}
 }
 
@@ -537,14 +774,19 @@ func (cm *cachedMemory) cloneForUpdate() *cachedMemory {
 // cacheDeleteLocked removes a memory from the cache and context index.
 // Caller MUST hold ms.mu for writing.
 func (ms *Store) cacheDeleteLocked(id string) {
-	if m, exists := ms.memories[id]; exists {
-		if idx, ok := ms.contextIndex[m.Context]; ok {
+	ms.markLoadDirtyLocked(id)
+	cacheDelete(ms.memories, ms.contextIndex, id)
+}
+
+func cacheDelete(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory, id string) {
+	if m, exists := memories[id]; exists {
+		if idx, ok := contextIndex[m.Context]; ok {
 			delete(idx, m.ID)
 			if len(idx) == 0 {
-				delete(ms.contextIndex, m.Context)
+				delete(contextIndex, m.Context)
 			}
 		}
-		delete(ms.memories, id)
+		delete(memories, id)
 	}
 }
 
@@ -1026,14 +1268,10 @@ func (ms *Store) maybeStartBackgroundReembed() {
 		zap.Int("total", total),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	ms.reembedCancel = cancel
-
 	ms.accessWG.Add(1)
 	go func() {
 		defer ms.accessWG.Done()
-		defer cancel()
-		result, err := ms.ReembedAll(ctx)
+		result, err := ms.ReembedAll(ms.closeCtx)
 		if err != nil {
 			ms.logger.Error("Background re-embed failed", zap.Error(err))
 			return

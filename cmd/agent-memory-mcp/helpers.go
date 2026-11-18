@@ -38,9 +38,19 @@ func lockSessionCapture(dbPath string) (unlock func(), err error) {
 	return func() { _ = file.Close() }, nil
 }
 
-// initMemoryStore creates an embedder and memory store from config.
-// Returns store, cleanup function, and error.
+// initMemoryStore creates an embedder and memory store from config, with the
+// whole bank loaded. Returns store, cleanup function, and error.
 func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
+	return openMemoryStore(cfg, memory.NewStore)
+}
+
+// initHookMemoryStore is initMemoryStore for the session hooks. They read one
+// context and write a record, so they do not load the bank (T175).
+func initHookMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
+	return openMemoryStore(cfg, memory.OpenStoreDeferred)
+}
+
+func openMemoryStore(cfg config.Config, open func(string, embedder.Service, *zap.Logger) (*memory.Store, error)) (*memory.Store, func(), error) {
 	if err := os.MkdirAll(filepath.Dir(cfg.Memory.DBPath), 0755); err != nil {
 		return nil, nil, fmt.Errorf("failed to create memory directory: %w", err)
 	}
@@ -51,7 +61,7 @@ func initMemoryStore(cfg config.Config) (*memory.Store, func(), error) {
 		emb = nil
 	}
 
-	store, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), zap.NewNop())
+	store, err := open(cfg.Memory.DBPath, embedder.AsService(emb), zap.NewNop())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open memory store: %w", err)
 	}

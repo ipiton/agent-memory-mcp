@@ -123,7 +123,9 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 		storeLogger = fileLogger.Logger
 	}
 
-	memoryStore, err := memory.NewStore(cfg.Memory.DBPath, embedder.AsService(emb), storeLogger)
+	// T175: the bank is read in the background, started below once the store is
+	// configured. Reading it here held up every other part of the server.
+	memoryStore, err := memory.OpenStoreDeferred(cfg.Memory.DBPath, embedder.AsService(emb), storeLogger)
 	if err != nil {
 		if fileLogger != nil {
 			fileLogger.Warn("Memory store initialization failed - memory features will be unavailable",
@@ -173,6 +175,8 @@ func initMemoryStore(cfg config.Config, fileLogger *logger.FileLogger) (*memory.
 	if cfg.TripleExtractor.Enabled {
 		wireTripleExtractor(cfg, memoryStore, fileLogger)
 	}
+
+	memoryStore.StartCacheLoad()
 
 	return memoryStore, emb
 }

@@ -25,9 +25,9 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	startTime := time.Now().UTC()
 	// Store the resolved root so retargeting a root symlink cannot authorize
 	// another tree's indexed text on the next server startup.
-	indexRoot := re.repoRoot
-	if resolved, err := filepath.EvalSymlinks(indexRoot); err == nil {
-		indexRoot = resolved
+	indexRoot, rootResolutionErr := filepath.EvalSymlinks(re.repoRoot)
+	if rootResolutionErr != nil {
+		indexRoot = re.repoRoot
 	}
 	// chunkerVersion bumps trigger a full rebuild on next IndexDocuments.
 	//   char-v1     — naive char-budget splitter (initial)
@@ -38,10 +38,9 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	// Older indices upgrade automatically on the next index call.
 	const chunkerVersion = "skeleton-v2"
 
-	allDocs, err := re.docService.collectDocuments()
-	if err != nil {
-		return fmt.Errorf("failed to collect documents: %w", err)
-	}
+	scan := re.docService.collectDocuments()
+	allDocs := scan.documents
+	var err error
 
 	store := re.vecService.store
 	oldModel, _ := store.GetMetadata("embedding_model")
@@ -66,8 +65,9 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	// Without a stored model nothing has been embedded yet, so an unreachable
 	// embedder here means there is no model rather than an outage. A stored model
 	// keeps the error above: its vectors must not be replaced by text alone.
-	keywordOnly := false
 	wasKeywordOnly, _ := store.GetMetadata(keywordOnlyMetadataKey)
+	// A deletion-only partial scan can retain files without probing a model.
+	keywordOnly := len(allDocs) == 0 && wasKeywordOnly == "true"
 	if re.vecService.config.KeywordFallback && oldModel == "" && len(allDocs) > 0 {
 		model, err := re.vecService.detectModelID(ctx, allDocs[0].Content)
 		switch {
@@ -107,15 +107,42 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			zap.Int("stale_files", stale))
 	}
 
-	if err := re.checkIndexRoot(indexRoot, allDocs, indexedFiles); err != nil {
-		return err
+	oldRoot, _ := store.GetMetadata(indexRootMetadataKey)
+	sameRoot := oldRoot == indexRoot
+	if !sameRoot && !re.allowRootChange {
+		if err := re.checkIndexRootChange(oldRoot, allDocs, indexedFiles); err != nil {
+			return err
+		}
 	}
 
 	if len(allDocs) == 0 && len(indexedFiles) == 0 && !needsRebuild {
 		return fmt.Errorf("no documents found to index")
 	}
 
-	toAdd, toRemove := re.calculateIndexChanges(allDocs, indexedFiles, needsRebuild)
+	if !sameRoot && re.allowRootChange && rootResolutionErr == nil {
+		// An explicit replacement must not import unscanned records from the old root.
+		scan.unavailablePaths = nil
+	}
+	protectedFiles := 0
+	for path := range indexedFiles {
+		if re.preservesUnavailablePath(scan, path) {
+			protectedFiles++
+		}
+	}
+	if !sameRoot && protectedFiles > 0 {
+		if rootResolutionErr != nil {
+			return fmt.Errorf("cannot resolve the index root while %d indexed file(s) are unavailable: %w", protectedFiles, rootResolutionErr)
+		}
+		return fmt.Errorf("cannot adopt the index from a different or unknown root while %d indexed file(s) are unavailable; restore the sources or use --allow-root-change", protectedFiles)
+	}
+	if needsRebuild && protectedFiles > 0 {
+		return fmt.Errorf("cannot rebuild index while %d indexed file(s) are unavailable; restore sources or remove them from MCP_INDEX_DIRS and retry", protectedFiles)
+	}
+	toAdd, toRemove := re.calculateScanChanges(scan, indexedFiles, needsRebuild)
+	// An unavailable source alone is not an index update.
+	if sameRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
+		return nil
+	}
 
 	re.logger.Info("Indexing analysis",
 		zap.Int("total_documents", len(allDocs)),
@@ -336,7 +363,7 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if indexedModel != "" {
 		finalMetadata["embedding_model"] = indexedModel
 	}
-	if len(failedFiles) > 0 {
+	if len(failedFiles) > 0 || (indexState == indexStateDirty && protectedFiles > 0) {
 		finalMetadata[indexStateMetadataKey] = indexStateDirty
 	}
 	if keywordOnly {
@@ -377,21 +404,14 @@ func (re *Engine) AllowRootChange() {
 	re.allowRootChange = true
 }
 
-// checkIndexRoot (T161) refuses a run that would wipe an index built from
+// checkIndexRootChange (T161) refuses a run that would wipe an index built from
 // another root. Indexed paths are relative to the root, so another project's
 // files look deleted, and a server merely started there would remove them.
 //
 // A changed root alone is not enough: a moved repository keeps its relative
 // paths and has nothing to lose. An index with no recorded root predates the
 // stamp and is judged the same way.
-func (re *Engine) checkIndexRoot(indexRoot string, currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
-	if re.allowRootChange {
-		return nil
-	}
-	oldRoot, _ := re.vecService.store.GetMetadata(indexRootMetadataKey)
-	if oldRoot == indexRoot {
-		return nil
-	}
+func (re *Engine) checkIndexRootChange(oldRoot string, currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
 	_, toRemove := re.calculateIndexChanges(currentDocs, indexedFiles, false)
 	if len(toRemove)*2 <= len(indexedFiles) {
 		return nil
@@ -402,6 +422,28 @@ func (re *Engine) checkIndexRoot(indexRoot string, currentDocs []document, index
 	return fmt.Errorf("refusing to index %s: the index was built from %s and this run would remove %d of its %d files; "+
 		"give this project its own MCP_DATA_PATH, or run `agent-memory-mcp index --allow-root-change` to replace the index",
 		re.repoRoot, oldRoot, len(toRemove), len(indexedFiles))
+}
+
+func (re *Engine) preservesUnavailablePath(scan documentScan, path string) bool {
+	return scan.isUnavailable(path) && re.docService.admitsPath(path)
+}
+
+// A failed scan cannot establish deletions or replacements under its path.
+func (re *Engine) calculateScanChanges(scan documentScan, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) ([]document, []string) {
+	toAdd, toRemove := re.calculateIndexChanges(scan.documents, indexedFiles, forceRebuild)
+	safeAdd := toAdd[:0]
+	for _, doc := range toAdd {
+		if !re.preservesUnavailablePath(scan, doc.Path) {
+			safeAdd = append(safeAdd, doc)
+		}
+	}
+	safeRemove := toRemove[:0]
+	for _, path := range toRemove {
+		if !re.preservesUnavailablePath(scan, path) {
+			safeRemove = append(safeRemove, path)
+		}
+	}
+	return safeAdd, safeRemove
 }
 
 func (re *Engine) calculateIndexChanges(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo, forceRebuild bool) (toAdd []document, toRemove []string) {
@@ -595,16 +637,9 @@ func (re *Engine) needsIndexing() bool {
 		return true
 	}
 
-	currentDocs, err := re.docService.collectDocuments()
-	if err != nil {
-		re.logger.Warn("Failed to check filesystem, indexing required",
-			zap.Error(err),
-			zap.String("repo_root", re.repoRoot),
-		)
-		return true
-	}
-
-	toAdd, toRemove := re.calculateIndexChanges(currentDocs, indexedFiles, false)
+	scan := re.docService.collectDocuments()
+	currentDocs := scan.documents
+	toAdd, toRemove := re.calculateScanChanges(scan, indexedFiles, false)
 
 	needsIndex := len(toAdd) > 0 || len(toRemove) > 0
 	if needsIndex {

@@ -167,7 +167,9 @@ func (ms *Store) RecountReferences(ctx context.Context, dryRun bool) (*RecountRe
 			tally[avoided]++
 		}
 		if supersededBy.Valid {
-			if target := strings.TrimSpace(supersededBy.String); target != "" {
+			// A merged duplicate is a copy folded into its target, not another
+			// record that relies on it.
+			if target := strings.TrimSpace(supersededBy.String); target != "" && target != strings.TrimSpace(metadata["merged_into"]) {
 				tally[target]++
 			}
 		}

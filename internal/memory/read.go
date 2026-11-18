@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -19,6 +20,7 @@ import (
 
 // snapshotReadonlyMemories returns pointers to cached cachedMemory objects for read-only iteration.
 func (ms *Store) snapshotReadonlyMemories() []*cachedMemory {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
@@ -29,19 +31,49 @@ func (ms *Store) snapshotReadonlyMemories() []*cachedMemory {
 	return snapshot
 }
 
-// hasMemory reports whether the given id is present in the cache. Used to tell
-// a live supersession pointer from a dangling one.
+// hasMemory reports whether the given id exists. Used to tell a live
+// supersession pointer from a dangling one. If the file cannot answer the
+// pointer counts as live, which keeps a retired record retired.
 func (ms *Store) hasMemory(id string) bool {
+	if !ms.cacheLoaded.Load() {
+		var found int
+		err := ms.db.QueryRow(`SELECT 1 FROM memories WHERE id = ?`, id).Scan(&found)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			ms.logger.Warn("Failed to check a memory id", zap.String("id", id), zap.Error(err))
+			return true
+		}
+		return err == nil
+	}
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 	_, ok := ms.memories[id]
 	return ok
 }
 
-// snapshotForContext returns a read-only snapshot pre-filtered by context.
+// snapshotForContext returns a read-only snapshot pre-filtered by context. A
+// failure is logged and reads as an empty result; callers that can return an
+// error use contextSnapshot.
 func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
+	snapshot, err := ms.contextSnapshot(ctx)
+	if err != nil {
+		ms.logger.Error("Failed to read memories of a context", zap.String("context", ctx), zap.Error(err))
+	}
+	return snapshot
+}
+
+// contextSnapshot returns the entries of one context, or of the whole bank when
+// ctx is empty. T175: one context does not need the bank in memory. Until the
+// cache is loaded it is read from the file with the parser the cache is built
+// by, which is what lets a session hook skip the load.
+func (ms *Store) contextSnapshot(ctx string) ([]*cachedMemory, error) {
 	if ctx == "" {
-		return ms.snapshotReadonlyMemories()
+		if err := ms.ensureCache(); err != nil {
+			return nil, err
+		}
+		return ms.snapshotReadonlyMemories(), nil
+	}
+	if !ms.cacheLoaded.Load() {
+		return ms.contextFromFile(ctx)
 	}
 
 	ms.mu.RLock()
@@ -49,13 +81,33 @@ func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
 
 	indexed, ok := ms.contextIndex[ctx]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	snapshot := make([]*cachedMemory, 0, len(indexed))
 	for _, m := range indexed {
 		snapshot = append(snapshot, m)
 	}
-	return snapshot
+	return snapshot, nil
+}
+
+func (ms *Store) contextFromFile(ctx string) ([]*cachedMemory, error) {
+	rows, err := ms.db.Query("SELECT "+memoryColumns+" FROM memories WHERE context = ?", ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var snapshot []*cachedMemory
+	softErrors := 0
+	for rows.Next() {
+		m, err := scanMemoryRowCounting(rows, &softErrors)
+		if err != nil {
+			ms.logger.Warn("Failed to scan memory", zap.Error(err))
+			continue
+		}
+		snapshot = append(snapshot, ms.cachedFromRow(m, &softErrors))
+	}
+	return snapshot, rows.Err()
 }
 
 // LastInContext returns the most recent session-checkpoint memory stored in the
@@ -65,7 +117,10 @@ func (ms *Store) snapshotForContext(ctx string) []*cachedMemory {
 //
 // Returns (nil, nil) if no matching memory exists.
 func (ms *Store) LastInContext(ctx context.Context, contextName string, since time.Time) (*Memory, error) {
-	snapshot := ms.snapshotForContext(contextName)
+	snapshot, err := ms.contextSnapshot(contextName)
+	if err != nil {
+		return nil, err
+	}
 	if len(snapshot) == 0 {
 		return nil, nil
 	}
@@ -180,7 +235,34 @@ func (ms *Store) recallDecayMultiplier(m *cachedMemory, now time.Time) float64 {
 
 // Recall searches memories by semantic similarity, applying filters and importance weighting.
 func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limit int) ([]*SearchResult, error) {
-	snapshot := ms.snapshotForContext(filters.Context)
+	return ms.recall(ctx, query, filters, limit, ms.isCurrentKnowledge, limit > 0)
+}
+
+// isCurrentKnowledge hides superseded entries (temporal replacement after
+// MarkOutdated, merged duplicates after MergeDuplicates) from semantic recall —
+// the successor carries the current knowledge, while the old vector is unchanged
+// and keeps out-ranking it. They
+// stay visible to List/ListLightweight and to the temporal reads. The successor
+// is looked up rather than trusted: Delete does not clear superseded_by on
+// predecessors, and a dangling pointer would bury the entry forever.
+func (ms *Store) isCurrentKnowledge(m *cachedMemory) bool {
+	return m.SupersededBy == "" || !ms.hasMemory(m.SupersededBy)
+}
+
+// recall ranks the snapshot. admit decides which records answer this kind of
+// question, and runs before the limit is spent so that records it rejects cannot
+// take a result slot. targeted says whether the results count as evidence of use
+// (see Memory.TargetedAccessCount).
+func (ms *Store) recall(ctx context.Context, query string, filters Filters, limit int, admit func(*cachedMemory) bool, targeted bool) ([]*SearchResult, error) {
+	// The whole cache even for one context: scoring needs the corpus mean, and
+	// a scoped read would rank the same records differently (T76a).
+	if err := ms.ensureCache(); err != nil {
+		return nil, err
+	}
+	snapshot, err := ms.contextSnapshot(filters.Context)
+	if err != nil {
+		return nil, err
+	}
 	if len(snapshot) == 0 {
 		return nil, nil
 	}
@@ -290,14 +372,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
-		// Superseded entries (temporal replacement, e.g. after a merge or
-		// MarkOutdated) are invisible to semantic recall — the successor
-		// carries the current knowledge, while the old vector is unchanged and
-		// keeps out-ranking it. They stay visible to List/ListLightweight so
-		// maintenance tools still see the temporal history. The successor is
-		// looked up rather than trusted: Delete does not clear superseded_by on
-		// predecessors, and a dangling pointer would bury the entry forever.
-		if m.SupersededBy != "" && ms.hasMemory(m.SupersededBy) {
+		if !admit(m) {
 			continue
 		}
 
@@ -409,13 +484,13 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 	}
 
-	// T113: `limit > 0` is the whole distinction. A bounded recall returns the
-	// top N of a question and those N did answer it; a sweep (limit <= 0, the
-	// shape RecallCanonical passes) returns everything above minScore and
-	// proves nothing about any single entry. Both are recorded; only the first
-	// moves the counter the sediment gate reads.
+	// T113: a bounded recall returns the top N of a question and those N did
+	// answer it; a sweep (limit <= 0, the shape RecallCanonical passes) returns
+	// everything above minScore and proves nothing about any single entry. T191:
+	// neither does a look into history, which can return retired records. All
+	// are recorded; only targeted ones move the counter the sediment gate reads.
 	select {
-	case ms.accessCh <- newAccessEvent(query, filters.Context, results, limit > 0):
+	case ms.accessCh <- newAccessEvent(query, filters.Context, results, targeted):
 	default:
 		ms.logger.Debug("Access stats channel full, dropping update")
 	}
@@ -726,6 +801,7 @@ func (ms *Store) flushAccessStats(ids []string, targeted bool) {
 	// not edited.
 	ms.mu.Lock()
 	for _, id := range successIDs {
+		ms.markLoadDirtyLocked(id)
 		if m, exists := ms.memories[id]; exists {
 			updated := m.cloneForUpdate()
 			updated.AccessedAt = now
@@ -943,7 +1019,10 @@ func (ms *Store) ListLightweight(filters Filters) []*Memory {
 
 // List returns memories matching the given filters, sorted by update time descending.
 func (ms *Store) List(ctx context.Context, filters Filters, limit int) ([]*Memory, error) {
-	snapshot := ms.snapshotForContext(filters.Context)
+	snapshot, err := ms.contextSnapshot(filters.Context)
+	if err != nil {
+		return nil, err
+	}
 	filterTagSet := buildFilterTagSet(filters)
 
 	var filteredIDs []string
@@ -980,6 +1059,9 @@ func (ms *Store) List(ctx context.Context, filters Filters, limit int) ([]*Memor
 
 // ExportAll returns all memories sorted by CreatedAt ascending.
 func (ms *Store) ExportAll(ctx context.Context) ([]*Memory, error) {
+	if err := ms.ensureCache(); err != nil {
+		return nil, err
+	}
 	snapshot := ms.snapshotReadonlyMemories()
 
 	sort.Slice(snapshot, func(i, j int) bool {
@@ -1009,6 +1091,7 @@ func (ms *Store) ExportAll(ctx context.Context) ([]*Memory, error) {
 
 // Count returns the total number of stored memories.
 func (ms *Store) Count() int {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 	return len(ms.memories)
@@ -1016,6 +1099,7 @@ func (ms *Store) Count() int {
 
 // CountByType returns the number of memories grouped by Type.
 func (ms *Store) CountByType() map[Type]int {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
@@ -1034,6 +1118,7 @@ func (ms *Store) CountByType() map[Type]int {
 // Review-queue cards are left out: since T84 they are stored without a vector
 // on purpose, and counting them raised a false "encoder refused" alarm (T189).
 func (ms *Store) CountWithoutEmbedding() int {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
@@ -1049,6 +1134,7 @@ func (ms *Store) CountWithoutEmbedding() int {
 // CountTruncatedEmbedding returns the number of memories whose vector covers
 // only the opening of the body (T120).
 func (ms *Store) CountTruncatedEmbedding() int {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
@@ -1063,6 +1149,7 @@ func (ms *Store) CountTruncatedEmbedding() int {
 
 // CountByEmbeddingModel returns the number of memories grouped by embedding model.
 func (ms *Store) CountByEmbeddingModel() map[string]int {
+	ms.requireCache()
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
@@ -1087,21 +1174,21 @@ func (ms *Store) DB() *sql.DB {
 // ReloadCache forces the in-memory cache to resync with the database.
 // Intended for test helpers that bypass the normal write path (e.g. direct
 // SQL to backdate rows for cycle testing). Safe to call concurrently with
-// other reads because loadMemoriesToCache acquires mu.
+// reads and writes: see loadMemoriesToCache.
 func (ms *Store) ReloadCache() error {
 	return ms.loadMemoriesToCache()
 }
 
 // Close shuts down all background workers and closes the database connection.
-// Order matters: cancel the startup re-embed first — it is the one worker whose
-// natural runtime scales with the size of the bank, and accessWG below waits on
-// it. Then drain in-flight triple-extraction goroutines so they don't write to a
+// Order matters: cancel the cache load and the startup re-embed first — they are
+// the workers whose natural runtime scales with the size of the bank, and
+// accessWG below waits on them. Then drain in-flight triple-extraction goroutines so they don't write to a
 // closed DB, and stop the access-stats worker.
 func (ms *Store) Close() error {
 	ms.stopWatching()
-	if ms.reembedCancel != nil {
-		ms.reembedCancel()
-	}
+	ms.bgMu.Lock()
+	ms.closeCancel()
+	ms.bgMu.Unlock()
 	ms.extractionWG.Wait()
 	close(ms.accessCh)
 	ms.accessWG.Wait()

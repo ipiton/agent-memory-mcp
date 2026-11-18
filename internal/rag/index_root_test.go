@@ -145,13 +145,19 @@ func TestIndexAcceptsMovedRepository(t *testing.T) {
 	t.Cleanup(srv.Close)
 	indexPath := t.TempDir()
 	oldRoot := newRootProject(t, "a1.md", "a2.md")
-	newRoot := newRootProject(t, "a1.md", "a2.md")
+	newRoot := filepath.Join(t.TempDir(), "moved")
 
-	if err := newRootEngine(t, oldRoot, indexPath, srv.URL).IndexDocuments(context.Background()); err != nil {
+	original := newRootEngine(t, oldRoot, indexPath, srv.URL)
+	original.docService.config.IndexDirs = []string{"docs", "CHANGELOG.md"}
+	if err := original.IndexDocuments(context.Background()); err != nil {
 		t.Fatalf("index old root: %v", err)
 	}
 
+	if err := os.Rename(oldRoot, newRoot); err != nil {
+		t.Fatal(err)
+	}
 	moved := newRootEngine(t, newRoot, indexPath, srv.URL)
+	moved.docService.config.IndexDirs = []string{"docs", "CHANGELOG.md"}
 	if err := moved.IndexDocuments(context.Background()); err != nil {
 		t.Fatalf("index new root: %v", err)
 	}

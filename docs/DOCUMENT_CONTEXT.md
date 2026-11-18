@@ -61,4 +61,5 @@ you need the live file that backs the shared index.
 
 A completed index that records the resolved root works without a schema change
 or per-file backfill. If an older index lacks a root or records an unresolved
-root symlink, run indexing with the intended root available to record it.
+root symlink, run indexing with the intended root and its configured indexed
+sources available to record the resolved root.

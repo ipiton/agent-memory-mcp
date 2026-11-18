@@ -71,7 +71,6 @@ type MCPServer struct {
 	config            config.Config
 	pathGuard         *paths.Guard
 	indexPathGuard    *paths.Guard // guarded by ragMu; configured index root
-	outputMode        string
 	stats             *stats.Logger
 	ragEngine         *rag.Engine
 	ragMu             sync.RWMutex // protects ragEngine during hot-reload
@@ -109,7 +108,6 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 		config:            cfg,
 		pathGuard:         guard,
 		indexPathGuard:    newIndexPathGuard(cfg.RAG.IndexRoot, guard),
-		outputMode:        cfg.OutputMode,
 		stats:             stats.NewLogger(cfg),
 		ragEngine:         ragEngine,
 		memoryStore:       memoryStore,
@@ -145,9 +143,9 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 // read on stdin cannot be interrupted, so the loop runs in its own goroutine
 // and is abandoned on cancellation: the caller is about to exit anyway, and
 // waiting for it would keep a client's SIGTERM from reaching Shutdown (T172).
-func RunStdio(ctx context.Context, server *MCPServer) error {
+func RunStdio(ctx context.Context, start *StdioStart) error {
 	done := make(chan error, 1)
-	go func() { done <- serveStdio(server, os.Stdin, os.Stdout) }()
+	go func() { done <- serveStdio(start, os.Stdin, os.Stdout) }()
 	select {
 	case err := <-done:
 		return err
@@ -156,9 +154,10 @@ func RunStdio(ctx context.Context, server *MCPServer) error {
 	}
 }
 
-func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
+func serveStdio(start *StdioStart, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	writer := bufio.NewWriter(out)
+	outputMode := start.cfg.OutputMode
 
 	for {
 		payload, mode, err := readMessage(reader)
@@ -168,8 +167,8 @@ func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
 			}
 			return err
 		}
-		if server.outputMode == "" && mode != "" {
-			server.outputMode = mode
+		if outputMode == "" && mode != "" {
+			outputMode = mode
 		}
 		if len(strings.TrimSpace(string(payload))) == 0 {
 			continue
@@ -178,18 +177,18 @@ func serveStdio(server *MCPServer, in io.Reader, out io.Writer) error {
 		var req rpcRequest
 		if err := json.Unmarshal(payload, &req); err != nil {
 			resp := errorResponse(nil, -32600, "invalid request", err.Error())
-			if err := writeResponse(writer, resp, server.outputMode); err != nil {
+			if err := writeResponse(writer, resp, outputMode); err != nil {
 				return err
 			}
 			continue
 		}
 
 		req.client = stdioClientKey
-		resp := server.handle(req)
+		resp := start.handle(req)
 		if resp == nil {
 			continue
 		}
-		if err := writeResponse(writer, resp, server.outputMode); err != nil {
+		if err := writeResponse(writer, resp, outputMode); err != nil {
 			return err
 		}
 	}
@@ -412,6 +411,10 @@ func (s *MCPServer) handleInitialize(client string, params json.RawMessage) (any
 		}
 	}
 
+	return initializeResult(), nil
+}
+
+func initializeResult() map[string]any {
 	return map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
@@ -426,7 +429,7 @@ func (s *MCPServer) handleInitialize(client string, params json.RawMessage) (any
 			"name":    "agent-memory-mcp",
 			"version": Version,
 		},
-	}, nil
+	}
 }
 
 // getRagEngine returns the current RAG engine under read lock.

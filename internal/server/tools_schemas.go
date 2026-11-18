@@ -143,35 +143,41 @@ func mainToolDefs() []tool {
 // config.ToolGrouping is set, the core toolset is collapsed into grouped
 // meta-tools (T67) after availability filtering.
 func (s *MCPServer) handleToolsList(_ json.RawMessage) (any, *rpcError) {
-	tools := s.availableToolDefs()
+	return s.toolsListResult(s.availableToolDefs()), nil
+}
+
+func (s *MCPServer) toolsListResult(tools []tool) map[string]any {
 	if s.config.ToolGrouping {
 		tools = buildGroupedList(tools)
 	}
-	return map[string]any{"tools": tools}, nil
+	return map[string]any{"tools": tools}
 }
 
 // availableToolDefs returns the flat tool list filtered to the subsystems that
 // are actually available. Shared by the flat and grouped tools/list paths so
 // grouping never advertises an action whose backing tool is absent.
 func (s *MCPServer) availableToolDefs() []tool {
+	return s.toolDefsFor(s.getRagEngine() != nil, s.memoryStore != nil, s.stewardService != nil)
+}
+
+func (s *MCPServer) toolDefsFor(hasRAG, hasMemory, hasSteward bool) []tool {
 	tools := mainToolDefs()
-	if s.stewardService != nil {
+	if hasSteward {
 		tools = append(tools, stewardToolDefs()...)
 	}
 
-	re := s.getRagEngine()
 	filtered := make([]tool, 0, len(tools))
 	for _, t := range tools {
 		if !s.toolInProfile(t.Name) {
 			continue
 		}
-		if re == nil && ragTools[t.Name] {
+		if !hasRAG && ragTools[t.Name] {
 			continue
 		}
-		if s.memoryStore == nil && memoryTools[t.Name] {
+		if !hasMemory && memoryTools[t.Name] {
 			continue
 		}
-		if s.memoryStore == nil && re == nil && hybridTools[t.Name] {
+		if !hasMemory && !hasRAG && hybridTools[t.Name] {
 			continue
 		}
 		t.Annotations = annotationsFor(t.Name)
