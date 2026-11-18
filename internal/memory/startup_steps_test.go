@@ -43,7 +43,7 @@ func TestNewStoreLogsStartupSteps(t *testing.T) {
 			t.Errorf("cache_load memories = %v, want 1", fields["memories"])
 		}
 	}
-	want := []string{"open", "schema", "utf8_repair", "cache_load"}
+	want := []string{"open", "schema", "utf8_repair", "merged_duplicates_backfill", "cache_load"}
 	if len(steps) != len(want) {
 		t.Fatalf("steps = %v, want %v", steps, want)
 	}

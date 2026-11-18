@@ -361,6 +361,16 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 		logger.Warn("Repaired memories with invalid UTF-8 content/title", zap.Int("repaired", repaired))
 	}
 	logStep("utf8_repair")
+	if backfill, err := backfillMergedDuplicatesOnce(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("failed to backfill merged duplicates: %w", err)
+	} else if backfill.updated > 0 || backfill.skippedCycles > 0 {
+		logger.Info("Backfilled temporal fields of merged duplicates",
+			zap.Int("updated", backfill.updated),
+			zap.Int("skipped_cycles", backfill.skippedCycles),
+		)
+	}
+	logStep("merged_duplicates_backfill")
 
 	store := &Store{
 		db:           db,

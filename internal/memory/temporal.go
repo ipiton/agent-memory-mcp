@@ -11,28 +11,15 @@ import (
 // A memory is considered valid at `asOf` if:
 //   - valid_from is nil or valid_from <= asOf
 //   - valid_until is nil or valid_until > asOf
+//
+// T191: the validity window alone decides, so a record superseded after asOf is
+// found: it was the current one then. MarkOutdated closes its window at the
+// moment of supersession, which keeps it out of later dates.
 func (ms *Store) RecallAsOf(ctx context.Context, query string, asOf time.Time, filters Filters, limit int) ([]*SearchResult, error) {
-	// Use an over-fetching inner limit since temporal filtering may discard many results.
-	innerLimit := 200
-	if limit > 0 && limit*10 > innerLimit {
-		innerLimit = limit * 10
-	}
-	results, err := ms.Recall(ctx, query, filters, innerLimit)
+	validThen := func(m *cachedMemory) bool { return isValidAt(m.ValidFrom, m.ValidUntil, asOf) }
+	filtered, err := ms.recall(ctx, query, filters, limit, validThen, false)
 	if err != nil {
 		return nil, err
-	}
-
-	var filtered []*SearchResult
-	for _, r := range results {
-		m := r.Memory
-		if !isValidAt(m, asOf) {
-			continue
-		}
-		filtered = append(filtered, r)
-	}
-
-	if limit > 0 && len(filtered) > limit {
-		filtered = filtered[:limit]
 	}
 
 	// T155: a record rewritten after asOf answers with the text it carried
@@ -60,12 +47,12 @@ func (ms *Store) RecallAsOf(ctx context.Context, query string, asOf time.Time, f
 	return filtered, nil
 }
 
-// isValidAt checks if a memory was valid at the given timestamp.
-func isValidAt(m *Memory, asOf time.Time) bool {
-	if m.ValidFrom != nil && m.ValidFrom.After(asOf) {
+// isValidAt checks if a validity window covers the given timestamp.
+func isValidAt(validFrom, validUntil *time.Time, asOf time.Time) bool {
+	if validFrom != nil && validFrom.After(asOf) {
 		return false
 	}
-	if m.ValidUntil != nil && !m.ValidUntil.After(asOf) {
+	if validUntil != nil && !validUntil.After(asOf) {
 		return false
 	}
 	return true
@@ -87,8 +74,9 @@ type TimelineEntry struct {
 // KnowledgeTimeline returns the chronological evolution of knowledge matching the query.
 // It finds related memories and orders them by valid_from (or created_at as fallback).
 func (ms *Store) KnowledgeTimeline(ctx context.Context, query string, memContext string, service string) ([]TimelineEntry, error) {
-	// Recall matching memories (including archived/superseded) with a safety cap.
-	results, err := ms.Recall(ctx, query, Filters{Context: memContext}, 500)
+	// Rank matching memories, superseded ones included, with a safety cap.
+	anyRecord := func(*cachedMemory) bool { return true }
+	results, err := ms.recall(ctx, query, Filters{Context: memContext}, 500, anyRecord, false)
 	if err != nil {
 		return nil, err
 	}
