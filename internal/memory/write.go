@@ -532,6 +532,17 @@ func (ms *Store) PromoteToCanonical(ctx context.Context, id string, owner string
 }
 
 // MergeDuplicates consolidates duplicate memories into a primary entry and archives the rest.
+//
+// Each duplicate ends at the merge: superseded_by points at the primary and
+// valid_until closes its window, unless the window had already closed earlier.
+// The primary's temporal fields stay as they are, which is where this differs
+// from MarkOutdated: a successor starts when it takes over, while the primary
+// existed all along and must keep answering for dates before the merge. Its
+// replaces is one pointer and may belong to a real supersession; the merged ids
+// go to merged_from instead.
+//
+// A primary that is itself retired is refused: the duplicates' text would end up
+// only in a record that no longer answers.
 func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicateIDs []string) (*MergeDuplicatesResult, error) {
 	ms.writeMu.Lock()
 	defer ms.writeMu.Unlock()
@@ -583,6 +594,11 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 	}
 
 	now := ms.now()
+	nowUTC := now.UTC()
+	if (primary.SupersededBy != "" && ms.hasMemory(primary.SupersededBy)) || !isValidAt(primary.ValidFrom, primary.ValidUntil, nowUTC) {
+		return nil, &ErrValidation{Message: fmt.Sprintf("primary memory %s is retired; merge into its current successor instead", primaryID)}
+	}
+
 	metadata := copyMetadata(primary.Metadata)
 	if owner := strings.TrimSpace(metadata["owner"]); owner == "" {
 		for _, duplicate := range duplicates {
@@ -652,6 +668,10 @@ func (ms *Store) MergeDuplicates(ctx context.Context, primaryID string, duplicat
 		}
 		updatedDuplicate.Importance = importance
 		updatedDuplicate.Metadata = NormalizeMetadata(duplicateMetadata)
+		updatedDuplicate.SupersededBy = primaryID
+		if updatedDuplicate.ValidUntil == nil || updatedDuplicate.ValidUntil.After(nowUTC) {
+			updatedDuplicate.ValidUntil = &nowUTC
+		}
 		updatedDuplicate.UpdatedAt = now
 		if err := updatedDuplicate.Validate(); err != nil {
 			return nil, err

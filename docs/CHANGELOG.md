@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Index directories explicitly configured through symbolic links, preserving document paths and exclusions. Replacing a directory with a link no longer silently removes its indexed documents.
 - Indexing retains files under unavailable source paths while updating accessible sources. Missing optional paths no longer stop indexing. A model or chunker rebuild waits until indexed sources are available.
 - `recall_as_of` and `knowledge_timeline` now see entries replaced through `mark_outdated` with `superseded_by`. A date before the replacement returns the entry that was current then, a later date returns its successor, and the timeline shows both. `recall_memory` still hides replaced entries. These two tools no longer raise `targeted_access_count` or write `recall_events`.
+- `merge_duplicates` now ends each duplicate at the merge. The duplicate leaves `recall_memory`, `recall_as_of` returns it only for dates before the merge, and `knowledge_timeline` shows its link to the primary. The primary keeps its validity dates and still answers for earlier dates with its earlier text. Merging into a retired primary is now refused. On first start, existing merged duplicates are migrated once, using the merge time recorded in their metadata; records merged into each other are left visible. `recount_references` does not count merges as references.
 
 ## [0.18.0] - 2026-11-15
 

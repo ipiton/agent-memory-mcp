@@ -183,9 +183,10 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 	return ms.recall(ctx, query, filters, limit, ms.isCurrentKnowledge, limit > 0)
 }
 
-// isCurrentKnowledge hides superseded entries (temporal replacement, e.g. after
-// MarkOutdated) from semantic recall — the successor carries the current
-// knowledge, while the old vector is unchanged and keeps out-ranking it. They
+// isCurrentKnowledge hides superseded entries (temporal replacement after
+// MarkOutdated, merged duplicates after MergeDuplicates) from semantic recall —
+// the successor carries the current knowledge, while the old vector is unchanged
+// and keeps out-ranking it. They
 // stay visible to List/ListLightweight and to the temporal reads. The successor
 // is looked up rather than trusted: Delete does not clear superseded_by on
 // predecessors, and a dangling pointer would bury the entry forever.
