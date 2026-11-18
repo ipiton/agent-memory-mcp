@@ -66,7 +66,8 @@ type sqlExecer interface {
 func (s *SQLiteStore) KeywordSearch(query string, limit int) ([]SearchResult, error) {
 	queryLower := strings.ToLower(strings.TrimSpace(query))
 	terms := uniqueKeywordTerms(stemTokens(tokenizeKeywordText(queryLower)))
-	if len(terms) == 0 {
+	matchTerms := keywordQueryTerms(queryLower)
+	if len(matchTerms) == 0 {
 		return []SearchResult{}, nil
 	}
 	select {
@@ -79,8 +80,8 @@ func (s *SQLiteStore) KeywordSearch(query string, limit int) ([]SearchResult, er
 		return nil, ErrKeywordIndexBuilding
 	}
 
-	quoted := make([]string, len(terms))
-	for i, term := range terms {
+	quoted := make([]string, len(matchTerms))
+	for i, term := range matchTerms {
 		quoted[i] = `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
 	}
 	match := strings.Join(quoted, " OR ")
@@ -149,6 +150,44 @@ func (s *SQLiteStore) keywordCandidates(match string, limit int) (map[string]Sea
 		out[result.ID] = result
 	}
 	return out, rows.Err()
+}
+
+func keywordQueryTerms(query string) []string {
+	terms := uniqueKeywordTerms(stemTokens(tokenizeKeywordText(query)))
+	// Punctuation can make function words part of a technical identifier.
+	for _, field := range strings.Fields(query) {
+		field = strings.Trim(field, "\"'.,!?;()[]{}<>")
+		if strings.ContainsAny(field, "_/.:-") {
+			return terms
+		}
+	}
+	contentTerms := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if !isEnglishFunctionWord(term) {
+			contentTerms = append(contentTerms, term)
+		}
+	}
+	// Keep searches for phrases or names made entirely of function words usable.
+	if len(contentTerms) == 0 {
+		return terms
+	}
+	return contentTerms
+}
+
+// Question grammar should not promote English prose over a relevant source
+// written in another language. Stored tokens and exact phrase boosts stay intact.
+func isEnglishFunctionWord(term string) bool {
+	switch term {
+	case "a", "an", "and", "are", "as", "at", "be", "been", "being", "by",
+		"can", "could", "did", "do", "does", "for", "from", "had", "has", "have",
+		"how", "if", "in", "into", "is", "it", "its", "may", "must", "not",
+		"of", "on", "or", "should", "that", "the", "their", "them", "there",
+		"these", "they", "this", "those", "to", "was", "were", "what", "when",
+		"where", "which", "who", "why", "will", "with", "would":
+		return true
+	default:
+		return false
+	}
 }
 
 func tokenizeKeywordText(value string) []string {

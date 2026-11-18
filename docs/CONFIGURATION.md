@@ -236,6 +236,13 @@ The retrieval pipeline now works in two stages:
 - semantic top-K candidate generation from the vector index
 - keyword top-K candidate generation from a precomputed in-memory keyword index
 
+Keyword queries omit common English function words when other query terms remain.
+This prevents question wording from promoting English prose over a relevant source
+in another language. Queries made entirely of those words keep all their terms.
+Queries containing identifier punctuation keep all their terms as well.
+Exact phrase and all-term boosts still use the original query terms, and stored tokens are unchanged,
+so existing indexes need no rebuild.
+
 Only the merged candidate set is reranked. This keeps shared-service retrieval more predictable as the indexed corpus grows.
 
 This means a strong keyword hit in a runbook or changelog can outrank a semantically similar but less task-relevant document.
