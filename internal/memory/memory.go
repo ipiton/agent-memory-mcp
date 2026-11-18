@@ -171,10 +171,17 @@ type Store struct {
 	db       *sql.DB
 	logger   *zap.Logger
 	embedder embedder.Service
-	writeMu  sync.Mutex       // serializes write operations (Store, Update, Delete, Merge, Promote)
-	mu       sync.RWMutex     // protects in-memory cache (memories, contextIndex)
-	accessCh chan accessEvent // batched access stats updates
-	accessWG sync.WaitGroup
+	writeMu  sync.Mutex   // serializes write operations (Store, Update, Delete, Merge, Promote)
+	mu       sync.RWMutex // protects in-memory cache (memories, contextIndex)
+	// loadMu lets one cache build run at a time. Order: writeMu → loadMu → mu.
+	loadMu sync.Mutex
+	// loadDirty, guarded by mu, is non-nil while a build runs and names the
+	// records written since it started: their rows may be newer than its scan.
+	loadDirty map[string]struct{}
+	// afterCacheScan runs between a build's scan and its catch-up. Test seam.
+	afterCacheScan func()
+	accessCh       chan accessEvent // batched access stats updates
+	accessWG       sync.WaitGroup
 	// reembedCancel stops the startup re-embed that maybeStartBackgroundReembed
 	// launches. Close waits on accessWG, so without a way to cancel the walk a
 	// short-lived process (the hooks CLI) could not exit until the whole bank
@@ -403,76 +410,148 @@ func NewStore(dbPath string, embedder embedder.Service, logger *zap.Logger) (*St
 	return store, nil
 }
 
+// loadMemoriesToCache rebuilds the cache from the file.
+//
+// T175: the scan costs about a second of CPU on a 33k bank and minutes on a
+// starved machine, and it used to run under mu, so every read waited behind it.
+// The new tables are built aside and published in one short critical section.
+// Readers keep the previous tables meanwhile; writers keep working, and what
+// they commit after the scan began is re-read from the file before publishing.
 func (ms *Store) loadMemoriesToCache() error {
-	// T90 D4: the same column list and the same parser as every other reader.
-	rows, err := ms.db.Query("SELECT " + memoryColumns + " FROM memories")
+	ms.loadMu.Lock()
+	defer ms.loadMu.Unlock()
+
+	ms.mu.Lock()
+	ms.loadDirty = make(map[string]struct{})
+	ms.mu.Unlock()
+	published := false
+	defer func() {
+		if !published {
+			ms.mu.Lock()
+			ms.loadDirty = nil
+			ms.mu.Unlock()
+		}
+	}()
+
+	memories := make(map[string]*cachedMemory)
+	contextIndex := make(map[string]map[string]*cachedMemory)
+	loadErrors, err := ms.scanCache(memories, contextIndex)
 	if err != nil {
 		return err
 	}
+	if ms.afterCacheScan != nil {
+		ms.afterCacheScan()
+	}
+
+	for {
+		ms.mu.Lock()
+		if len(ms.loadDirty) == 0 {
+			ms.memories = memories
+			ms.contextIndex = contextIndex
+			ms.loadErrors = loadErrors
+			ms.loadDirty = nil
+			published = true
+			// T76a: the mean is a property of the loaded corpus, so it is computed
+			// here — one pass while everything is already in hand — rather than on
+			// first use, where it would land in the middle of a query.
+			vectors := make([][]float32, 0, len(memories))
+			for _, cm := range memories {
+				if len(cm.Embedding) > 0 {
+					vectors = append(vectors, cm.Embedding)
+				}
+			}
+			ms.center.Store(newEmbeddingCenter(vectors))
+			ms.mu.Unlock()
+			return nil
+		}
+		ids := make([]string, 0, len(ms.loadDirty))
+		for id := range ms.loadDirty {
+			ids = append(ids, id)
+		}
+		ms.loadDirty = make(map[string]struct{})
+		ms.mu.Unlock()
+
+		fresh, err := ms.getBatch(ids)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if m, ok := fresh[id]; ok {
+				cacheSet(memories, contextIndex, ms.cachedFromRow(m, &loadErrors))
+			} else {
+				cacheDelete(memories, contextIndex, id)
+			}
+		}
+	}
+}
+
+// scanCache reads every row into the given tables and returns the number of
+// rows that needed repair or could not be decoded.
+func (ms *Store) scanCache(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory) (int, error) {
+	// T90 D4: the same column list and the same parser as every other reader.
+	rows, err := ms.db.Query("SELECT " + memoryColumns + " FROM memories")
+	if err != nil {
+		return 0, err
+	}
 	defer func() { _ = rows.Close() }()
 
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-
-	ms.memories = make(map[string]*cachedMemory)
-	ms.contextIndex = make(map[string]map[string]*cachedMemory)
-	ms.loadErrors = 0
-
+	loadErrors := 0
 	for rows.Next() {
-		m, err := scanMemoryRowCounting(rows, &ms.loadErrors)
+		m, err := scanMemoryRowCounting(rows, &loadErrors)
 		if err != nil {
 			ms.logger.Warn("Failed to scan memory", zap.Error(err))
-			ms.loadErrors++
+			loadErrors++
 			continue
 		}
-
-		// T87: name the record and sanitize the cache when content/title carry
-		// invalid UTF-8 (startup repair normally fixes these first; this is the
-		// backstop against silent degradation that memory_stats under-counted).
-		if !utf8.ValidString(m.Content) || !utf8.ValidString(m.Title) {
-			ms.logger.Warn("Memory has invalid UTF-8; sanitized in cache", zap.String("id", m.ID))
-			m.Content = sanitizeUTF8(m.Content)
-			m.Title = sanitizeUTF8(m.Title)
-			ms.loadErrors++
-		}
-
-		ms.cacheSetLocked(toCachedMemory(m))
+		cacheSet(memories, contextIndex, ms.cachedFromRow(m, &loadErrors))
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
+	return loadErrors, rows.Err()
+}
 
-	// T76a: the mean is a property of the loaded corpus, so it is computed
-	// here — one pass while everything is already in hand — rather than on
-	// first use, where it would land in the middle of a query.
-	vectors := make([][]float32, 0, len(ms.memories))
-	for _, cm := range ms.memories {
-		if len(cm.Embedding) > 0 {
-			vectors = append(vectors, cm.Embedding)
-		}
+// cachedFromRow turns a row read from the file into its cache entry.
+func (ms *Store) cachedFromRow(m *Memory, loadErrors *int) *cachedMemory {
+	// T87: name the record and sanitize the cache when content/title carry
+	// invalid UTF-8 (startup repair normally fixes these first; this is the
+	// backstop against silent degradation that memory_stats under-counted).
+	if !utf8.ValidString(m.Content) || !utf8.ValidString(m.Title) {
+		ms.logger.Warn("Memory has invalid UTF-8; sanitized in cache", zap.String("id", m.ID))
+		m.Content = sanitizeUTF8(m.Content)
+		m.Title = sanitizeUTF8(m.Title)
+		*loadErrors++
 	}
-	ms.center.Store(newEmbeddingCenter(vectors))
-
-	return nil
+	return toCachedMemory(m)
 }
 
 // cacheSetLocked adds or updates a memory in the cache and context index.
 // Caller MUST hold ms.mu for writing.
 func (ms *Store) cacheSetLocked(m *cachedMemory) {
-	if old, exists := ms.memories[m.ID]; exists && old.Context != m.Context {
-		if idx, ok := ms.contextIndex[old.Context]; ok {
+	ms.markLoadDirtyLocked(m.ID)
+	cacheSet(ms.memories, ms.contextIndex, m)
+}
+
+// markLoadDirtyLocked tells a running cache build that this record's row has
+// changed. Caller MUST hold ms.mu for writing and have committed the row.
+func (ms *Store) markLoadDirtyLocked(id string) {
+	if ms.loadDirty != nil {
+		ms.loadDirty[id] = struct{}{}
+	}
+}
+
+func cacheSet(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory, m *cachedMemory) {
+	if old, exists := memories[m.ID]; exists && old.Context != m.Context {
+		if idx, ok := contextIndex[old.Context]; ok {
 			delete(idx, m.ID)
 			if len(idx) == 0 {
-				delete(ms.contextIndex, old.Context)
+				delete(contextIndex, old.Context)
 			}
 		}
 	}
-	ms.memories[m.ID] = m
+	memories[m.ID] = m
 	if m.Context != "" {
-		if ms.contextIndex[m.Context] == nil {
-			ms.contextIndex[m.Context] = make(map[string]*cachedMemory)
+		if contextIndex[m.Context] == nil {
+			contextIndex[m.Context] = make(map[string]*cachedMemory)
 		}
-		ms.contextIndex[m.Context][m.ID] = m
+		contextIndex[m.Context][m.ID] = m
 	}
 }
 
@@ -547,14 +626,19 @@ func (cm *cachedMemory) cloneForUpdate() *cachedMemory {
 // cacheDeleteLocked removes a memory from the cache and context index.
 // Caller MUST hold ms.mu for writing.
 func (ms *Store) cacheDeleteLocked(id string) {
-	if m, exists := ms.memories[id]; exists {
-		if idx, ok := ms.contextIndex[m.Context]; ok {
+	ms.markLoadDirtyLocked(id)
+	cacheDelete(ms.memories, ms.contextIndex, id)
+}
+
+func cacheDelete(memories map[string]*cachedMemory, contextIndex map[string]map[string]*cachedMemory, id string) {
+	if m, exists := memories[id]; exists {
+		if idx, ok := contextIndex[m.Context]; ok {
 			delete(idx, m.ID)
 			if len(idx) == 0 {
-				delete(ms.contextIndex, m.Context)
+				delete(contextIndex, m.Context)
 			}
 		}
-		delete(ms.memories, id)
+		delete(memories, id)
 	}
 }
 

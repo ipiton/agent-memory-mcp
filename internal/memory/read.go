@@ -738,6 +738,7 @@ func (ms *Store) flushAccessStats(ids []string, targeted bool) {
 	// not edited.
 	ms.mu.Lock()
 	for _, id := range successIDs {
+		ms.markLoadDirtyLocked(id)
 		if m, exists := ms.memories[id]; exists {
 			updated := m.cloneForUpdate()
 			updated.AccessedAt = now
@@ -1099,7 +1100,7 @@ func (ms *Store) DB() *sql.DB {
 // ReloadCache forces the in-memory cache to resync with the database.
 // Intended for test helpers that bypass the normal write path (e.g. direct
 // SQL to backdate rows for cycle testing). Safe to call concurrently with
-// other reads because loadMemoriesToCache acquires mu.
+// reads and writes: see loadMemoriesToCache.
 func (ms *Store) ReloadCache() error {
 	return ms.loadMemoriesToCache()
 }

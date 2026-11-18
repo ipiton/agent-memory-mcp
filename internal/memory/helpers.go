@@ -46,6 +46,7 @@ func parseMetadataJSON(raw sql.NullString) (map[string]string, error) {
 func (ms *Store) updateCachedField(id string, fn func(*cachedMemory)) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
+	ms.markLoadDirtyLocked(id)
 	if cm, ok := ms.memories[id]; ok && cm != nil {
 		updated := cm.cloneForUpdate()
 		fn(updated)
