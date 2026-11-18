@@ -180,6 +180,24 @@ func (ms *Store) recallDecayMultiplier(m *cachedMemory, now time.Time) float64 {
 
 // Recall searches memories by semantic similarity, applying filters and importance weighting.
 func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limit int) ([]*SearchResult, error) {
+	return ms.recall(ctx, query, filters, limit, ms.isCurrentKnowledge, limit > 0)
+}
+
+// isCurrentKnowledge hides superseded entries (temporal replacement, e.g. after
+// MarkOutdated) from semantic recall — the successor carries the current
+// knowledge, while the old vector is unchanged and keeps out-ranking it. They
+// stay visible to List/ListLightweight and to the temporal reads. The successor
+// is looked up rather than trusted: Delete does not clear superseded_by on
+// predecessors, and a dangling pointer would bury the entry forever.
+func (ms *Store) isCurrentKnowledge(m *cachedMemory) bool {
+	return m.SupersededBy == "" || !ms.hasMemory(m.SupersededBy)
+}
+
+// recall ranks the snapshot. admit decides which records answer this kind of
+// question, and runs before the limit is spent so that records it rejects cannot
+// take a result slot. targeted says whether the results count as evidence of use
+// (see Memory.TargetedAccessCount).
+func (ms *Store) recall(ctx context.Context, query string, filters Filters, limit int, admit func(*cachedMemory) bool, targeted bool) ([]*SearchResult, error) {
 	snapshot := ms.snapshotForContext(filters.Context)
 	if len(snapshot) == 0 {
 		return nil, nil
@@ -290,14 +308,7 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 			continue
 		}
 
-		// Superseded entries (temporal replacement, e.g. after a merge or
-		// MarkOutdated) are invisible to semantic recall — the successor
-		// carries the current knowledge, while the old vector is unchanged and
-		// keeps out-ranking it. They stay visible to List/ListLightweight so
-		// maintenance tools still see the temporal history. The successor is
-		// looked up rather than trusted: Delete does not clear superseded_by on
-		// predecessors, and a dangling pointer would bury the entry forever.
-		if m.SupersededBy != "" && ms.hasMemory(m.SupersededBy) {
+		if !admit(m) {
 			continue
 		}
 
@@ -409,13 +420,13 @@ func (ms *Store) Recall(ctx context.Context, query string, filters Filters, limi
 		}
 	}
 
-	// T113: `limit > 0` is the whole distinction. A bounded recall returns the
-	// top N of a question and those N did answer it; a sweep (limit <= 0, the
-	// shape RecallCanonical passes) returns everything above minScore and
-	// proves nothing about any single entry. Both are recorded; only the first
-	// moves the counter the sediment gate reads.
+	// T113: a bounded recall returns the top N of a question and those N did
+	// answer it; a sweep (limit <= 0, the shape RecallCanonical passes) returns
+	// everything above minScore and proves nothing about any single entry. T191:
+	// neither does a look into history, which can return retired records. All
+	// are recorded; only targeted ones move the counter the sediment gate reads.
 	select {
-	case ms.accessCh <- newAccessEvent(query, filters.Context, results, limit > 0):
+	case ms.accessCh <- newAccessEvent(query, filters.Context, results, targeted):
 	default:
 		ms.logger.Debug("Access stats channel full, dropping update")
 	}
