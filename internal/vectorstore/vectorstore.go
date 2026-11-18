@@ -141,10 +141,23 @@ const indexGenerationKey = "index_generation"
 
 // NewSQLiteStore creates a new SQLite-backed vector store with the given embedding dimension.
 func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteStore, error) {
+	// T175: opening this index took up to 96 s on a loaded machine, more than the
+	// memory cache, and nothing said which part. One line per finished step.
+	stepStart := time.Now()
+	logStep := func(step string, fields ...zap.Field) {
+		now := time.Now()
+		logger.Info("Vector store startup step", append([]zap.Field{
+			zap.String("step", step),
+			zap.Duration("elapsed", now.Sub(stepStart)),
+		}, fields...)...)
+		stepStart = now
+	}
+
 	db, err := dbutil.OpenSQLite(dbPath, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SQLite database: %w", err)
 	}
+	logStep("open")
 
 	schema := `
 	CREATE TABLE IF NOT EXISTS chunks (
@@ -189,12 +202,14 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		return nil, err
 	}
 	store.loadedIndexVersion = store.readIndexVersion()
+	logStep("schema")
 
 	keywordIndexReady, err := store.prepareKeywordIndex()
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to prepare keyword index: %w", err)
 	}
+	logStep("keyword_prepare", zap.Bool("ready", keywordIndexReady))
 
 	// T118: documents whose chunks were cut mid-rune are queued for re-chunking
 	// before the orphan sweep, so one index pass fixes both.
@@ -207,12 +222,14 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 			zap.Int("invalid_chunks", invalid),
 		)
 	}
+	logStep("utf8_sweep")
 
 	if orphans, err := store.CleanOrphans(); err != nil {
 		logger.Warn("Failed to clean orphan chunks at startup", zap.Error(err))
 	} else if orphans > 0 {
 		logger.Info("Startup orphan cleanup", zap.Int("removed", orphans))
 	}
+	logStep("orphan_sweep")
 
 	// The first build after an upgrade takes tens of seconds on a large index.
 	// It runs behind the open so the MCP handshake is not held up by it; writes
@@ -224,8 +241,10 @@ func NewSQLiteStore(dbPath string, dimension int, logger *zap.Logger) (*SQLiteSt
 		go store.runKeywordBackfill()
 	}
 
+	chunks := store.Count()
+	logStep("count")
 	logger.Info("Vector store initialized",
-		zap.Int("chunks", store.Count()),
+		zap.Int("chunks", chunks),
 		zap.Int("dimension", dimension),
 	)
 
