@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A stdio client no longer waits for the server to load on a busy machine. `initialize` is answered at once and `tools/list` within 20 seconds at most; until the stores are ready, other requests wait up to the same limit and then return a `starting` error to retry. The vector and memory stores log each startup step with its duration.
 - Index directories explicitly configured through symbolic links, preserving document paths and exclusions. Replacing a directory with a link no longer silently removes its indexed documents.
 - Indexing retains files under unavailable source paths while updating accessible sources. Missing optional paths no longer stop indexing. A model or chunker rebuild waits until indexed sources are available.
 

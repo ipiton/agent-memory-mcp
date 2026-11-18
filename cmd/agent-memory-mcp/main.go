@@ -133,17 +133,58 @@ func runServe(args []string) error {
 		return fmt.Errorf("failed to build path guard: %w", err)
 	}
 
-	var listener *server.HTTPListener
-	if cfg.HTTP.Mode == "http" {
-		fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTP.Host, strconv.Itoa(cfg.HTTP.Port)))
-		if listener, err = server.ListenHTTP(cfg); err != nil {
-			return fmt.Errorf("http server error: %w", err)
-		}
+	if cfg.HTTP.Mode != "http" {
+		return serveStdio(cfg, guard)
+	}
+
+	fmt.Fprintf(os.Stderr, "Starting HTTP server on %s\n", net.JoinHostPort(cfg.HTTP.Host, strconv.Itoa(cfg.HTTP.Port)))
+	listener, err := server.ListenHTTP(cfg)
+	if err != nil {
+		return fmt.Errorf("http server error: %w", err)
 	}
 
 	srv := server.New(cfg, guard)
 	defer srv.Shutdown()
+	defer watchConfig(srv)()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := server.RunHTTP(ctx, srv, listener); err != nil {
+		return fmt.Errorf("http server error: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Server stopped gracefully\n")
+	return nil
+}
+
+// serveStdio answers the client while the server is still being built (T175).
+// If the client leaves before that is done there is nothing to shut down: the
+// process exits, and SQLite rolls back whatever the start had open.
+func serveStdio(cfg config.Config, guard *paths.Guard) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	var stopWatching func()
+	start := server.StartStdio(cfg, func() *server.MCPServer {
+		srv := server.New(cfg, guard)
+		stopWatching = watchConfig(srv)
+		return srv
+	})
+	err := server.RunStdio(ctx, start)
+	if srv := start.Server(); srv != nil {
+		stopWatching()
+		srv.Shutdown()
+	}
+	if err != nil {
+		return fmt.Errorf("mcp server stopped: %w", err)
+	}
+	return nil
+}
+
+// watchConfig reloads srv when the config file changes or on SIGHUP, and returns
+// the function that stops watching the file.
+func watchConfig(srv *server.MCPServer) func() {
+	stopWatcher := func() {}
 	// Start config file watcher for hot-reload (if config file is known).
 	if cfgPath := config.ConfigFilePath(); cfgPath != "" {
 		watcher := config.NewWatcher(cfgPath, 30*time.Second, func(oldCfg, newCfg config.Config) {
@@ -151,7 +192,7 @@ func runServe(args []string) error {
 			srv.ApplyReload(newCfg)
 		})
 		watcher.Start()
-		defer watcher.Stop()
+		stopWatcher = watcher.Stop
 	}
 
 	// SIGHUP triggers immediate config reload.
@@ -170,21 +211,7 @@ func runServe(args []string) error {
 			}
 		}
 	}()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if cfg.HTTP.Mode == "http" {
-		if err := server.RunHTTP(ctx, srv, listener); err != nil {
-			return fmt.Errorf("http server error: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Server stopped gracefully\n")
-	} else {
-		if err := server.RunStdio(ctx, srv); err != nil {
-			return fmt.Errorf("mcp server stopped: %w", err)
-		}
-	}
-	return nil
+	return stopWatcher
 }
 
 // extractConfigFlag scans args for --config or --config=value, sets the
