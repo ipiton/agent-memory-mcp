@@ -97,6 +97,11 @@ func (ms *Store) WatchForeignWrites(ctx context.Context) error {
 				if current == last {
 					continue
 				}
+				// No cache to refresh yet. last stays behind, so a commit that
+				// lands during the first load is picked up right after it.
+				if !ms.cacheLoaded.Load() {
+					continue
+				}
 				last = current
 				// The daemon's own writes bump this too: the pool serves them
 				// from a different connection than the pinned one, so they are

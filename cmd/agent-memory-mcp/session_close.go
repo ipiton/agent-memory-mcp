@@ -64,7 +64,7 @@ func runSessionCommand(name string, args []string, behavior sessionCommandBehavi
 		return err
 	}
 
-	store, cleanup, err := initMemoryStore(cfg)
+	store, cleanup, err := initHookMemoryStore(cfg)
 	if err != nil {
 		return err
 	}

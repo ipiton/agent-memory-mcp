@@ -883,6 +883,9 @@ func (ms *Store) reembed(ctx context.Context, includeTruncated bool) (*ReembedRe
 		return nil, fmt.Errorf("probe embedding model: %w", err)
 	}
 
+	if err := ms.ensureCache(); err != nil {
+		return nil, err
+	}
 	snapshot := ms.snapshotReadonlyMemories()
 
 	result := &ReembedResult{
