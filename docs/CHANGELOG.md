@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-19
+
 ### Added
 
 - Read several indexed sections after search with the full-profile MCP tool `document_context`. It shares a character budget across sections. See [usage and limits](DOCUMENT_CONTEXT.md).
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keyword search no longer lets English question wording promote unrelated prose. Common English function words (`what`, `is`, `which`, `should`…) are dropped from keyword candidate matching when other terms remain; queries with identifier punctuation or made only of such words keep all terms, and exact-phrase boosts use the original query. No re-index needed.
 - The `auto-capture`, `checkpoint` and `close-session` hooks no longer load the whole memory bank when they only need one context, which reduces their time and memory use.
 - Reads and writes no longer wait while the memory cache is rebuilt after another process writes to the bank.
 - A stdio client no longer waits for the server to load on a busy machine. `initialize` is answered at once and `tools/list` within 20 seconds at most; until the stores are ready, other requests wait up to the same limit and then return a `starting` error to retry. The vector and memory stores log each startup step with its duration.
