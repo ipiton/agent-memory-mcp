@@ -70,6 +70,7 @@ type rpcError struct {
 type MCPServer struct {
 	config            config.Config
 	pathGuard         *paths.Guard
+	indexPathGuard    *paths.Guard // guarded by ragMu; configured index root
 	stats             *stats.Logger
 	ragEngine         *rag.Engine
 	ragMu             sync.RWMutex // protects ragEngine during hot-reload
@@ -106,6 +107,7 @@ func New(cfg config.Config, guard *paths.Guard) *MCPServer {
 	srv := &MCPServer{
 		config:            cfg,
 		pathGuard:         guard,
+		indexPathGuard:    newIndexPathGuard(cfg.RAG.IndexRoot, guard),
 		stats:             stats.NewLogger(cfg),
 		ragEngine:         ragEngine,
 		memoryStore:       memoryStore,
@@ -505,6 +507,9 @@ func (s *MCPServer) ReloadConfig(newCfg config.Config) {
 		)
 	}
 
+	if newCfg.RAG.IndexRoot != s.config.RAG.IndexRoot {
+		s.indexPathGuard = newIndexPathGuard(newCfg.RAG.IndexRoot, s.pathGuard)
+	}
 	s.config = newCfg
 
 	if s.ragEngine != nil {

@@ -13,8 +13,9 @@ import (
 )
 
 var ragTools = map[string]bool{
-	"semantic_search": true,
-	"index_documents": true,
+	"semantic_search":  true,
+	"document_context": true,
+	"index_documents":  true,
 }
 
 var memoryTools = map[string]bool{
@@ -97,6 +98,7 @@ func (s *MCPServer) buildToolHandlers() map[string]toolHandler {
 		"repo_read":                  s.callRepoRead,
 		"repo_search":                s.callRepoSearch,
 		"semantic_search":            s.callSemanticSearch,
+		"document_context":           s.callDocumentContext,
 		"index_documents":            s.callIndexDocuments,
 		"store_memory":               s.callStoreMemory,
 		"recall_memory":              s.callRecallMemory,

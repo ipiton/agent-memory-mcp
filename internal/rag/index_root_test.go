@@ -66,6 +66,15 @@ func assertIndexed(t *testing.T, engine *Engine, want ...string) {
 	}
 }
 
+func resolvedTestRoot(t *testing.T, root string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 func recordedRoot(t *testing.T, engine *Engine) string {
 	t.Helper()
 	root, _ := engine.vecService.store.GetMetadata(indexRootMetadataKey)
@@ -102,7 +111,7 @@ func TestIndexRefusesToWipeIndexFromAnotherRoot(t *testing.T) {
 	if state, _ := engineB.vecService.store.GetMetadata(indexStateMetadataKey); state != indexStateReady {
 		t.Errorf("index_state = %q, want %q: a refused run must not force a rebuild later", state, indexStateReady)
 	}
-	if got := recordedRoot(t, engineB); got != rootA {
+	if got := recordedRoot(t, engineB); got != resolvedTestRoot(t, rootA) {
 		t.Errorf("index_root = %q, want %q", got, rootA)
 	}
 }
@@ -124,7 +133,7 @@ func TestIndexAllowRootChangeReplacesIndex(t *testing.T) {
 		t.Fatalf("index B: %v", err)
 	}
 	assertIndexed(t, engineB, "docs/b1.md")
-	if got := recordedRoot(t, engineB); got != rootB {
+	if got := recordedRoot(t, engineB); got != resolvedTestRoot(t, rootB) {
 		t.Errorf("index_root = %q, want %q", got, rootB)
 	}
 }
@@ -153,7 +162,7 @@ func TestIndexAcceptsMovedRepository(t *testing.T) {
 		t.Fatalf("index new root: %v", err)
 	}
 	assertIndexed(t, moved, "docs/a1.md", "docs/a2.md")
-	if got := recordedRoot(t, moved); got != newRoot {
+	if got := recordedRoot(t, moved); got != resolvedTestRoot(t, newRoot) {
 		t.Errorf("index_root = %q, want %q", got, newRoot)
 	}
 }
@@ -208,7 +217,7 @@ func TestIndexWithoutRecordedRoot(t *testing.T) {
 	if err := adopted.IndexDocuments(context.Background()); err != nil {
 		t.Fatalf("re-index A: %v", err)
 	}
-	if got := recordedRoot(t, adopted); got != rootA {
+	if got := recordedRoot(t, adopted); got != resolvedTestRoot(t, rootA) {
 		t.Errorf("index_root = %q, want %q", got, rootA)
 	}
 }

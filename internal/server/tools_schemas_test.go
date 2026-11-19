@@ -4,10 +4,10 @@ import "testing"
 
 // TestToolDefsCountStable guards the Round 3 H16 decomposition of the tool list
 // into per-category builders: the total definition count and uniqueness of tool
-// names must not drift as builders are edited. 41 static tools + 9 steward = 50.
+// names must not drift as builders are edited. 42 static tools + 9 steward = 51.
 func TestToolDefsCountStable(t *testing.T) {
 	all := append(mainToolDefs(), stewardToolDefs()...)
-	const want = 50
+	const want = 51
 	if len(all) != want {
 		t.Fatalf("total tool defs = %d, want %d", len(all), want)
 	}
@@ -21,7 +21,7 @@ func TestToolDefsCountStable(t *testing.T) {
 		}
 		seen[d.Name] = true
 	}
-	if len(mainToolDefs()) != 41 {
-		t.Fatalf("main (non-steward) tool defs = %d, want 41", len(mainToolDefs()))
+	if len(mainToolDefs()) != 42 {
+		t.Fatalf("main (non-steward) tool defs = %d, want 42", len(mainToolDefs()))
 	}
 }

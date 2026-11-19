@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/ipiton/agent-memory-mcp/internal/vectorstore"
 	"go.uber.org/zap"
 )
+
+const indexRootResolvedMetadataKey = "index_root_resolved"
 
 func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if re == nil || re.docService == nil || re.vecService == nil {
@@ -22,6 +25,12 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	defer re.indexMu.Unlock()
 
 	startTime := time.Now().UTC()
+	// Store the resolved root so retargeting a root symlink cannot authorize
+	// another tree's indexed text on the next server startup.
+	indexRoot, rootResolutionErr := filepath.EvalSymlinks(re.repoRoot)
+	if rootResolutionErr != nil {
+		indexRoot = re.repoRoot
+	}
 	// chunkerVersion bumps trigger a full rebuild on next IndexDocuments.
 	//   char-v1     — naive char-budget splitter (initial)
 	//   skeleton-v1 — T49: Markdown skeleton tree + breadcrumb prefix +
@@ -100,16 +109,26 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			zap.Int("stale_files", stale))
 	}
 
-	if err := re.checkIndexRoot(allDocs, indexedFiles); err != nil {
-		return err
+	oldRoot, _ := store.GetMetadata(indexRootMetadataKey)
+	oldResolvedRoot, _ := store.GetMetadata(indexRootResolvedMetadataKey)
+	sameRoot := oldRoot == indexRoot
+	if !sameRoot && oldRoot != "" && oldResolvedRoot != oldRoot && rootResolutionErr == nil {
+		// Legacy writers recorded the configured alias instead of its target.
+		if resolvedOld, err := filepath.EvalSymlinks(oldRoot); err == nil && resolvedOld == indexRoot {
+			sameRoot = true
+		}
+	}
+	if !sameRoot && !re.allowRootChange {
+		if err := re.checkIndexRootChange(oldRoot, allDocs, indexedFiles); err != nil {
+			return err
+		}
 	}
 
 	if len(allDocs) == 0 && len(indexedFiles) == 0 && !needsRebuild {
 		return fmt.Errorf("no documents found to index")
 	}
 
-	oldRoot, _ := store.GetMetadata(indexRootMetadataKey)
-	if oldRoot != re.repoRoot && re.allowRootChange {
+	if !sameRoot && re.allowRootChange && rootResolutionErr == nil {
 		// An explicit replacement must not import unscanned records from the old root.
 		scan.unavailablePaths = nil
 	}
@@ -119,15 +138,19 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 			protectedFiles++
 		}
 	}
-	if oldRoot != re.repoRoot && protectedFiles > 0 {
+	if !sameRoot && protectedFiles > 0 {
+		if rootResolutionErr != nil {
+			return fmt.Errorf("cannot resolve the index root while %d indexed file(s) are unavailable: %w", protectedFiles, rootResolutionErr)
+		}
 		return fmt.Errorf("cannot adopt the index from a different or unknown root while %d indexed file(s) are unavailable; restore the sources or use --allow-root-change", protectedFiles)
 	}
 	if needsRebuild && protectedFiles > 0 {
 		return fmt.Errorf("cannot rebuild index while %d indexed file(s) are unavailable; restore sources or remove them from MCP_INDEX_DIRS and retry", protectedFiles)
 	}
 	toAdd, toRemove := re.calculateScanChanges(scan, indexedFiles, needsRebuild)
-	// An unavailable source alone is not an index update.
-	if oldRoot == re.repoRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
+	// An unavailable source alone is not an index update. A legacy alias still
+	// needs its resolved root published before document_context can read it.
+	if oldRoot == indexRoot && oldResolvedRoot == indexRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
 		return nil
 	}
 
@@ -336,12 +359,23 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	}
 	sort.Strings(deletePaths)
 
+	if resolved, err := filepath.EvalSymlinks(re.repoRoot); err == nil && resolved != indexRoot {
+		return fmt.Errorf("index source root changed during indexing; retry")
+	}
+
+	resolvedRoot := ""
+	if rootResolutionErr == nil {
+		resolvedRoot = indexRoot
+	} else if oldRoot == indexRoot {
+		resolvedRoot = oldResolvedRoot
+	}
 	finalMetadata := map[string]string{
-		"chunker_version":     chunkerVersion,
-		indexRootMetadataKey:  re.repoRoot,
-		indexStateMetadataKey: indexStateReady,
-		indexStartedAtKey:     startTime.Format(time.RFC3339),
-		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
+		"chunker_version":            chunkerVersion,
+		indexRootMetadataKey:         indexRoot,
+		indexRootResolvedMetadataKey: resolvedRoot,
+		indexStateMetadataKey:        indexStateReady,
+		indexStartedAtKey:            startTime.Format(time.RFC3339),
+		"last_indexed":               time.Now().UTC().Format(time.RFC3339),
 	}
 	if indexedModel != "" {
 		finalMetadata["embedding_model"] = indexedModel
@@ -387,21 +421,14 @@ func (re *Engine) AllowRootChange() {
 	re.allowRootChange = true
 }
 
-// checkIndexRoot (T161) refuses a run that would wipe an index built from
+// checkIndexRootChange (T161) refuses a run that would wipe an index built from
 // another root. Indexed paths are relative to the root, so another project's
 // files look deleted, and a server merely started there would remove them.
 //
 // A changed root alone is not enough: a moved repository keeps its relative
 // paths and has nothing to lose. An index with no recorded root predates the
 // stamp and is judged the same way.
-func (re *Engine) checkIndexRoot(currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
-	if re.allowRootChange {
-		return nil
-	}
-	oldRoot, _ := re.vecService.store.GetMetadata(indexRootMetadataKey)
-	if oldRoot == re.repoRoot {
-		return nil
-	}
+func (re *Engine) checkIndexRootChange(oldRoot string, currentDocs []document, indexedFiles map[string]*vectorstore.IndexedFileInfo) error {
 	_, toRemove := re.calculateIndexChanges(currentDocs, indexedFiles, false)
 	if len(toRemove)*2 <= len(indexedFiles) {
 		return nil

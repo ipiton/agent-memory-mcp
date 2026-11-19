@@ -2,6 +2,7 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -109,6 +110,91 @@ func TestIndexDiscoveryFailurePreservesPublishedIndex(t *testing.T) {
 	}
 }
 
+func TestIndexSymlinkedRootPreservesUnavailableSource(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		allowRootChange bool
+	}{
+		{name: "default"},
+		{name: "allow root change", allowRootChange: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			srv := newBatchEmbeddingServer(t)
+			t.Cleanup(srv.Close)
+			root := newRootProject(t, "a.md")
+			writeCorpusFile(t, root, "notes/b.md", "# Notes\n\nRetained material.\n")
+			link := filepath.Join(t.TempDir(), "project")
+			if err := os.Symlink(root, link); err != nil {
+				t.Fatal(err)
+			}
+			engine := newRootEngine(t, link, t.TempDir(), srv.URL)
+			engine.docService.config.IndexDirs = []string{"docs", "notes"}
+			if err := engine.IndexDocuments(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := recordedRoot(t, engine), resolvedTestRoot(t, root); got != want {
+				t.Fatalf("index root = %q, want %q", got, want)
+			}
+			store := engine.vecService.store
+			before, err := store.ChunksByDocPath("notes/b.md")
+			if err != nil || len(before) == 0 {
+				t.Fatalf("initial notes chunks = %d, error = %v", len(before), err)
+			}
+
+			if err := os.Rename(filepath.Join(root, "notes"), filepath.Join(root, "offline")); err != nil {
+				t.Fatal(err)
+			}
+			writeCorpusFile(t, root, "docs/c.md", "# Added\n\nNew material.\n")
+			if tc.allowRootChange {
+				engine.AllowRootChange()
+			}
+			if err := engine.IndexDocuments(ctx); err != nil {
+				t.Fatalf("index with unavailable source: %v", err)
+			}
+			assertIndexed(t, engine, "docs/a.md", "docs/c.md", "notes/b.md")
+			after, err := store.ChunksByDocPath("notes/b.md")
+			if err != nil || !reflect.DeepEqual(before, after) {
+				t.Fatalf("unavailable source chunks changed, error = %v", err)
+			}
+		})
+	}
+}
+
+func TestIndexDanglingRootCannotDiscardUnavailableFiles(t *testing.T) {
+	ctx := context.Background()
+	srv := newBatchEmbeddingServer(t)
+	t.Cleanup(srv.Close)
+	root := newRootProject(t, "a.md")
+	link := filepath.Join(t.TempDir(), "project")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	writeCorpusFile(t, external, "external.md", "# External\n\nExisting material.\n")
+	engine := newRootEngine(t, link, t.TempDir(), srv.URL)
+	engine.docService.config.IndexDirs = []string{"docs", external}
+	if err := engine.IndexDocuments(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store := engine.vecService.store
+	before := discoveryTestChunks(t, store)
+	beforeMetadata := discoveryTestMetadata(t, store)
+
+	if err := os.Rename(root, filepath.Join(t.TempDir(), "offline")); err != nil {
+		t.Fatal(err)
+	}
+	writeCorpusFile(t, external, "external.md", "# External\n\nUpdated material.\n")
+	engine.AllowRootChange()
+	if err := engine.IndexDocuments(ctx); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replacement with a dangling root = %v", err)
+	}
+	if !reflect.DeepEqual(before, discoveryTestChunks(t, store)) ||
+		!reflect.DeepEqual(beforeMetadata, discoveryTestMetadata(t, store)) {
+		t.Fatal("failed root replacement changed the published index")
+	}
+}
+
 func discoveryTestChunks(t *testing.T, store vectorstore.Store) []vectorstore.Chunk {
 	t.Helper()
 	chunks, err := store.AllChunks()
@@ -122,7 +208,7 @@ func discoveryTestChunks(t *testing.T, store vectorstore.Store) []vectorstore.Ch
 func discoveryTestMetadata(t *testing.T, store vectorstore.Store) map[string]string {
 	t.Helper()
 	values := make(map[string]string)
-	for _, key := range []string{indexStateMetadataKey, indexStartedAtKey, indexRootMetadataKey, "index_generation", "last_indexed", "embedding_model", "chunker_version"} {
+	for _, key := range []string{indexStateMetadataKey, indexStartedAtKey, indexRootMetadataKey, indexRootResolvedMetadataKey, "index_generation", "last_indexed", "embedding_model", "chunker_version"} {
 		value, err := store.GetMetadata(key)
 		if err != nil {
 			t.Fatal(err)
@@ -622,7 +708,7 @@ func TestIndexRootAdoptionCannotKeepUnavailableForeignFiles(t *testing.T) {
 		t.Fatalf("automatic root adoption = %v", err)
 	}
 	recordedRoot, err := engine.vecService.store.GetMetadata(indexRootMetadataKey)
-	if err != nil || recordedRoot != oldRoot {
+	if err != nil || recordedRoot != resolvedTestRoot(t, oldRoot) {
 		t.Fatalf("index root = %q, err = %v", recordedRoot, err)
 	}
 	assertIndexed(t, engine, "README.md", "docs/a.md", "docs/b.md", "docs/c.md")

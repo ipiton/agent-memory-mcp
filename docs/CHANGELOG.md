@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Read several indexed sections after search with the full-profile MCP tool `document_context`. It shares a character budget across sections. See [usage and limits](DOCUMENT_CONTEXT.md).
 - Select a single Ollama embedding model with `OLLAMA_EMBEDDING_MODEL`; unset keeps the existing model fallback chain. Set its matching dimension and re-index when switching models.
 - The evaluation harness can compare hybrid and semantic-only ranking on one index. Run `make eval-compare`; server ranking settings are unchanged.
 
