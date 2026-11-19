@@ -1,5 +1,5 @@
-# Pinned by scripts/plugin-pin.sh from the checksums of release v0.18.0.
-11ce7731b9a7113895c1634b7b4aca3c76a93f8833a993b79d813517a9718086  agent-memory-mcp-0.18.0-darwin-amd64.tar.gz
-e945be7fcbbfd6323bbeff89e9a92e36ab684d2876dfad0a2f58e3878939c244  agent-memory-mcp-0.18.0-darwin-arm64.tar.gz
-acb0c45f2eee58f70a2adfad9351d659aefd560f3016c6f9f3be0cad87a0697d  agent-memory-mcp-0.18.0-linux-amd64.tar.gz
-b093e1d9c62ead8fc001ab7c3764c02e5ff32fd42c0ce1b2c1769b7b09692ecb  agent-memory-mcp-0.18.0-linux-arm64.tar.gz
+# Pinned by scripts/plugin-pin.sh from the checksums of release v0.19.0.
+cc4506d57593da08c8c70f20d751993c70e5bfef70ecb9dd63138feb8ccee30f  agent-memory-mcp-0.19.0-darwin-amd64.tar.gz
+023335cf98ce88311675e7ae539e14beca2e1087fcd37718118b467bf92f895d  agent-memory-mcp-0.19.0-darwin-arm64.tar.gz
+8d0f00882676cc6ff1cbc357fb05aa1202bd50f1fa2ea259f0126c559cbb973a  agent-memory-mcp-0.19.0-linux-amd64.tar.gz
+88fda70105f36a3b8f2e2480660c136accff566c5d09fd682df2776386192165  agent-memory-mcp-0.19.0-linux-arm64.tar.gz
