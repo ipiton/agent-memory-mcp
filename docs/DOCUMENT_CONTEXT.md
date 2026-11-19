@@ -60,6 +60,10 @@ worktree, `repo_read` refers to that worktree; check the main checkout when
 you need the live file that backs the shared index.
 
 A completed index that records the resolved root works without a schema change
-or per-file backfill. If an older index lacks a root or records an unresolved
-root symlink, run indexing with the intended root and its configured indexed
-sources available to record the resolved root.
+or per-file backfill. New indexing also records a resolved-root marker so a
+recorded physical root cannot later be reinterpreted as a legacy alias.
+For an older index without that marker, indexing interprets the recorded alias
+using its target at upgrade time. When that target matches the current root,
+the stamps are upgraded and previously indexed files under unavailable sources
+are retained. If no root is recorded, automatic adoption waits for unavailable
+sources that still contain indexed files.

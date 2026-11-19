@@ -208,7 +208,7 @@ func discoveryTestChunks(t *testing.T, store vectorstore.Store) []vectorstore.Ch
 func discoveryTestMetadata(t *testing.T, store vectorstore.Store) map[string]string {
 	t.Helper()
 	values := make(map[string]string)
-	for _, key := range []string{indexStateMetadataKey, indexStartedAtKey, indexRootMetadataKey, "index_generation", "last_indexed", "embedding_model", "chunker_version"} {
+	for _, key := range []string{indexStateMetadataKey, indexStartedAtKey, indexRootMetadataKey, indexRootResolvedMetadataKey, "index_generation", "last_indexed", "embedding_model", "chunker_version"} {
 		value, err := store.GetMetadata(key)
 		if err != nil {
 			t.Fatal(err)

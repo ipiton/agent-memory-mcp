@@ -12,6 +12,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const indexRootResolvedMetadataKey = "index_root_resolved"
+
 func (re *Engine) IndexDocuments(ctx context.Context) error {
 	if re == nil || re.docService == nil || re.vecService == nil {
 		return fmt.Errorf("RAG engine not available")
@@ -108,7 +110,14 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 	}
 
 	oldRoot, _ := store.GetMetadata(indexRootMetadataKey)
+	oldResolvedRoot, _ := store.GetMetadata(indexRootResolvedMetadataKey)
 	sameRoot := oldRoot == indexRoot
+	if !sameRoot && oldRoot != "" && oldResolvedRoot != oldRoot && rootResolutionErr == nil {
+		// Legacy writers recorded the configured alias instead of its target.
+		if resolvedOld, err := filepath.EvalSymlinks(oldRoot); err == nil && resolvedOld == indexRoot {
+			sameRoot = true
+		}
+	}
 	if !sameRoot && !re.allowRootChange {
 		if err := re.checkIndexRootChange(oldRoot, allDocs, indexedFiles); err != nil {
 			return err
@@ -139,8 +148,9 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		return fmt.Errorf("cannot rebuild index while %d indexed file(s) are unavailable; restore sources or remove them from MCP_INDEX_DIRS and retry", protectedFiles)
 	}
 	toAdd, toRemove := re.calculateScanChanges(scan, indexedFiles, needsRebuild)
-	// An unavailable source alone is not an index update.
-	if sameRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
+	// An unavailable source alone is not an index update. A legacy alias still
+	// needs its resolved root published before document_context can read it.
+	if oldRoot == indexRoot && oldResolvedRoot == indexRoot && len(scan.unavailablePaths) > 0 && len(toAdd) == 0 && len(toRemove) == 0 && !needsRebuild && indexState != indexStateDirty {
 		return nil
 	}
 
@@ -353,12 +363,19 @@ func (re *Engine) IndexDocuments(ctx context.Context) error {
 		return fmt.Errorf("index source root changed during indexing; retry")
 	}
 
+	resolvedRoot := ""
+	if rootResolutionErr == nil {
+		resolvedRoot = indexRoot
+	} else if oldRoot == indexRoot {
+		resolvedRoot = oldResolvedRoot
+	}
 	finalMetadata := map[string]string{
-		"chunker_version":     chunkerVersion,
-		indexRootMetadataKey:  indexRoot,
-		indexStateMetadataKey: indexStateReady,
-		indexStartedAtKey:     startTime.Format(time.RFC3339),
-		"last_indexed":        time.Now().UTC().Format(time.RFC3339),
+		"chunker_version":            chunkerVersion,
+		indexRootMetadataKey:         indexRoot,
+		indexRootResolvedMetadataKey: resolvedRoot,
+		indexStateMetadataKey:        indexStateReady,
+		indexStartedAtKey:            startTime.Format(time.RFC3339),
+		"last_indexed":               time.Now().UTC().Format(time.RFC3339),
 	}
 	if indexedModel != "" {
 		finalMetadata["embedding_model"] = indexedModel
