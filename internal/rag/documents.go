@@ -316,10 +316,8 @@ func classifySourceType(docPath string, title string, content string) string {
 		return "helm"
 	case strings.Contains(pathLower, "terraform/") || ext == ".tf" || ext == ".tfvars" || ext == ".hcl":
 		return "terraform"
-	case strings.Contains(pathLower, "/k8s/") || strings.Contains(pathLower, "/kubernetes/") || strings.HasPrefix(baseLower, "deployment.") || strings.HasPrefix(baseLower, "service.") || strings.HasPrefix(baseLower, "ingress."):
-		if ext == ".yaml" || ext == ".yml" {
-			return "k8s"
-		}
+	case (ext == ".yaml" || ext == ".yml") && (strings.Contains(pathLower, "/k8s/") || strings.Contains(pathLower, "/kubernetes/") || strings.HasPrefix(baseLower, "deployment.") || strings.HasPrefix(baseLower, "service.") || strings.HasPrefix(baseLower, "ingress.")):
+		return "k8s"
 	case ext == ".md":
 		// Any markdown reaching this point was walked from a configured index
 		// dir, so its presence is already the operator's intent. Requiring a
