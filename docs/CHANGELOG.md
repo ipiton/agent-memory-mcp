@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-24
+
+### Fixed
+
+- Markdown files named `deployment.md`, `service.md` or `ingress.md`, or located under `k8s/` or `kubernetes/` directories, are indexed again. They were classified as Kubernetes manifests and silently skipped; Kubernetes YAML classification is unchanged. Such files are picked up on the next indexing run.
+
 ## [0.19.0] - 2026-11-19
 
 ### Added
